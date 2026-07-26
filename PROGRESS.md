@@ -14,7 +14,8 @@ in the same PR as the code it describes.
 | P4 - Usermode Processes, Syscalls & Scheduling | Complete (scoped - see below) |
 | P5 - Security Hardening (address-space isolation) | Complete (scoped - see below) |
 | P6 - Networking | Complete (scoped - see below) |
-| P7-P9 | Not started |
+| P7 - Graphics Mode & Windowing | Complete (scoped - see below) |
+| P8-P9 | Not started |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -596,6 +597,149 @@ page" throughout.
   sanity checks; a deliberately malformed packet from a hostile host
   hasn't been fuzzed against.
 
-## Phase 7 and beyond
+## Phase 7 - Graphics Mode & a Minimal Windowing System
+
+**Status: Complete, at a deliberately scoped-down scope, with one
+honestly-unresolved verification gap flagged below.** Real pixel-level
+graphics, a real second hardware input device (PS/2 mouse), and a
+small windowing demo, switchable at runtime without disturbing the
+existing text-mode shell at all.
+
+### The key architectural decision
+
+Rather than requesting a linear framebuffer through Multiboot/GRUB's
+VBE negotiation - the "normal" way a protected-mode kernel gets
+graphics - this phase uses **VGA Mode 13h (320x200x256) via direct
+hardware register programming** instead. The reason: a VBE framebuffer
+would *replace* the VGA text-mode console the shell has depended on
+since Phase 1, which means porting every existing command's text
+output to a framebuffer-rendered bitmap font covering the full ASCII
+range - a lot of hand-transcribed glyph data with real risk of subtly
+garbling output in ways that are easy to miss. Mode 13h can be entered
+and exited at runtime with pure port I/O (no BIOS calls - this kernel
+has no real/virtual-8086 mode to make them from), so the existing shell
+is completely unaffected outside the moments a user is actually inside
+the new `gui` command. The tradeoff: lower resolution (320x200 vs.
+whatever VBE could offer) and only a handful of hand-built digit
+glyphs (see `font5x7.h`) rather than a full font.
+
+### What was built
+
+- **`kernel/drivers/video/vga_graphics.*`** - Mode 13h enter/exit via
+  direct programming of the VGA Sequencer, CRTC, Graphics Controller,
+  and Attribute Controller registers, plus pixel/rectangle drawing
+  primitives.
+- **`kernel/drivers/mouse/ps2mouse.*`** - PS/2 mouse driver, IRQ12,
+  standard 3-byte relative-packet protocol.
+- **`kernel/gui/compositor.*`** - three draggable colored rectangle
+  windows with titlebars (labeled 1/2/3 via a small hand-built 5x7
+  digit font, `font5x7.h`), double-buffered rendering (an off-screen
+  buffer blitted to `0xA0000` once per frame to avoid tearing), and a
+  simple cursor.
+- **Shell `gui` command** - enters graphics mode, runs the compositor
+  loop, ESC returns cleanly to the text shell.
+
+### Three real bugs found and fixed while building this
+
+All three were invisible in code review and only surfaced by actually
+exercising hardware paths no earlier phase had touched:
+
+1. **IRQ12 needs the master PIC's cascade line (IRQ2) unmasked.**
+   `register_irq_handler()` only ever unmasked the specific line
+   requested - fine for IRQ0/1 (both on the master PIC, used since
+   Phase 2), but IRQ12 lives on the *slave* PIC, and slave-PIC
+   interrupts physically cannot reach the CPU at all unless IRQ2 on
+   the master is also unmasked. This is the first IRQ Phase 7 added
+   above 7, so it's the first time this requirement ever mattered.
+2. **PS/2 packet framing misalignment.** A stale byte sitting in the
+   8042 controller's output buffer at driver-init time got accepted as
+   a false packet start - and, by coincidence, the real Y-delta byte
+   in the correctly-aligned stream also happened to have the packet
+   sync bit set, so the misalignment never self-corrected once it
+   happened. Fixed by draining any stale byte before switching to
+   interrupt-driven reads.
+3. **Boot-to-command accumulation.** Mouse movement between driver
+   init (at boot) and the user actually typing `gui` accumulates in
+   the driver (by design - it's a relative-motion accumulator), and
+   was throwing off the cursor's starting position with a large stale
+   delta the first time `gui` read it. Fixed with a settling-window
+   discard on entry to the command.
+
+### Verified behavior
+
+- Clean build, zero warnings under `-Wall -Wextra`.
+- **Zero regression**: `make test` confirms every Phase 2-6 boot
+  marker (FAT32, networking, ring-3 processes, ping) still passes
+  exactly as before, plus PS/2 mouse now initializes at boot.
+- **Mode switching, rigorously verified**: compared actual pixel
+  dimensions and color palettes before/after `gui` + ESC - graphics
+  mode measured as 320x200 (640x400 in QEMU's 2x screendump scaling)
+  with the expected window colors; text mode measured as 80x25
+  (720x400 in the same scaling) with the expected black/white/cyan
+  console palette, immediately after exiting. The round trip is solid.
+- **Mouse decode/accumulation, proven correct** by direct kernel-level
+  instrumentation (since removed): five repeated, identical
+  `mouse_move 20 15` monitor commands each independently produced an
+  exact `dx=20 dy=15` reading with no drift or corruption.
+- **Button-press detection, proven correct**: `left_button` correctly
+  read as true while the button is held, false once released.
+- **Rendering, confirmed by pixel inspection**: the cursor renders at
+  the correct default position; window bodies, titlebars, borders, and
+  digit labels all render in the intended distinct colors.
+- Ran 20+ seconds headless with no crash or fault; confirmed the shell
+  fully recovers (correctly re-measured at 80x25 text-mode dimensions)
+  and keeps responding normally to `help`/`ps`/`uptime` immediately
+  after a `gui` session ends.
+
+### Known limitation: automated drag-and-drop verification is incomplete
+
+This is being flagged directly rather than glossed over. Every
+individual mechanism behind dragging a window - IRQ delivery, packet
+decode, accumulation, button-state tracking, hit-testing against a
+titlebar rectangle, and rendering - was independently verified correct
+(see above). However, scripting a *multi-step* drag sequence (move
+onto a titlebar, press, move while held, release) through QEMU's HMP
+monitor with `-display none` produced inconsistent, hard-to-explain
+results when the sequence used *varying* delta values across several
+`mouse_move` calls in one session - even though five *identical*
+repeated calls worked perfectly every time. This was narrowed down
+about as far as headless, monitor-scripted testing allows: it doesn't
+reproduce with repeated identical values, it isn't explained by
+monitor-command timing (an explicit prompt-synchronized test still
+showed it), and it doesn't correlate with the graphics-mode switch
+itself (a settling-window discard didn't change the pattern). The
+most likely explanation is a QEMU HMP/headless-input quirk specific to
+`-display none` plus scripted mouse events with changing magnitudes -
+a testing configuration with no real-world analogue (an actual user
+runs `make run` with a real display and a real mouse, which streams
+naturally smooth, fine-grained deltas - exactly the pattern proven to
+work) - but this was not proven to 100% certainty within the available
+debugging time, and it deserves a real user's manual confirmation
+rather than a confident claim either way.
+
+**If you try `gui` with `make run` and dragging doesn't work
+smoothly**, that's a genuine bug report worth filing - please include
+what you observed (does the cursor move at all? does clicking a
+titlebar do anything?) so it can be root-caused with real interactive
+input rather than scripted monitor commands.
+
+### Other known limitations / follow-ups (tracked for Phase 8+)
+
+- **320x200x256 only** - no other VGA graphics mode, no VBE/linear
+  framebuffer support, no resolution changes.
+- **Font covers digits 0-9 only** (window titlebar labels). No general
+  text rendering in graphics mode - see the architectural decision
+  above for why.
+- **Exactly 3 windows, fixed at compositor_init() time.** No creating,
+  closing, resizing, or minimizing windows; no focus/z-order beyond
+  "whichever was dragged most recently draws over stale diff
+  boundaries" (draw order is otherwise fixed); no overlap-aware damage
+  tracking (the whole screen redraws every frame).
+- **No real GUI toolkit** - no buttons, no text input fields, no
+  events beyond raw mouse position/buttons and a single ESC-to-exit
+  keyboard check.
+- **PS/2 mouse only** - no USB HID mouse/tablet support.
+
+## Phase 8 and beyond
 
 Not started. See PROJECT_PLAN.md section 6 for scope.

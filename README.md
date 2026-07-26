@@ -57,6 +57,13 @@ manager, and Windows-style usability conventions. See
   the whole stack headlessly, the same pattern every phase's self-test
   uses
 
+**Phase 7 - Graphics Mode & a Minimal Windowing System**
+- VGA Mode 13h (320x200x256) via direct register programming -
+  switchable at runtime without disturbing the existing text-mode shell
+- PS/2 mouse driver (IRQ12)
+- A small compositor: 3 draggable, titled, colored windows
+- Shell `gui` command (ESC to return to the text shell)
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -85,9 +92,10 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000)
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2)
 │   ├── fs/             # VFS pass-through + FAT32 (read-only)
 │   ├── net/            # ethernet, arp, ipv4, icmp
+│   ├── gui/            # compositor (windowing demo), small digit font
 │   ├── task/           # process table, scheduler, syscall demo task
 │   ├── shell/          # minimal built-in shell
 │   ├── lib/            # freestanding string/stdio subset

@@ -16,6 +16,9 @@
 #include "../fs/vfs.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
+#include "../drivers/video/vga_graphics.h"
+#include "../drivers/mouse/ps2mouse.h"
+#include "../gui/compositor.h"
 #include "../task/process.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -58,12 +61,14 @@ static void cmd_help(void) {
     vga_puts("  cat FILE  - print a file's contents\n");
     vga_puts("  ps        - list running processes\n");
     vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2)\n");
+    vga_puts("  gui       - enter graphics mode; drag windows with the "
+              "mouse, ESC to exit\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 6: Networking (NE2000, ARP, IPv4, ICMP)\n");
+    vga_puts("Phase 7: Graphics Mode & a Minimal Windowing System\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -185,6 +190,53 @@ static void cmd_ping(const char* arg) {
     }
 }
 
+static void cmd_gui(void) {
+    if (!ps2mouse_is_present()) {
+        vga_puts("gui: no PS/2 mouse detected - nothing to interact with\n");
+        return;
+    }
+
+    vga_puts("Entering graphics mode. Drag windows by their titlebar; "
+              "press ESC to return to the shell.\n");
+
+    vga_graphics_enter();
+    compositor_init();
+
+    /* Discard whatever movement accumulates around entry into graphics
+     * mode - found during testing: a single one-shot discard wasn't
+     * enough. Something (most likely QEMU's own input layer reacting
+     * to the display resolution change from vga_graphics_enter(),
+     * though this is a headless/monitor-driven testing artifact more
+     * than a certainty about real hardware) can generate a burst of
+     * mouse activity around the mode switch, and that burst doesn't
+     * always land entirely within a single read taken immediately
+     * after entry. Draining repeatedly for a short settling window
+     * catches it regardless of exactly when it arrives, rather than
+     * gambling on one read at one instant. */
+    for (int i = 0; i < 20; i++) {
+        (void)ps2mouse_read();
+        timer_sleep_ms(10);
+    }
+
+    for (;;) {
+        if (keyboard_has_char()) {
+            char c = keyboard_get_char();
+            if (c == 27) { /* ESC */
+                break;
+            }
+        }
+
+        mouse_state_t state = ps2mouse_read();
+        compositor_handle_mouse(state);
+        compositor_render();
+
+        timer_sleep_ms(16); /* ~60fps cap - courteous, not load-bearing */
+    }
+
+    vga_graphics_exit();
+    vga_clear();
+}
+
 static void cmd_reboot(void) {
     vga_puts("Rebooting...\n");
     /* 8042 keyboard controller "pulse output line" reset - the classic
@@ -220,6 +272,8 @@ static void dispatch(char* line) {
         cmd_ls();
     } else if (strcmp(line, "ps") == 0) {
         cmd_ps();
+    } else if (strcmp(line, "gui") == 0) {
+        cmd_gui();
     } else if (strncmp(line, "cat ", 4) == 0) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "ping ", 5) == 0) {

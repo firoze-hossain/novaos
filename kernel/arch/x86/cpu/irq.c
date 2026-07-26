@@ -88,6 +88,17 @@ void register_irq_handler(uint8_t irq, isr_handler_t handler) {
     }
     irq_handlers[irq] = handler;
     pic_set_mask(irq, 0);
+
+    /* Any slave-PIC line (8-15) is physically wired through IRQ2 on
+     * the master PIC - that's the cascade line, not a normal device
+     * IRQ. If it stays masked, no slave interrupt can ever reach the
+     * CPU at all, regardless of the slave PIC's own mask. This went
+     * unnoticed through Phases 2-6 because every IRQ user until now
+     * (the PIT on 0, the keyboard on 1) lived on the master PIC;
+     * Phase 7's PS/2 mouse on IRQ12 was the first to need this. */
+    if (irq >= 8) {
+        pic_set_mask(2, 0);
+    }
 }
 
 void irq_handler(registers_t* regs) {

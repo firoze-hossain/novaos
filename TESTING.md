@@ -144,6 +144,15 @@ After `make run`, verify at the `nova>` prompt:
 - [ ] `ping 10.0.2.2` gets a reply (Phase 6) - this is QEMU's own
       user-mode networking gateway, so it works without any real
       internet access from your machine
+- [ ] `gui` switches to a graphics screen showing 3 colored windows
+      labeled 1/2/3 (Phase 7); dragging a window by its titlebar with
+      a real mouse should move it - **please report back if dragging
+      doesn't work smoothly**, since automated headless testing of
+      this specific interaction hit an unresolved limitation (see
+      PROGRESS.md's Phase 7 section) and could use real-world
+      confirmation either way
+- [ ] `ESC` inside `gui` returns cleanly to the text shell, which
+      keeps responding normally to `help`/`ps`/etc. afterward
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu
@@ -176,6 +185,22 @@ If you want NovaOS to reach the real internet (not just the gateway),
 that depends on SLIRP's own outbound access working on your machine -
 it usually does, but is out of NovaOS's control and isn't required for
 anything `make test` checks.
+
+### About graphics mode and the mouse (Phase 7+)
+
+`gui` switches the display to VGA Mode 13h (320x200, 256 colors) using
+direct hardware register programming - not QEMU's usual VBE/framebuffer
+path - so it works identically whether you're running natively or
+under QEMU, and returns cleanly to the text shell on ESC.
+
+This is the one area of NovaOS that's hardest to verify headlessly:
+`make test` can only confirm the PS/2 mouse *initializes* at boot, not
+that dragging a window actually feels right, since that needs a real
+display and a real mouse. If you try it with `make run` and notice
+anything off (cursor not tracking smoothly, dragging not picking up a
+window, etc.), that's genuinely useful information - see PROGRESS.md's
+Phase 7 section for what was and wasn't possible to confirm through
+automated testing alone.
 
 ## Debugging a boot failure
 

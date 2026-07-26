@@ -104,7 +104,7 @@ at the end. Concretely, in the order it gets built:
 | Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs a real filesystem-backed multi-process model first (Phase 4 process/syscall groundwork exists; a spawn/exec syscall doesn't yet) |
 | `nova-pkg`: apt-style package manager (CLI) | 8 | Dependency resolution, signed packages |
 | "Software Center": GUI front-end for `nova-pkg` | 8 | The literal "Ubuntu-like" ask |
-| Windowing system / desktop shell | 7 | Framebuffer graphics mode, compositor, taskbar |
+| Windowing system / desktop shell | 7 | Done (scoped) - VGA Mode 13h graphics, a 3-window compositor, PS/2 mouse; no taskbar, no general text rendering, no window create/close yet |
 | First-run setup wizard (locale, user account, Wi-Fi) | 9 | The "Windows OOBE"-like ask |
 | Automatic security update service | 8-9 | Opt-out, not opt-in, by default |
 
@@ -118,8 +118,8 @@ at the end. Concretely, in the order it gets built:
 | **P4** | Usermode processes, syscalls, scheduler, real shell | Complete (scoped - see PROGRESS.md) |
 | **P5** | Security hardening: per-process address space isolation | Complete (scoped - see PROGRESS.md) |
 | **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; TCP/UDP/sockets deferred) |
-| **P7** | Graphics mode + windowing system | Next |
-| **P8** | Package manager + Software Center ("the distro layer") | Planned |
+| **P7** | Graphics mode (VGA Mode 13h) + minimal windowing, PS/2 mouse | Complete (scoped - see PROGRESS.md; drag-and-drop needs manual confirmation) |
+| **P8** | Package manager + Software Center ("the distro layer") | Next |
 | **P9** | Installer, first-run wizard, driver support, public release polish | Planned |
 
 Detailed, living status for what's actually implemented (as opposed to

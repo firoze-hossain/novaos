@@ -3,6 +3,7 @@
 #include "../drivers/serial/serial.h"
 #include "../drivers/timer/timer.h"
 #include "../drivers/keyboard/keyboard.h"
+#include "../drivers/mouse/ps2mouse.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/cpu/idt.h"
 #include "../arch/x86/cpu/tss.h"
@@ -101,6 +102,8 @@ void kernel_late_init(void) {
 
     keyboard_init();
     kernel_log("[ OK ] PS/2 keyboard initialized (IRQ1)\n");
+
+    ps2mouse_init();
 
     vfs_init();
 
