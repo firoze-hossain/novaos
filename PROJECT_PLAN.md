@@ -117,8 +117,8 @@ at the end. Concretely, in the order it gets built:
 | **P3** | Paging, physical memory management, filesystem (VFS + FAT32, read-only), ATA storage driver | Complete (scoped - see PROGRESS.md) |
 | **P4** | Usermode processes, syscalls, scheduler, real shell | Complete (scoped - see PROGRESS.md) |
 | **P5** | Security hardening: per-process address space isolation | Complete (scoped - see PROGRESS.md) |
-| **P6** | Networking (NE2000/virtio-net, TCP/IP, sockets) | Next |
-| **P7** | Graphics mode + windowing system | Planned |
+| **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; TCP/UDP/sockets deferred) |
+| **P7** | Graphics mode + windowing system | Next |
 | **P8** | Package manager + Software Center ("the distro layer") | Planned |
 | **P9** | Installer, first-run wizard, driver support, public release polish | Planned |
 

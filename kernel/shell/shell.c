@@ -14,6 +14,8 @@
 #include "../arch/x86/mm/pmm.h"
 #include "../arch/x86/io.h"
 #include "../fs/vfs.h"
+#include "../net/net.h"
+#include "../net/icmp.h"
 #include "../task/process.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -55,12 +57,13 @@ static void cmd_help(void) {
     vga_puts("  ls        - list files on the mounted disk\n");
     vga_puts("  cat FILE  - print a file's contents\n");
     vga_puts("  ps        - list running processes\n");
+    vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2)\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 4: Usermode Processes, Syscalls & Scheduling\n");
+    vga_puts("Phase 6: Networking (NE2000, ARP, IPv4, ICMP)\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -123,6 +126,65 @@ static void cmd_uptime(void) {
     vga_printf("Ticks since boot: %d\n", (int)timer_get_ticks());
 }
 
+/* No sscanf in this freestanding libc subset (see PROGRESS.md's libc
+ * gaps) - a small hand-rolled dotted-quad parser instead. Returns
+ * false on anything that doesn't look like four 0-255 octets. */
+static bool parse_ipv4(const char* text, uint32_t* out_ip) {
+    uint8_t octets[4];
+    int octet_index = 0;
+    int value = -1;
+
+    for (const char* p = text;; p++) {
+        if (*p >= '0' && *p <= '9') {
+            if (value < 0) {
+                value = 0;
+            }
+            value = value * 10 + (*p - '0');
+            if (value > 255) {
+                return false;
+            }
+        } else if (*p == '.' || *p == '\0') {
+            if (value < 0 || octet_index >= 4) {
+                return false;
+            }
+            octets[octet_index++] = (uint8_t)value;
+            value = -1;
+            if (*p == '\0') {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (octet_index != 4) {
+        return false;
+    }
+
+    *out_ip = ip_make(octets[0], octets[1], octets[2], octets[3]);
+    return true;
+}
+
+static void cmd_ping(const char* arg) {
+    if (!net_is_up()) {
+        vga_puts("ping: no network adapter present\n");
+        return;
+    }
+
+    uint32_t dest_ip;
+    if (!parse_ipv4(arg, &dest_ip)) {
+        vga_puts("ping: usage: ping A.B.C.D\n");
+        return;
+    }
+
+    vga_printf("Pinging %s ...\n", arg);
+    uint32_t rtt_ticks = 0;
+    if (icmp_ping(dest_ip, &rtt_ticks)) {
+        vga_printf("Reply from %s: time=%dms\n", arg, (int)(rtt_ticks * 10));
+    } else {
+        vga_puts("Request timed out.\n");
+    }
+}
+
 static void cmd_reboot(void) {
     vga_puts("Rebooting...\n");
     /* 8042 keyboard controller "pulse output line" reset - the classic
@@ -160,6 +222,8 @@ static void dispatch(char* line) {
         cmd_ps();
     } else if (strncmp(line, "cat ", 4) == 0) {
         cmd_cat(line + 4);
+    } else if (strncmp(line, "ping ", 5) == 0) {
+        cmd_ping(line + 5);
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');

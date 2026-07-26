@@ -141,6 +141,9 @@ After `make run`, verify at the `nova>` prompt:
       screen shortly after boot (Phase 5) - if you ever see `FAIL`
       instead, address-space isolation is broken and that's a real bug
       worth reporting, not a flaky test
+- [ ] `ping 10.0.2.2` gets a reply (Phase 6) - this is QEMU's own
+      user-mode networking gateway, so it works without any real
+      internet access from your machine
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu
@@ -160,6 +163,19 @@ the non-bootable data disk instead of the NovaOS ISO, which looks like
 a silent hang (no error message, no serial output, no crash - it's just
 sitting in the BIOS's own boot menu logic; see PROGRESS.md's Phase 3
 notes for how this was diagnosed).
+
+### About networking (Phase 6+)
+
+`make run`/`make debug`/`make test` all attach a NE2000 ISA NIC using
+QEMU's built-in user-mode ("SLIRP") networking - no host network
+configuration, root privileges, or real internet access needed. SLIRP
+always answers pings to its own gateway address (10.0.2.2) itself,
+which is what the boot-time self-test and `ping 10.0.2.2` both rely on.
+
+If you want NovaOS to reach the real internet (not just the gateway),
+that depends on SLIRP's own outbound access working on your machine -
+it usually does, but is out of NovaOS's control and isn't required for
+anything `make test` checks.
 
 ## Debugging a boot failure
 

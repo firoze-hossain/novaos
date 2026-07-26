@@ -13,7 +13,8 @@ in the same PR as the code it describes.
 | P3 - Filesystem & Drivers | Complete (scoped - see below) |
 | P4 - Usermode Processes, Syscalls & Scheduling | Complete (scoped - see below) |
 | P5 - Security Hardening (address-space isolation) | Complete (scoped - see below) |
-| P6-P9 | Not started |
+| P6 - Networking | Complete (scoped - see below) |
+| P7-P9 | Not started |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -484,6 +485,117 @@ needing a person to interpret it - see "Verified behavior" below.
 - **Still no NX bit** (32-bit non-PAE paging - see Phase 3's own
   limitations, unchanged).
 
-## Phase 6 and beyond
+## Phase 6 - Networking
+
+**Status: Complete, at a deliberately scoped-down scope.** A full,
+genuine network round trip - ARP resolution followed by an ICMP ping -
+verified against QEMU's own user-mode networking gateway, which
+requires no real network access from the host or CI runner to work.
+
+### What was built
+
+- **`kernel/drivers/net/ne2000.*`** - polling PIO driver for the
+  NE2000 ISA NIC at the fixed QEMU default I/O base (0x300), matching
+  the ATA driver's "one fixed device" precedent from Phase 3. Reads
+  the MAC address out of the card's PROM, sends/receives raw Ethernet
+  frames via the card's remote-DMA mechanism and page-based ring
+  buffer.
+- **`kernel/net/ethernet.*`** - builds outgoing frames, dispatches
+  incoming ones to ARP or IPv4 by ethertype.
+- **`kernel/net/arp.*`** - resolves an IP to a MAC (one-entry cache -
+  see limitations), answers incoming ARP requests for our own IP.
+- **`kernel/net/ip.*`** - minimal IPv4: header build/parse, the
+  standard Internet checksum, no fragmentation, no options, no routing
+  table (always ARPs the destination directly - see limitations).
+- **`kernel/net/icmp.*`** - Echo Request/Reply only. `icmp_ping()`
+  sends a request and busy-waits (via `net_poll()`) for the matching
+  reply; incoming Echo Requests are answered automatically, which is
+  what lets another host `ping` NovaOS.
+- **`kernel/net/net.*`** - fixed static network configuration (no
+  DHCP client) matching QEMU user-mode networking's defaults (IP
+  10.0.2.15, gateway 10.0.2.2), the shared IP/ICMP checksum helper, and
+  `net_poll()` - since the NE2000 driver has no IRQ, the idle task
+  calls this once per loop iteration to drain received frames.
+- **`kernel/shell/shell.c`**: added `ping IP` (with a small hand-rolled
+  dotted-quad parser - no `sscanf` in this libc subset).
+- Wired into `kernel_late_init()`'s self-test pattern: pings the
+  gateway automatically at boot and logs the result, the same way
+  Phase 3 read a test file and Phase 5 verified stack isolation.
+
+### One real bug found and fixed while building this - a classic
+
+Caught by actually testing, and confirmed with a QEMU packet capture
+before touching any code - exactly the discipline that's caught a real
+bug in every phase so far:
+
+**NE2000 receive ring off-by-one.** The hardware `BNRY` register (and
+this driver's software copy of it) tracks the *last freed* page, not
+the next unread one - the actual unread packet lives at `BNRY + 1`.
+The first version of `ne2000_receive()` read directly from `BNRY`,
+which (right after init, before anything has ever been read) is a page
+the NIC never wrote to, producing an all-zero header that the
+corrupt-packet safety check silently discarded. Symptom: the ARP
+request was verifiably being sent and verifiably being answered (a
+`-object filter-dump` packet capture showed both the request and
+SLIRP's reply on the wire), yet the kernel never logged receiving
+anything at all. Fixed by reading from `BNRY + 1` and keeping the
+software/hardware BNRY values consistently defined as "last freed
+page" throughout.
+
+### Verified behavior (this update)
+
+- Clean build, zero warnings under `-Wall -Wextra`.
+- Full boot log, unedited:
+  ```
+  [ OK ] NE2000 NIC at 0x300, MAC 52:54:0:12:34:56
+  [ OK ] Network up: IP 10.0.2.15, gateway 10.0.2.2
+  ...
+  [ OK ] PING OK: gateway replied in 0 ticks (~0ms)
+  ```
+  ("0 ticks" reflects the timer's 10ms tick resolution, not an
+  instantaneous reply - QEMU's virtual network genuinely does respond
+  faster than one tick most of the time. RTT precision is limited to
+  whole ticks; see limitations.)
+- Diagnosed the ring-buffer bug with a `-object filter-dump` packet
+  capture (proving the request/reply genuinely existed on the wire)
+  before touching the receive code, rather than guessing.
+- Ran 20 seconds headless with no crash, fault, or FAIL message.
+- Interactively confirmed the shell's `ping 10.0.2.2` command works
+  and produces a reply; serial log showed no faults during that
+  session.
+- `make test` now asserts `PING OK` appears alongside the existing
+  Phase 2-5 markers.
+
+### Known limitations / follow-ups (tracked for Phase 7+)
+
+- **No DHCP.** Static IP configuration matching QEMU user-mode
+  networking's defaults only - a different network setup (bridged,
+  tap, a different QEMU `-netdev`) needs `net.h`'s constants changed by
+  hand, or a real DHCP client written.
+- **No routing table.** `ip_send()` always ARPs the destination IP
+  directly, which only works for same-subnet destinations. Fine for
+  the one thing NovaOS currently talks to (the gateway, which is
+  same-subnet by definition); would silently fail to reach anything
+  requiring an actual multi-hop route.
+- **One-entry ARP cache**, not a real table - resolving a second host
+  evicts the first. Matches this phase's actual needs (one gateway) but
+  is a real limitation the moment more than one destination matters.
+- **NE2000 driver is polling, not IRQ-driven.** Something (currently
+  the idle task) has to call `net_poll()` regularly or incoming frames
+  sit in the NIC's ring buffer unprocessed. No PCI variant, no
+  multiple-NIC support, no jumbo frames.
+- **UDP and TCP are not implemented at all** - only ICMP. No sockets
+  API. This is the largest remaining gap in "Networking (NE2000,
+  TCP/IP, sockets)" as originally scoped in PROJECT_PLAN.md; closing it
+  is real future work, not a small addition.
+- **RTT reporting is only accurate to one timer tick (10ms).** A
+  faster reply (as QEMU's virtual network usually gives) still reports
+  as "0ms" rather than a genuine sub-tick measurement.
+- **No packet validation hardening** - checksums are computed correctly
+  on send but not verified strictly on receive beyond basic length
+  sanity checks; a deliberately malformed packet from a hostile host
+  hasn't been fuzzed against.
+
+## Phase 7 and beyond
 
 Not started. See PROJECT_PLAN.md section 6 for scope.

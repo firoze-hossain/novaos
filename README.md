@@ -49,6 +49,14 @@ manager, and Windows-style usability conventions. See
   runtime that neither can see or corrupt the other's data
 - CR3 switched on every context switch
 
+**Phase 6 - Networking**
+- NE2000 ISA NIC driver (polling PIO)
+- Ethernet, ARP, IPv4, and ICMP (ping) - a real, verified round trip
+  against QEMU's own network gateway, no host network access required
+- Shell `ping IP` command; an automatic gateway ping at boot proves
+  the whole stack headlessly, the same pattern every phase's self-test
+  uses
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -77,8 +85,9 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000)
 │   ├── fs/             # VFS pass-through + FAT32 (read-only)
+│   ├── net/            # ethernet, arp, ipv4, icmp
 │   ├── task/           # process table, scheduler, syscall demo task
 │   ├── shell/          # minimal built-in shell
 │   ├── lib/            # freestanding string/stdio subset

@@ -68,6 +68,14 @@ DISK_SIZE_MB = 64
 DISK_FIXTURES_DIR = tools/fixtures
 DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk
 
+# Phase 6+: QEMU user-mode ("SLIRP") networking with an NE2000 ISA NIC
+# at the fixed I/O base the driver expects. SLIRP always answers pings
+# to its own gateway address (10.0.2.2) even with no real outbound
+# network access from the host/CI runner, which is what makes the
+# Phase 6 ping self-test (see kernel/init/main.c) work identically
+# everywhere `make test` runs. A fixed MAC keeps output reproducible.
+NET_FLAGS = -netdev user,id=net0 -device ne2k_isa,netdev=net0,iobase=0x300,mac=52:54:00:12:34:56
+
 # Directories
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -121,11 +129,11 @@ $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
@@ -143,7 +151,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	@mkdir -p $(BUILD_DIR)
 	@rm -f $(TEST_LOG)
 	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
-	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) \
+	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) \
 	    -display none -serial file:$(TEST_LOG) || true
 	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
@@ -151,6 +159,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "FILE READ OK: HELLO.TXT" $(TEST_LOG) && \
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
+	    grep -q "PING OK" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 

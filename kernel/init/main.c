@@ -12,6 +12,8 @@
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
+#include "../net/net.h"
+#include "../net/icmp.h"
 #include "../task/process.h"
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
@@ -102,6 +104,8 @@ void kernel_late_init(void) {
 
     vfs_init();
 
+    net_init();
+
     __asm__ volatile ("sti");
     kernel_log("[ OK ] Interrupts enabled\n");
 
@@ -121,6 +125,24 @@ void kernel_late_init(void) {
                        file_buf);
         } else {
             kernel_log("[WARN] FAT32 mounted but HELLO.TXT not found\n");
+        }
+    }
+
+    /* Self-test: if a NIC is attached, ping the gateway (QEMU user-
+     * mode networking's SLIRP stack always answers pings to itself at
+     * 10.0.2.2, regardless of whether the sandbox/host has real
+     * outbound network access - see net.h). This exercises the full
+     * NE2000 -> Ethernet -> ARP -> IP -> ICMP round trip headlessly,
+     * the same pattern as the filesystem self-test above. Silently
+     * skipped if no NIC is present. */
+    if (net_is_up()) {
+        uint32_t rtt_ticks = 0;
+        if (icmp_ping(NET_GATEWAY_IP, &rtt_ticks)) {
+            kernel_log("[ OK ] PING OK: gateway replied in %d ticks (~%dms)\n",
+                       (int)rtt_ticks, (int)(rtt_ticks * 10));
+        } else {
+            kernel_log("[WARN] Gateway did not reply to ping (no route? "
+                       "check QEMU -netdev config)\n");
         }
     }
 }
@@ -149,8 +171,13 @@ static void print_banner(void) {
 
 static void idle_task_entry(void) {
     /* Runs whenever nothing else is READY. hlt is fine here - this is
-     * a ring-0 kernel task, not the ring-3 demo. */
+     * a ring-0 kernel task, not the ring-3 demo. Also where the NIC
+     * gets polled: the NE2000 driver has no IRQ (see PROGRESS.md), so
+     * something has to regularly check it for received frames, and
+     * idle is, almost by definition, the task with the most spare
+     * cycles to spend doing that. */
     for (;;) {
+        net_poll();
         __asm__ volatile ("hlt");
     }
 }
