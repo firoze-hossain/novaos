@@ -58,7 +58,7 @@ avoids setting an expectation the project can't deliver on.
 |  +----------------------------------------------------+     |
 |  | Security Layer: capabilities, sandboxing, MAC       |     |  Phase 5
 |  +----------------------------------------------------+     |
-|  | Process Scheduler + Syscall Interface                |     |  Phase 4
+|  | Process Scheduler + Syscall Interface                |     |  Phase 4 [done]
 |  +----------------------------------------------------+     |
 |  | Filesystem (VFS + FAT32, later ext-like)             |     |  Phase 3
 |  +----------------------------------------------------+     |
@@ -84,9 +84,10 @@ at the end. Concretely, in the order it gets built:
 | Masked-by-default IRQs (a driver must opt in) | 2 | Done |
 | Fault isolation: CPU exceptions panic cleanly with a full register dump instead of silently corrupting state | 2 | Done |
 | Paging (single flat 64MB address space) | 3 | Done |
-| Per-process address spaces (no process can read another's memory) | 4 | Planned |
+| Ring 3 execution + preemptive scheduling | 4 | Done - real CPL=3 processes, round-robin scheduler; see PROGRESS.md |
+| Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Done - int 0x80, DPL=3 gate is the only path from ring 3 into the kernel |
+| Per-process address spaces (no process can read another's memory) | 5 | Planned - Phase 4 added ring 0/3 separation and scheduling, but every process still shares one flat address space |
 | NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
-| Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Planned |
 | Least-privilege process model (capabilities, not raw root/non-root) | 5 | Planned |
 | Mandatory sandboxing for GUI apps (Android/iOS-style permission prompts, not Windows-style "click Yes and hope") | 5 | Planned |
 | Signed packages + signature verification in the package manager | 8 | Planned |
@@ -98,7 +99,9 @@ at the end. Concretely, in the order it gets built:
 | Feature | Phase | Notes |
 |---|---|---|
 | Interactive kernel shell | 2 | Done (`help`, `echo`, `meminfo`, `uptime`, `reboot`) |
-| Full POSIX-ish shell (`ls`, `cat`, pipes, scripts) | 4 | Needs the Phase 3 filesystem first |
+| Filesystem-backed shell commands (`ls`, `cat`) | 3 | Done |
+| Process listing (`ps`) | 4 | Done |
+| Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs Phase 5's process model first |
 | `nova-pkg`: apt-style package manager (CLI) | 8 | Dependency resolution, signed packages |
 | "Software Center": GUI front-end for `nova-pkg` | 8 | The literal "Ubuntu-like" ask |
 | Windowing system / desktop shell | 7 | Framebuffer graphics mode, compositor, taskbar |
@@ -112,8 +115,8 @@ at the end. Concretely, in the order it gets built:
 | **P1** | Bootloader & Kernel Foundation | Complete |
 | **P2** | Memory Management & Interrupts | Complete (this update) |
 | **P3** | Paging, physical memory management, filesystem (VFS + FAT32, read-only), ATA storage driver | Complete (scoped - see PROGRESS.md) |
-| **P4** | Usermode processes, syscalls, scheduler, real shell | Next |
-| **P5** | Security hardening layer (capabilities, sandboxing) | Planned |
+| **P4** | Usermode processes, syscalls, scheduler, real shell | Complete (scoped - see PROGRESS.md) |
+| **P5** | Security hardening layer (capabilities, sandboxing) | Next |
 | **P6** | Networking (NE2000/virtio-net, TCP/IP, sockets) | Planned |
 | **P7** | Graphics mode + windowing system | Planned |
 | **P8** | Package manager + Software Center ("the distro layer") | Planned |

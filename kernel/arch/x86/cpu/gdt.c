@@ -25,7 +25,7 @@ struct gdt_ptr {
     uint32_t base;
 } __attribute__((packed));
 
-#define GDT_ENTRIES 5
+#define GDT_ENTRIES 6
 
 static struct gdt_entry gdt[GDT_ENTRIES];
 static struct gdt_ptr   gdt_pointer;
@@ -34,8 +34,8 @@ static struct gdt_ptr   gdt_pointer;
  * every segment register so the CPU actually uses the new table. */
 extern void gdt_flush(uint32_t gdt_ptr_addr);
 
-static void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit,
-                          uint8_t access, uint8_t gran) {
+void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit,
+                   uint8_t access, uint8_t gran) {
     gdt[num].base_low    = (uint16_t)(base & 0xFFFF);
     gdt[num].base_middle = (uint8_t)((base >> 16) & 0xFF);
     gdt[num].base_high   = (uint8_t)((base >> 24) & 0xFF);

@@ -5,11 +5,16 @@
 #include "../drivers/keyboard/keyboard.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/cpu/idt.h"
+#include "../arch/x86/cpu/tss.h"
+#include "../arch/x86/cpu/syscall.h"
 #include "../arch/x86/mm/heap.h"
 #include "../arch/x86/mm/pmm.h"
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
+#include "../task/process.h"
+#include "../task/scheduler.h"
+#include "../task/user_demo.h"
 #include "../shell/shell.h"
 #include "../lib/string.h"
 #include "../lib/stdio.h"
@@ -60,8 +65,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     gdt_init();
     kernel_log("[ OK ] GDT initialized\n");
 
+    tss_init();
+    kernel_log("[ OK ] TSS installed\n");
+
     idt_init();
     kernel_log("[ OK ] IDT/ISR/IRQ initialized, PIC remapped to 0x20-0x2F\n");
+
+    syscall_init();
+    kernel_log("[ OK ] Syscall gate installed (int 0x80, ring 3 accessible)\n");
 
     bool magic_valid = (multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC);
     if (!magic_valid) {
@@ -84,6 +95,7 @@ void kernel_late_init(void) {
     timer_init(TIMER_FREQUENCY_HZ);
     kernel_log("[ OK ] PIT timer initialized at %d Hz (IRQ0)\n",
                TIMER_FREQUENCY_HZ);
+    timer_set_tick_hook(scheduler_on_tick);
 
     keyboard_init();
     kernel_log("[ OK ] PS/2 keyboard initialized (IRQ1)\n");
@@ -135,6 +147,14 @@ static void print_banner(void) {
     vga_puts("  Type 'help' for a list of commands\n\n");
 }
 
+static void idle_task_entry(void) {
+    /* Runs whenever nothing else is READY. hlt is fine here - this is
+     * a ring-0 kernel task, not the ring-3 demo. */
+    for (;;) {
+        __asm__ volatile ("hlt");
+    }
+}
+
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_early_init(multiboot_magic, multiboot_info_addr);
 
@@ -144,5 +164,13 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_late_init();
 
     print_banner();
-    shell_run(); /* never returns */
+
+    process_init();
+    process_create_kernel_task("idle", idle_task_entry);
+    process_create_kernel_task("shell", shell_run);
+    process_create_user_task("demo", user_demo_task);
+    kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
+               "demo (ring 3)\n");
+
+    scheduler_start(); /* never returns */
 }

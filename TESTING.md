@@ -135,6 +135,12 @@ After `make run`, verify at the `nova>` prompt:
 - [ ] `uptime` increases each time you re-run it
 - [ ] `ls` lists `HELLO.TXT` from the test disk image (Phase 3)
 - [ ] `cat HELLO.TXT` prints its contents (Phase 3)
+- [ ] `ps` lists idle/shell/demo processes; `demo` shows TERMINATED
+      shortly after boot (Phase 4)
+- [ ] The `[ring3] Hello from user mode!` message appears on screen
+      shortly after boot, printed by the demo process via a syscall
+      (Phase 4) - visible on the VGA console, not just in the serial
+      log
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

@@ -12,9 +12,30 @@
 static volatile uint32_t ticks = 0;
 static uint32_t configured_frequency_hz = 100;
 
+/* 5 ticks at the default 100Hz = a 50ms scheduling quantum. Chosen as
+ * a reasonable-feeling default for a round-robin scheduler with a
+ * handful of tasks; not tuned against anything in particular. */
+#define TICK_HOOK_QUANTUM 5
+
+static void (*tick_hook)(void) = NULL;
+static uint32_t ticks_since_hook = 0;
+
 static void timer_tick(registers_t* regs) {
     (void)regs;
     ticks++;
+
+    if (tick_hook != NULL) {
+        ticks_since_hook++;
+        if (ticks_since_hook >= TICK_HOOK_QUANTUM) {
+            ticks_since_hook = 0;
+            tick_hook();
+        }
+    }
+}
+
+void timer_set_tick_hook(void (*hook)(void)) {
+    tick_hook = hook;
+    ticks_since_hook = 0;
 }
 
 void timer_init(uint32_t frequency_hz) {

@@ -93,14 +93,25 @@ void register_irq_handler(uint8_t irq, isr_handler_t handler) {
 void irq_handler(registers_t* regs) {
     uint8_t irq = (uint8_t)(regs->int_no - IRQ_BASE);
 
-    if (irq_handlers[irq]) {
-        irq_handlers[irq](regs);
-    }
-
-    /* The slave PIC must be acknowledged before the master for any IRQ
-     * that arrived through the cascade (IRQ 8-15). */
+    /* EOI must be sent BEFORE dispatching to the handler, not after.
+     * The 8259 is in normal (non-auto) EOI mode, so an IRQ line stays
+     * "in service" - meaning the PIC will never deliver another
+     * interrupt on it - until EOI is sent. A handler that triggers a
+     * context switch (see the scheduler's timer tick hook, Phase 4)
+     * can `ret` straight into a brand new task's stack and never
+     * return to this call frame at all - if EOI were sent after the
+     * handler call, it would simply never happen, permanently
+     * deadlocking that IRQ line. This was found the hard way: the
+     * very first scheduler tick worked once and then no further timer
+     * interrupt ever fired again. The slave PIC must be acknowledged
+     * before the master for any IRQ that arrived through the cascade
+     * (IRQ 8-15). */
     if (irq >= 8) {
         outb(PIC2_COMMAND, PIC_EOI);
     }
     outb(PIC1_COMMAND, PIC_EOI);
+
+    if (irq_handlers[irq]) {
+        irq_handlers[irq](regs);
+    }
 }

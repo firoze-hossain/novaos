@@ -22,6 +22,7 @@
 
 #define PAGE_PRESENT 0x1
 #define PAGE_WRITE   0x2
+#define PAGE_USER    0x4
 
 #define IDENTITY_MAP_TABLES 16 /* 16 * 4MB = 64MB */
 
@@ -55,13 +56,25 @@ static void page_fault_handler(registers_t* regs) {
 }
 
 static void build_identity_map(void) {
+    /* PAGE_USER on both levels: x86 ANDs the U/S bit across the page
+     * directory entry and the page table entry, so both need it for
+     * ring-3 code to access a page at all. This does mean every page
+     * in the identity map - not just the Phase 4 demo task's own code
+     * and stack - is technically ring-3-readable/writable, which
+     * sounds like it undoes the ring 0/3 boundary. It doesn't undo
+     * anything that existed: there is still no per-process address
+     * space (see PROGRESS.md, tracked since Phase 3), so there was
+     * never page-level kernel/user memory separation to begin with -
+     * only the CPL check on privileged instructions was real
+     * enforcement until now. Real memory isolation needs per-process
+     * page directories, which is Phase 5+ scope. */
     for (int t = 0; t < IDENTITY_MAP_TABLES; t++) {
         for (int e = 0; e < 1024; e++) {
             uint32_t phys = (uint32_t)(t * 1024 + e) * 4096u;
-            page_tables[t][e] = phys | PAGE_PRESENT | PAGE_WRITE;
+            page_tables[t][e] = phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
         }
-        page_directory[t] =
-            ((uint32_t)&page_tables[t][0]) | PAGE_PRESENT | PAGE_WRITE;
+        page_directory[t] = ((uint32_t)&page_tables[t][0]) | PAGE_PRESENT |
+                             PAGE_WRITE | PAGE_USER;
     }
 
     for (int d = IDENTITY_MAP_TABLES; d < 1024; d++) {

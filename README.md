@@ -32,6 +32,16 @@ manager, and Windows-style usability conventions. See
 - ATA PIO disk driver + a read-only FAT32 filesystem
 - Shell `ls`/`cat` commands, backed by a real disk image (`make disk.img`)
 
+**Phase 4 - Usermode Processes, Syscalls & Scheduling**
+- A Task State Segment and real ring-3 (CPL=3) process execution
+- Preemptive round-robin scheduler (context switching via a hand-written
+  stack-swap primitive)
+- `int 0x80` syscall interface (`SYS_WRITE`/`SYS_EXIT`/`SYS_YIELD`) -
+  the only path from ring 3 into the kernel
+- A demo process that actually runs at ring 3 and talks to the kernel
+  only through syscalls
+- Shell `ps` command
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -58,10 +68,11 @@ novaos/
 ├── kernel/
 │   ├── arch/x86/
 │   │   ├── boot/       # Multiboot entry point
-│   │   ├── cpu/        # GDT, IDT, ISR, IRQ
+│   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
 │   ├── drivers/        # vga, serial, timer, keyboard, ata
 │   ├── fs/             # VFS pass-through + FAT32 (read-only)
+│   ├── task/           # process table, scheduler, syscall demo task
 │   ├── shell/          # minimal built-in shell
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers

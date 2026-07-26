@@ -14,6 +14,7 @@
 #include "../arch/x86/mm/pmm.h"
 #include "../arch/x86/io.h"
 #include "../fs/vfs.h"
+#include "../task/process.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 #include "../include/version.h"
@@ -53,12 +54,37 @@ static void cmd_help(void) {
     vga_puts("  uptime    - show timer ticks since boot\n");
     vga_puts("  ls        - list files on the mounted disk\n");
     vga_puts("  cat FILE  - print a file's contents\n");
+    vga_puts("  ps        - list running processes\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 3: Paging, Physical Memory & Filesystem\n");
+    vga_puts("Phase 4: Usermode Processes, Syscalls & Scheduling\n");
+}
+
+static const char* state_name(process_state_t s) {
+    switch (s) {
+        case PROCESS_READY:      return "READY";
+        case PROCESS_RUNNING:    return "RUNNING";
+        case PROCESS_TERMINATED: return "TERMINATED";
+        default:                 return "-";
+    }
+}
+
+static void cmd_ps(void) {
+    vga_puts("  PID  RING  STATE       NAME\n");
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t* p = process_table_entry(i);
+        if (p == NULL || p->state == PROCESS_UNUSED) {
+            continue;
+        }
+        vga_printf("  %d    %s   %s", p->pid, p->is_user ? "u3" : "k0",
+                   state_name(p->state));
+        vga_puts("       ");
+        vga_puts(p->name);
+        vga_putchar('\n');
+    }
 }
 
 static void cmd_meminfo(void) {
@@ -130,6 +156,8 @@ static void dispatch(char* line) {
         cmd_reboot();
     } else if (strcmp(line, "ls") == 0) {
         cmd_ls();
+    } else if (strcmp(line, "ps") == 0) {
+        cmd_ps();
     } else if (strncmp(line, "cat ", 4) == 0) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "echo ", 5) == 0) {

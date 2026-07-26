@@ -10,7 +10,13 @@
 #define GDT_KERNEL_DATA 0x10
 #define GDT_USER_CODE   (0x18 | 3)
 #define GDT_USER_DATA   (0x20 | 3)
+#define GDT_TSS_SELECTOR 0x28
 
 void gdt_init(void);
+
+/* Exposed so tss.c can install the TSS descriptor into GDT entry 5
+ * without gdt.c needing to know anything about what a TSS is. */
+void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit,
+                   uint8_t access, uint8_t gran);
 
 #endif

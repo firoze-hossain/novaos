@@ -15,4 +15,13 @@ uint32_t timer_get_ticks(void);
  * elapsed, based on the configured tick frequency. */
 void timer_sleep_ms(uint32_t ms);
 
+/* Registers a function to be called on every tick, from inside the
+ * IRQ0 handler. This is how the Phase 4 scheduler gets a chance to
+ * preempt the running task without timer.c needing to know anything
+ * about processes or scheduling - it just calls whatever's registered
+ * here, if anything. At most one hook is supported (the scheduler is
+ * the only caller so far); a real multi-hook list can replace this if
+ * a second caller ever needs one. */
+void timer_set_tick_hook(void (*hook)(void));
+
 #endif

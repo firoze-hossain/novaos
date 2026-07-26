@@ -11,7 +11,8 @@ in the same PR as the code it describes.
 | P1 - Bootloader & Kernel Foundation | Complete |
 | P2 - Memory Management & Interrupts | Complete |
 | P3 - Filesystem & Drivers | Complete (scoped - see below) |
-| P4-P9 | Not started |
+| P4 - Usermode Processes, Syscalls & Scheduling | Complete (scoped - see below) |
+| P5-P9 | Not started |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -238,6 +239,140 @@ calling a phase "done":
 - **"VFS" is a thin single-filesystem pass-through**, not a real
   mount-point table - see `kernel/fs/vfs.c`'s header comment.
 
-## Phase 4 and beyond
+## Phase 4 - Usermode Processes, Syscalls & Scheduling
+
+**Status: Complete, at a deliberately scoped-down scope.** Boot-verified
+via `make test`, and manually confirmed the shell stays responsive
+(`help`, `ps`) while the scheduler and a ring-3 process run underneath
+it.
+
+### What was built
+
+- **`kernel/arch/x86/cpu/tss.*`** - a single Task State Segment
+  (software task switching only - see the file's header comment).
+  Its `esp0`/`ss0` fields are what let the CPU find the right ring-0
+  stack when an interrupt or `int 0x80` fires while running in ring 3.
+- **`kernel/arch/x86/cpu/context_switch.asm`** - `switch_context()`
+  (the stack-swap primitive every preemption and voluntary yield goes
+  through) and `enter_usermode` (the one-time ring0->ring3 `iret`
+  trampoline a brand new user task's first switch lands on).
+- **`kernel/task/process.*`** - process table, and the fake initial
+  stack-frame construction a new task needs before it's ever run once
+  (see the file's header comment - this is the fiddly part of doing
+  context switching this way).
+- **`kernel/task/scheduler.*`** - simple round-robin: scans the whole
+  process table each time rather than maintaining a separate ready
+  queue (fine at `MAX_PROCESSES=16`).
+- **`kernel/drivers/timer/timer.c`** - gained `timer_set_tick_hook()`
+  so the scheduler can preempt on a quantum (5 ticks / 50ms at the
+  default 100Hz) without timer.c needing to know processes exist.
+- **`kernel/arch/x86/cpu/syscall.*` + `syscall_stub.asm`** - `int 0x80`
+  with `SYS_WRITE`/`SYS_EXIT`/`SYS_YIELD`. The gate's DPL=3 is what
+  actually matters (the CPU checks `CPL <= gate DPL` for a software
+  interrupt raised via `INT`) - every other IDT gate stays DPL=0.
+- **`kernel/task/user_demo.c`** - a task that genuinely executes at
+  CPU ring 3 and can only reach the kernel through `int 0x80` (see
+  "Known limitations" for what "genuinely ring 3" does and doesn't
+  mean yet without an ELF loader).
+- **`kernel/shell/shell.c`** - added `ps`.
+
+### Two real bugs found and fixed while building this
+
+Both were invisible in code review and only showed up by actually
+booting it - the entire reason this project keeps a `make test` and
+insists on manual verification before calling a phase done:
+
+1. **IRQ EOI was sent after calling the registered handler, not
+   before.** Fine for every Phase 2/3 handler, which always returns
+   normally - but the scheduler's timer tick hook can trigger a
+   context switch that `ret`s straight into a different task's stack
+   and never returns to that call frame at all. With EOI sent "after,"
+   that code simply never ran, which permanently left the timer's IRQ
+   line in-service on the (non-auto-EOI) 8259 PIC - no further timer
+   interrupt was ever delivered again. Symptom: the very first
+   scheduler tick worked exactly once, then the machine looked frozen
+   (confirmed via QEMU's interrupt trace: EIP/ESP/EAX identical across
+   several consecutive timer interrupts - it was re-entering the same
+   `hlt` instruction over and over, EOI-blocked from ever seeing
+   another one). Fixed by sending EOI immediately after identifying
+   the IRQ, before dispatching to the handler.
+2. **The identity-mapped pages were never marked user-accessible.**
+   `paging_init()` (Phase 3) set `PAGE_PRESENT | PAGE_WRITE` but not
+   `PAGE_USER` on every page table/directory entry - reasonable when
+   nothing ran above ring 0 yet, but it meant the instant the ring-3
+   demo task tried to execute its first instruction, the CPU faulted
+   with "protection violation" (the page was present, just not
+   permitted at CPL 3). Fixed by adding `PAGE_USER` to the identity
+   map. See "Known limitations" below for what this does (and
+   deliberately doesn't) mean for kernel/user memory separation.
+
+### Verified behavior (this update)
+
+- Clean build, zero warnings under `-Wall -Wextra`.
+- Full boot-to-shutdown-of-demo sequence:
+  ```
+  [ OK ] TSS installed
+  [ OK ] Syscall gate installed (int 0x80, ring 3 accessible)
+  ...
+  [ OK ] Tasks created: idle (kernel), shell (kernel), demo (ring 3)
+  [SYSCALL] SYS_WRITE from pid 3 ('
+  [ring3] Hello from user mode! This was printed via the SYS_WRITE syscall, not a direct vga_puts() call.
+  ')
+  [SYSCALL] SYS_WRITE from pid 3 ('[ring3] Demo task exiting via SYS_EXIT.
+  ')
+  [ OK ] Process 'demo' (pid 3) exited
+  ```
+- Confirmed (via temporary debug logging, since removed) the full
+  round-robin sequence: idle -> shell -> demo -> idle -> shell -> demo
+  (x3, matching the demo task's 3 `SYS_YIELD` calls) -> demo exits ->
+  idle/shell continue round-robining indefinitely with demo correctly
+  excluded (`PROCESS_TERMINATED` is never picked again).
+- Ran for 15+ seconds headless with no crash, no fault, no runaway
+  logging, and no apparent stack corruption from repeated switching.
+- Interactively confirmed via the QEMU monitor that the shell (a
+  kernel task, same as `idle`) stays fully responsive - `help` and
+  `ps` both worked - while the scheduler and the ring-3 process run
+  underneath it; the serial log showed no faults during that session.
+
+### Known limitations / follow-ups (tracked for Phase 5+)
+
+- **No ELF loader.** The demo user task is a C function compiled
+  directly into the kernel image; `process_create_user_task()` takes
+  its address the easy way. What's still genuinely real: it executes
+  at CPL=3, can't execute privileged instructions, and can only reach
+  the kernel through `int 0x80` - hardware-enforced, not just
+  convention. What's not real yet: loading an actual executable
+  (a.out/ELF) from the FAT32 filesystem into a fresh address space.
+- **No per-process address spaces**, still - all tasks (kernel and
+  user) share the single flat identity-mapped 64MB range from Phase 3.
+  This phase's `PAGE_USER` fix (see above) means that range is now
+  uniformly ring-3-accessible rather than kernel-only, which sounds
+  like a regression but isn't one in practice: there was no
+  kernel/user memory separation to preserve before this, either (see
+  Phase 3's own limitations). Real isolation needs per-process page
+  directories, tracked as future work.
+- **No memory protection between processes.** Any task - kernel or
+  user - can read/write any other task's stack if it has the address,
+  since there's only one address space. The ring 0/3 CPL boundary
+  (privileged instructions, the syscall gate) is real; memory
+  isolation is not, yet.
+- **`int 0x80` takes no argument validation.** `SYS_WRITE`'s pointer
+  is dereferenced directly with no bounds/validity check - meaningless
+  to "validate against the process's own memory" when every process
+  shares one address space anyway, but will matter the moment that
+  changes.
+- **Round-robin only, fixed quantum, no priorities.** No sleep/wait
+  queues either - `SYS_YIELD` is the only way a process gives up its
+  quantum early.
+- **`kmalloc`'d stacks are never freed** on process exit (`kfree()`
+  exists and works - see Phase 2 - but nothing calls it yet on a
+  `PROCESS_TERMINATED` slot). Fine for three tasks that live for the
+  whole session; would leak in any longer-running, higher-churn setup.
+- **Kernel task entry functions must not return** - there's no
+  completion handler for kernel tasks the way `SYS_EXIT` provides one
+  for user tasks. Both current kernel tasks (`idle`, `shell`) already
+  loop forever, so this hasn't mattered in practice yet.
+
+## Phase 5 and beyond
 
 Not started. See PROJECT_PLAN.md section 6 for scope.

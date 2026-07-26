@@ -149,6 +149,8 @@ test: $(ISO_FILE) $(DISK_IMG)
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
 	    grep -q "FAT32 mounted" $(TEST_LOG) && \
 	    grep -q "FILE READ OK: HELLO.TXT" $(TEST_LOG) && \
+	    grep -q "SYS_WRITE from pid" $(TEST_LOG) && \
+	    grep -q "Process 'demo' (pid 3) exited" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 
