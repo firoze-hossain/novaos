@@ -40,10 +40,21 @@ endif
 CFLAGS = -m32 -std=c99 -ffreestanding -O2 -Wall -Wextra \
          -I./kernel/include -I./kernel/drivers/vga -I./kernel/lib \
          -fno-stack-protector -fno-pie -fno-builtin -nostdlib \
+         -g \
          $(CFLAGS_EXTRA)
 
 LDFLAGS = -m elf_i386 -T tools/linker.ld $(LDFLAGS_EXTRA)
-ASMFLAGS = -f elf32
+ASMFLAGS = -f elf32 -g
+
+# QEMU flags shared by run/debug/test.
+#
+# `-M pc,smm=off` matters on every host, not just CI: SeaBIOS's SMM
+# (legacy USB) emulation is emulated instruction-by-instruction when
+# QEMU has no hardware acceleration available (no KVM on Linux, no HVF
+# on Intel Mac, Hyper-V disabled on Windows) and can make even a plain
+# boot take tens of seconds or appear to hang. NovaOS doesn't use SMM,
+# so turning it off is free.
+QEMU_FLAGS = -M pc,smm=off -m 512M -no-reboot
 
 # Directories
 KERNEL_DIR = kernel
@@ -88,18 +99,36 @@ $(ISO_FILE): $(KERNEL_BIN)
 	$(GRUB_MKRESCUE) -o $(ISO_FILE) $(ISO_DIR)
 	@echo "✅ NovaOS ISO created: $(ISO_FILE)"
 
-# Run in QEMU
+# Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE)
-	$(QEMU) -cdrom $(ISO_FILE) -m 512M -vga std
+	$(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE)
-	$(QEMU) -cdrom $(ISO_FILE) -m 512M -s -S -vga std &
+	$(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
 	    -ex "break kernel_main" \
 	    -ex "continue"
+
+# Headless boot smoke test: boots NovaOS with no display, captures the
+# serial log, and fails (non-zero exit) if the expected subsystem
+# init markers are missing. This is what scripts/test.sh and CI use,
+# and it works identically on Linux, macOS, and Windows/WSL2.
+TEST_TIMEOUT ?= 15
+TEST_LOG = build/test-serial.log
+
+test: $(ISO_FILE)
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(TEST_LOG)
+	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
+	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) \
+	    -display none -serial file:$(TEST_LOG) || true
+	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
+	@grep -q "Interrupts enabled" $(TEST_LOG) && \
+	    ! grep -q "PANIC\|FAULT" $(TEST_LOG) && \
+	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 
 # Clean
 clean:
@@ -113,10 +142,11 @@ setup:
 help:
 	@echo "🌌 NovaOS Build Commands:"
 	@echo "  make          - Build ISO"
-	@echo "  make run      - Run in QEMU"
+	@echo "  make run      - Run in QEMU (graphical window)"
 	@echo "  make debug    - Debug with GDB"
+	@echo "  make test     - Headless boot smoke test (for CI)"
 	@echo "  make clean    - Clean build files"
 	@echo "  make setup    - Install dependencies"
 	@echo "  make help     - Show this help"
 
-.PHONY: all run debug clean setup help
+.PHONY: all run debug test clean setup help

@@ -1,0 +1,77 @@
+########################################
+# NovaOS - .gitignore
+########################################
+
+# ---- Build artifacts ----
+build/
+iso/
+*.o
+*.elf
+*.bin
+*.iso
+*.img
+*.map
+*.sym
+*.d
+
+# ---- Toolchain / cross-compiler (built locally by setup scripts) ----
+toolchain/
+cross/
+opt/
+
+# ---- Logs & test output ----
+*.log
+serial.log
+qemu.log
+test-results/
+
+# ---- JetBrains / IntelliJ / CLion (do not commit) ----
+.idea/
+*.iml
+*.ipr
+*.iws
+cmake-build-*/
+
+# ---- VS Code ----
+.vscode/
+*.code-workspace
+
+# ---- Visual Studio ----
+.vs/
+*.vcxproj*
+*.sln
+
+# ---- Vim / Emacs swap files ----
+*.swp
+*.swo
+*~
+\#*\#
+.#*
+
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ---- Windows ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---- Linux ----
+*~
+
+# ---- Editors / language servers ----
+.clangd/
+compile_commands.json
+.ccls-cache/
+
+# ---- Env / secrets (never commit) ----
+.env
+*.pem
+*.key
+
+# ---- Debug/session artifacts ----
+.gdb_history
+*.gdbinit.local

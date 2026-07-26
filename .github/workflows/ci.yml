@@ -1,0 +1,36 @@
+name: Build & Boot Test
+
+# Runs on every push and pull request so a broken build or a kernel
+# that fails to reach "Interrupts enabled" (see `make test`) is caught
+# before it lands on master, regardless of which OS the contributor
+# developed on (Windows/WSL2, Linux, or macOS).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            nasm gcc-multilib xorriso grub-pc-bin grub-common \
+            qemu-system-x86 mtools
+
+      - name: Build ISO
+        run: make
+
+      - name: Headless boot smoke test
+        run: make test
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novaos-iso
+          path: novaos.iso
