@@ -56,7 +56,7 @@ avoids setting an expectation the project can't deliver on.
 +-------------------------------------------------------------+
 | KERNEL SPACE                                                 |
 |  +----------------------------------------------------+     |
-|  | Security Layer: capabilities, sandboxing, MAC       |     |  Phase 5
+|  | Security Layer: address-space isolation [done], capabilities/sandboxing [planned] |     |  Phase 5+
 |  +----------------------------------------------------+     |
 |  | Process Scheduler + Syscall Interface                |     |  Phase 4 [done]
 |  +----------------------------------------------------+     |
@@ -86,10 +86,10 @@ at the end. Concretely, in the order it gets built:
 | Paging (single flat 64MB address space) | 3 | Done |
 | Ring 3 execution + preemptive scheduling | 4 | Done - real CPL=3 processes, round-robin scheduler; see PROGRESS.md |
 | Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Done - int 0x80, DPL=3 gate is the only path from ring 3 into the kernel |
-| Per-process address spaces (no process can read another's memory) | 5 | Planned - Phase 4 added ring 0/3 separation and scheduling, but every process still shares one flat address space |
+| Per-process address spaces (no process can read another's memory) | 5 | Done - each process gets its own page directory and private stack; proven by a boot-time test, not just claimed (see PROGRESS.md) |
+| Least-privilege process model (capabilities, not raw root/non-root) | 6+ | Planned - needs a filesystem permissions model first |
+| Mandatory sandboxing for GUI apps | 7+ | Planned - needs a GUI to sandbox in the first place |
 | NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
-| Least-privilege process model (capabilities, not raw root/non-root) | 5 | Planned |
-| Mandatory sandboxing for GUI apps (Android/iOS-style permission prompts, not Windows-style "click Yes and hope") | 5 | Planned |
 | Signed packages + signature verification in the package manager | 8 | Planned |
 | Verified/measured boot (GRUB to kernel signature check) | 9 | Stretch goal |
 | Disk encryption offered at install time | 9 | Stretch goal |
@@ -101,7 +101,7 @@ at the end. Concretely, in the order it gets built:
 | Interactive kernel shell | 2 | Done (`help`, `echo`, `meminfo`, `uptime`, `reboot`) |
 | Filesystem-backed shell commands (`ls`, `cat`) | 3 | Done |
 | Process listing (`ps`) | 4 | Done |
-| Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs Phase 5's process model first |
+| Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs a real filesystem-backed multi-process model first (Phase 4 process/syscall groundwork exists; a spawn/exec syscall doesn't yet) |
 | `nova-pkg`: apt-style package manager (CLI) | 8 | Dependency resolution, signed packages |
 | "Software Center": GUI front-end for `nova-pkg` | 8 | The literal "Ubuntu-like" ask |
 | Windowing system / desktop shell | 7 | Framebuffer graphics mode, compositor, taskbar |
@@ -116,8 +116,8 @@ at the end. Concretely, in the order it gets built:
 | **P2** | Memory Management & Interrupts | Complete (this update) |
 | **P3** | Paging, physical memory management, filesystem (VFS + FAT32, read-only), ATA storage driver | Complete (scoped - see PROGRESS.md) |
 | **P4** | Usermode processes, syscalls, scheduler, real shell | Complete (scoped - see PROGRESS.md) |
-| **P5** | Security hardening layer (capabilities, sandboxing) | Next |
-| **P6** | Networking (NE2000/virtio-net, TCP/IP, sockets) | Planned |
+| **P5** | Security hardening: per-process address space isolation | Complete (scoped - see PROGRESS.md) |
+| **P6** | Networking (NE2000/virtio-net, TCP/IP, sockets) | Next |
 | **P7** | Graphics mode + windowing system | Planned |
 | **P8** | Package manager + Software Center ("the distro layer") | Planned |
 | **P9** | Installer, first-run wizard, driver support, public release polish | Planned |

@@ -42,6 +42,13 @@ manager, and Windows-style usability conventions. See
   only through syscalls
 - Shell `ps` command
 
+**Phase 5 - Security Hardening: Address-Space Isolation**
+- Every user process gets its own page directory (not a shared one)
+- Private, PMM-backed process memory - proven, not just claimed: two
+  demo processes use the *same* virtual stack address and verify at
+  runtime that neither can see or corrupt the other's data
+- CR3 switched on every context switch
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 

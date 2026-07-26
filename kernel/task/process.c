@@ -14,6 +14,8 @@
 #include "scheduler.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/mm/heap.h"
+#include "../arch/x86/mm/paging.h"
+#include "../arch/x86/mm/pmm.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -74,7 +76,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->esp = (uint32_t)sp;
     p->kernel_stack_top = kstack_top;
     p->kernel_stack_alloc = kstack;
-    p->user_stack_alloc = NULL;
+    p->page_directory_phys = paging_kernel_directory_phys();
 
     scheduler_add(p);
     return p->pid;
@@ -88,22 +90,44 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
     }
 
     void* kstack = kmalloc(KERNEL_STACK_SIZE);
-    void* ustack = kmalloc(USER_STACK_SIZE);
-    if (kstack == NULL || ustack == NULL) {
-        kernel_log("[FAULT] process_create_user_task: out of memory\n");
+    if (kstack == NULL) {
+        kernel_log("[FAULT] process_create_user_task: out of memory (kstack)\n");
         return -1;
     }
 
-    uint32_t kstack_top = (uint32_t)kstack + KERNEL_STACK_SIZE;
-    uint32_t ustack_top = (uint32_t)ustack + USER_STACK_SIZE;
+    /* Unlike the kernel stack (only ever touched by kernel code on
+     * this process's behalf), the user stack is what actually needs
+     * to be private per process - see USER_STACK_VIRT_BASE's comment
+     * in process.h. It's backed by fresh PMM frames and mapped only
+     * into this process's own page directory, not kmalloc'd from the
+     * shared heap arena the way Phase 4 did it (every process's
+     * directory maps that whole shared range, so a "private" stack
+     * living there wouldn't have been private at all). */
+    uint32_t address_space = paging_create_address_space();
+    uint32_t* pd = (uint32_t*)address_space;
 
+    const int stack_pages = USER_STACK_SIZE / 4096;
+    for (int i = 0; i < stack_pages; i++) {
+        uint32_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            kernel_log("[FAULT] process_create_user_task: out of memory "
+                       "(user stack frame %d/%d)\n", i + 1, stack_pages);
+            return -1;
+        }
+        uint32_t virt = USER_STACK_VIRT_BASE + (uint32_t)i * 4096u;
+        paging_map_page(pd, virt, frame,
+                         PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    }
+    uint32_t ustack_top = USER_STACK_VIRT_BASE + USER_STACK_SIZE;
+
+    uint32_t kstack_top = (uint32_t)kstack + KERNEL_STACK_SIZE;
     uint32_t* sp = (uint32_t*)kstack_top;
 
     /* Fake IRET frame `enter_usermode` will consume. Pushed in reverse
      * (SS first) so EIP ends up as the lowest/first of these five,
      * matching the order `iret` pops them in. */
     *(--sp) = GDT_USER_DATA;         /* SS  */
-    *(--sp) = ustack_top;            /* ESP */
+    *(--sp) = ustack_top;            /* ESP - the process's own private mapping */
     *(--sp) = 0x202;                 /* EFLAGS: IF=1 */
     *(--sp) = GDT_USER_CODE;         /* CS  */
     *(--sp) = (uint32_t)entry;       /* EIP */
@@ -122,7 +146,7 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
     p->esp = (uint32_t)sp;
     p->kernel_stack_top = kstack_top;
     p->kernel_stack_alloc = kstack;
-    p->user_stack_alloc = ustack;
+    p->page_directory_phys = address_space;
 
     scheduler_add(p);
     return p->pid;

@@ -7,6 +7,16 @@
 #define KERNEL_STACK_SIZE (8 * 1024)
 #define USER_STACK_SIZE   (8 * 1024)
 
+/* Where a user task's private stack is mapped in its OWN address
+ * space. Every user process uses the same virtual address for it -
+ * that's fine, even desirable for keeping user_demo.c simple, because
+ * each process has its own page directory (see paging_create_
+ * address_space()): the same virtual address maps to a different,
+ * private physical frame per process. This is the actual isolation
+ * mechanism Phase 5 adds - see PROGRESS.md. Chosen well above the
+ * shared 0-64MB kernel range so it can never collide with it. */
+#define USER_STACK_VIRT_BASE 0x40000000u
+
 typedef enum {
     PROCESS_UNUSED = 0, /* slot is free */
     PROCESS_READY,
@@ -22,10 +32,10 @@ typedef struct process {
 
     uint32_t esp;            /* saved stack pointer (valid when not RUNNING) */
     uint32_t kernel_stack_top; /* for TSS.esp0 when this task is running in ring3 */
+    uint32_t page_directory_phys; /* CR3 value while this process runs */
 
     /* Only used for is_user tasks; kept so the slot can be freed. */
     void* kernel_stack_alloc;
-    void* user_stack_alloc;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */

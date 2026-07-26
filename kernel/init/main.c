@@ -168,9 +168,10 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_init();
     process_create_kernel_task("idle", idle_task_entry);
     process_create_kernel_task("shell", shell_run);
-    process_create_user_task("demo", user_demo_task);
+    process_create_user_task("demo-a", user_demo_task_a);
+    process_create_user_task("demo-b", user_demo_task_b);
     kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
-               "demo (ring 3)\n");
+               "demo-a + demo-b (ring 3, private address spaces)\n");
 
     scheduler_start(); /* never returns */
 }

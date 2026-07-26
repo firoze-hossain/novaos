@@ -12,7 +12,8 @@ in the same PR as the code it describes.
 | P2 - Memory Management & Interrupts | Complete |
 | P3 - Filesystem & Drivers | Complete (scoped - see below) |
 | P4 - Usermode Processes, Syscalls & Scheduling | Complete (scoped - see below) |
-| P5-P9 | Not started |
+| P5 - Security Hardening (address-space isolation) | Complete (scoped - see below) |
+| P6-P9 | Not started |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -373,6 +374,116 @@ insists on manual verification before calling a phase done:
   for user tasks. Both current kernel tasks (`idle`, `shell`) already
   loop forever, so this hasn't mattered in practice yet.
 
-## Phase 5 and beyond
+## Phase 5 - Security Hardening: Per-Process Address Space Isolation
+
+**Status: Complete, at a deliberately scoped-down scope.** This phase
+closes the specific gap flagged since Phase 3 and repeated in every
+phase since: every process sharing one flat address space. Boot-
+verified via `make test`, and it's the first phase whose core claim
+(real memory isolation) is proven by the boot log itself rather than
+needing a person to interpret it - see "Verified behavior" below.
+
+### What was built
+
+- **`kernel/arch/x86/mm/paging.c`** gained four functions:
+  `paging_create_address_space()` (allocates a fresh page directory via
+  the PMM and copies the kernel's own directory into it, so the kernel
+  is mapped identically in every address space - required, since
+  interrupts/syscalls run kernel code using whatever CR3 happens to be
+  loaded), `paging_map_page()` (maps one page into a given directory,
+  allocating a page table on demand), `paging_switch_address_space()`
+  (loads CR3), and `paging_kernel_directory_phys()`.
+- **`kernel/task/process.c`**: user tasks now get their own address
+  space via `paging_create_address_space()`, and their stack is backed
+  by fresh PMM frames mapped at a fixed virtual address
+  (`USER_STACK_VIRT_BASE = 0x40000000`) - private to that process,
+  unlike the Phase 4 stack, which was `kmalloc()`'d from the shared
+  heap arena every process's directory maps identically. `process_t`
+  gained a `page_directory_phys` field.
+- **`kernel/task/scheduler.c`**: switches CR3 (via
+  `paging_switch_address_space()`) on every context switch, not just
+  the saved-register stack swap.
+- **`kernel/task/user_demo.c`**: rewritten as two tasks (`demo-a`,
+  `demo-b`) that each stamp their *own* private stack with a distinct
+  64-byte pattern at the *same* virtual address, yield the CPU five
+  times (letting the scheduler round-robin through idle, shell, and
+  the other demo task), then verify their stack still reads back
+  correctly. This is a real, falsifiable test: if isolation were
+  broken - if both processes' stacks resolved to the same physical
+  memory - one would silently overwrite the other's pattern and the
+  verification would fail. It didn't.
+
+### Verified behavior (this update)
+
+- Clean build, zero warnings under `-Wall -Wextra`.
+- Full boot log, unedited:
+  ```
+  [ OK ] Tasks created: idle (kernel), shell (kernel), demo-a + demo-b (ring 3, private address spaces)
+  [SYSCALL] SYS_WRITE from pid 3 ('
+  [ring3-A] Starting; stamped my private stack with 'A' x64.
+  ')
+  [SYSCALL] SYS_WRITE from pid 4 ('[ring3-B] Starting; stamped my private stack with 'B' x64 (same virtual address as process A, different physical page).
+  ')
+  [SYSCALL] SYS_WRITE from pid 3 ('[ring3-A] PASS: stack still all 'A' after yielding 5x - process B never touched my private memory.
+  ')
+  [ OK ] Process 'demo-a' (pid 3) exited
+  [SYSCALL] SYS_WRITE from pid 4 ('[ring3-B] PASS: stack still all 'B' after yielding 5x - process A never touched my private memory.
+  ')
+  [ OK ] Process 'demo-b' (pid 4) exited
+  ```
+  Both PASS on the first successful run after implementation - unlike
+  Phases 2-4, this phase's core mechanism worked correctly the first
+  time it was tested end to end (the earlier phases' hard-won lessons
+  about EOI ordering, page permission bits, and stack-frame
+  construction all fed directly into getting this one right).
+- Ran 20 seconds headless with no crash, fault, or `FAIL` message.
+- Interactively confirmed the shell (`ps`, running as a kernel task
+  sharing the original kernel address space) stays fully responsive
+  while two processes with their own private address spaces run
+  underneath it; serial log showed no faults during that session.
+- `make test` now asserts both `ring3-A] PASS` and `ring3-B] PASS`
+  appear and that no `FAIL`/`PANIC`/`FAULT` does - this phase is the
+  first where "the security property holds" and "the boot log is
+  parseable proof of it" are the same check.
+
+### Known limitations / follow-ups (tracked for Phase 6+)
+
+- **Still no ELF loader.** Both demo tasks are C functions compiled
+  into the kernel image; only their *data* (the stack) is now private
+  per process. Their *code* still lives in the shared, identity-mapped
+  kernel range (readable/executable by every process, same as the
+  kernel itself) - loading a real, separately-linked executable into
+  its own private code mapping is still future work.
+- **Kernel stacks are still shared-heap `kmalloc()`, not private.**
+  Only user stacks got the isolation treatment this phase, since the
+  kernel is trusted code by definition in this design - the threat
+  model is "process A can't read process B's data," not "the kernel
+  might corrupt its own bookkeeping."
+- **Fragile assumption, called out in `paging.c`'s comments:** every
+  new page directory/table comes from `pmm_alloc_frame()` and is used
+  as a directly-dereferenceable pointer with no translation step. This
+  only works because there's no general "temporarily map an arbitrary
+  physical page" mechanism yet, and the PMM's bitmap scan happens to
+  hand out low (already identity-mapped) frames first for the small
+  number of allocations this phase makes. A long-running system that
+  had exhausted or fragmented low memory could get a frame above 64MB
+  here and silently misbehave. Tracked as real future work, not hidden.
+- **No cleanup on process exit.** A `PROCESS_TERMINATED` process's
+  page directory, page tables, and physical frames are never freed
+  (same limitation as Phase 4's kernel/user stacks - now extended to
+  cover the new per-process paging structures too). Fine for two
+  short-lived demo tasks; would leak in any longer-running, higher-
+  churn workload.
+- **No capabilities/least-privilege model, no sandboxing.** This phase
+  closed the concrete "shared address space" gap specifically; the
+  broader "capabilities, not raw root/non-root" and "mandatory
+  sandboxing for GUI apps" items from PROJECT_PLAN.md's security
+  roadmap remain unstarted and need a filesystem permissions model
+  and/or a GUI to sandbox in the first place - realistically Phase 6+
+  scope once there's more surface area to actually secure.
+- **Still no NX bit** (32-bit non-PAE paging - see Phase 3's own
+  limitations, unchanged).
+
+## Phase 6 and beyond
 
 Not started. See PROJECT_PLAN.md section 6 for scope.

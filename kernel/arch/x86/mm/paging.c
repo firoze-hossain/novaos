@@ -16,13 +16,11 @@
  * and executable. Real W^X enforcement is tracked as future work.
  */
 #include "paging.h"
+#include "pmm.h"
 #include "../cpu/isr.h"
 #include "../cpu/idt.h"
+#include "../../../lib/string.h"
 #include "../../../include/kernel.h"
-
-#define PAGE_PRESENT 0x1
-#define PAGE_WRITE   0x2
-#define PAGE_USER    0x4
 
 #define IDENTITY_MAP_TABLES 16 /* 16 * 4MB = 64MB */
 
@@ -98,4 +96,66 @@ void paging_init(void) {
     );
 
     kernel_log("[ OK ] Paging enabled (identity-mapped 0-64MB)\n");
+}
+
+/* IMPORTANT CAVEAT shared by every function below: they treat a
+ * physical frame address returned by pmm_alloc_frame() as a directly
+ * usable pointer (and CR3 value) with no translation step. That's
+ * only true because NovaOS has no "temporarily map an arbitrary
+ * physical page" mechanism yet (no recursive page-directory trick, no
+ * kmap-style API), and pmm_alloc_frame()'s bitmap scan happens to hand
+ * out low-numbered (and therefore already identity-mapped, since
+ * paging_init() mapped 0-64MB) frames first for the small number of
+ * allocations this phase makes. It is not a general guarantee - a
+ * long-running system that had fragmented or exhausted low memory
+ * could get a frame above 64MB here and silently misbehave. Tracked
+ * as a real limitation in PROGRESS.md, not a hidden assumption. */
+
+uint32_t paging_kernel_directory_phys(void) {
+    return (uint32_t)page_directory;
+}
+
+uint32_t paging_create_address_space(void) {
+    uint32_t new_pd_phys = pmm_alloc_frame();
+    if (new_pd_phys == 0) {
+        kernel_panic("paging_create_address_space: out of memory");
+    }
+
+    uint32_t* new_pd = (uint32_t*)new_pd_phys;
+    /* sizeof(page_directory) is exactly 4096 bytes (1024 * 4-byte
+     * entries) - exactly one frame, conveniently. Copying the whole
+     * thing (rather than just the "kernel half") also happens to copy
+     * every not-yet-used upper entry, which is already all zero/not-
+     * present, so this is correct either way. */
+    memcpy(new_pd, page_directory, sizeof(page_directory));
+
+    return new_pd_phys;
+}
+
+bool paging_map_page(uint32_t* page_directory_ptr, uint32_t virt_addr,
+                      uint32_t phys_addr, uint32_t flags) {
+    uint32_t pd_index = virt_addr >> 22;
+    uint32_t pt_index = (virt_addr >> 12) & 0x3FF;
+
+    uint32_t* table;
+    if (!(page_directory_ptr[pd_index] & PAGE_PRESENT)) {
+        uint32_t new_pt_phys = pmm_alloc_frame();
+        if (new_pt_phys == 0) {
+            return false;
+        }
+        table = (uint32_t*)new_pt_phys;
+        memset(table, 0, 4096);
+        page_directory_ptr[pd_index] =
+            new_pt_phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    } else {
+        table = (uint32_t*)(page_directory_ptr[pd_index] & 0xFFFFF000u);
+    }
+
+    table[pt_index] = (phys_addr & 0xFFFFF000u) | (flags & 0xFFFu);
+    return true;
+}
+
+void paging_switch_address_space(uint32_t page_directory_phys) {
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(page_directory_phys)
+                       : "memory");
 }

@@ -3,6 +3,7 @@
  */
 #include "scheduler.h"
 #include "../arch/x86/cpu/tss.h"
+#include "../arch/x86/mm/paging.h"
 #include "../include/kernel.h"
 
 extern void switch_context(uint32_t* old_esp_out, uint32_t new_esp);
@@ -58,6 +59,7 @@ static void do_schedule(void) {
     current = next;
 
     tss_set_kernel_stack(next->kernel_stack_top);
+    paging_switch_address_space(next->page_directory_phys);
     switch_context(&prev->esp, next->esp);
     /* Execution only reaches here once `prev` is chosen to run again
      * by some future switch_context() call - i.e. this line "returns"
@@ -74,6 +76,7 @@ void scheduler_start(void) {
     current = first;
     first->state = PROCESS_RUNNING;
     tss_set_kernel_stack(first->kernel_stack_top);
+    paging_switch_address_space(first->page_directory_phys);
 
     switch_context(&startup_esp, first->esp);
     /* Never returns: the boot stack this call happened on is now
