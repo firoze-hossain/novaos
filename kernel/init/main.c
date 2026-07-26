@@ -6,6 +6,10 @@
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/cpu/idt.h"
 #include "../arch/x86/mm/heap.h"
+#include "../arch/x86/mm/pmm.h"
+#include "../arch/x86/mm/paging.h"
+#include "../arch/x86/boot/multiboot.h"
+#include "../fs/vfs.h"
 #include "../shell/shell.h"
 #include "../lib/string.h"
 #include "../lib/stdio.h"
@@ -46,9 +50,10 @@ void kernel_panic(const char* message) {
 
 /* Everything that must happen before interrupts are safe to enable:
  * segmentation (GDT), the interrupt table itself (IDT/ISR/IRQ, which
- * also remaps and fully masks the PIC), and the heap, since several
- * drivers will want to kmalloc() during their own init in later phases. */
-void kernel_early_init(void) {
+ * also remaps and fully masks the PIC), physical memory discovery and
+ * paging, and the heap, since several drivers will want to kmalloc()
+ * during their own init in later phases. */
+void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     serial_init();
     kernel_log("NovaOS booting (kernel v%s)...\n", KERNEL_VERSION);
 
@@ -57,6 +62,16 @@ void kernel_early_init(void) {
 
     idt_init();
     kernel_log("[ OK ] IDT/ISR/IRQ initialized, PIC remapped to 0x20-0x2F\n");
+
+    bool magic_valid = (multiboot_magic == MULTIBOOT_BOOTLOADER_MAGIC);
+    if (!magic_valid) {
+        kernel_log("[WARN] Not booted via a valid Multiboot loader "
+                   "(magic=0x%x) - physical memory map unavailable\n",
+                   (int)multiboot_magic);
+    }
+    pmm_init((const multiboot_info_t*)multiboot_info_addr, magic_valid);
+
+    paging_init();
 
     heap_init();
     kernel_log("[ OK ] Heap initialized (2 MB arena)\n");
@@ -73,8 +88,29 @@ void kernel_late_init(void) {
     keyboard_init();
     kernel_log("[ OK ] PS/2 keyboard initialized (IRQ1)\n");
 
+    vfs_init();
+
     __asm__ volatile ("sti");
     kernel_log("[ OK ] Interrupts enabled\n");
+
+    /* Self-test: if a disk is attached with a FAT32-formatted test
+     * image containing HELLO.TXT (see `make disk.img` / TESTING.md),
+     * read it and log the result. This is what lets `make test` verify
+     * the whole ATA -> FAT32 -> VFS chain headlessly, the same way
+     * Phase 2's boot markers verified GDT/IDT/IRQ without needing a
+     * keyboard attached. Silently skipped (not a failure) if no disk
+     * is present, since NovaOS should still boot fine without one. */
+    if (vfs_is_mounted()) {
+        char file_buf[256];
+        int n = vfs_read_file("HELLO.TXT", file_buf, sizeof(file_buf) - 1);
+        if (n >= 0) {
+            file_buf[n] = '\0';
+            kernel_log("[ OK ] FILE READ OK: HELLO.TXT (%d bytes): %s\n", n,
+                       file_buf);
+        } else {
+            kernel_log("[WARN] FAT32 mounted but HELLO.TXT not found\n");
+        }
+    }
 }
 
 static void print_banner(void) {
@@ -99,8 +135,8 @@ static void print_banner(void) {
     vga_puts("  Type 'help' for a list of commands\n\n");
 }
 
-void kernel_main(void) {
-    kernel_early_init();
+void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
+    kernel_early_init(multiboot_magic, multiboot_info_addr);
 
     vga_init();
     vga_clear();

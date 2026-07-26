@@ -11,7 +11,9 @@
 #include "../drivers/keyboard/keyboard.h"
 #include "../drivers/timer/timer.h"
 #include "../arch/x86/mm/heap.h"
+#include "../arch/x86/mm/pmm.h"
 #include "../arch/x86/io.h"
+#include "../fs/vfs.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 #include "../include/version.h"
@@ -47,22 +49,48 @@ static void cmd_help(void) {
     vga_puts("  about     - NovaOS version info\n");
     vga_puts("  echo TEXT - print TEXT\n");
     vga_puts("  clear     - clear the screen\n");
-    vga_puts("  meminfo   - show heap usage\n");
+    vga_puts("  meminfo   - show heap + physical memory usage\n");
     vga_puts("  uptime    - show timer ticks since boot\n");
+    vga_puts("  ls        - list files on the mounted disk\n");
+    vga_puts("  cat FILE  - print a file's contents\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 2: Memory Management & Interrupts\n");
+    vga_puts("Phase 3: Paging, Physical Memory & Filesystem\n");
 }
 
 static void cmd_meminfo(void) {
-    heap_stats_t stats;
-    heap_get_stats(&stats);
-    vga_printf("Heap total: %d bytes\n", (int)stats.total_bytes);
-    vga_printf("Heap used:  %d bytes\n", (int)stats.used_bytes);
-    vga_printf("Heap free:  %d bytes\n", (int)stats.free_bytes);
+    heap_stats_t heap_stats;
+    heap_get_stats(&heap_stats);
+    vga_printf("Heap total: %d bytes\n", (int)heap_stats.total_bytes);
+    vga_printf("Heap used:  %d bytes\n", (int)heap_stats.used_bytes);
+    vga_printf("Heap free:  %d bytes\n", (int)heap_stats.free_bytes);
+
+    pmm_stats_t pmm_stats;
+    pmm_get_stats(&pmm_stats);
+    vga_printf("Physical frames total: %d (%d MB)\n",
+               (int)pmm_stats.total_frames,
+               (int)(pmm_stats.total_frames * 4096 / (1024 * 1024)));
+    vga_printf("Physical frames used:  %d\n", (int)pmm_stats.used_frames);
+    vga_printf("Physical frames free:  %d\n", (int)pmm_stats.free_frames);
+}
+
+static void cmd_ls(void) {
+    vfs_ls();
+}
+
+static void cmd_cat(const char* filename) {
+    static char buf[4096];
+    int n = vfs_read_file(filename, buf, sizeof(buf) - 1);
+    if (n < 0) {
+        vga_printf("cat: %s: not found (or no disk mounted)\n", filename);
+        return;
+    }
+    buf[n] = '\0';
+    vga_puts(buf);
+    vga_putchar('\n');
 }
 
 static void cmd_uptime(void) {
@@ -83,17 +111,6 @@ static void cmd_reboot(void) {
     }
 }
 
-/* string.c doesn't have strncmp yet; kept local to shell.c until a
- * second caller needs it too (see PROGRESS.md "libc gaps"). */
-static int strncmp_local(const char* a, const char* b, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (a[i] != b[i] || a[i] == '\0') {
-            return a[i] - b[i];
-        }
-    }
-    return 0;
-}
-
 static void dispatch(char* line) {
     if (line[0] == '\0') {
         return;
@@ -111,7 +128,11 @@ static void dispatch(char* line) {
         cmd_uptime();
     } else if (strcmp(line, "reboot") == 0) {
         cmd_reboot();
-    } else if (strncmp_local(line, "echo ", 5) == 0) {
+    } else if (strcmp(line, "ls") == 0) {
+        cmd_ls();
+    } else if (strncmp(line, "cat ", 4) == 0) {
+        cmd_cat(line + 4);
+    } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');
     } else {

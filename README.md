@@ -25,6 +25,13 @@ manager, and Windows-style usability conventions. See
 - Serial (COM1) kernel logging
 - A minimal interactive shell (`help`, `echo`, `meminfo`, `uptime`, `reboot`)
 
+**Phase 3 - Paging, Physical Memory & Filesystem**
+- Physical memory manager (bitmap frame allocator, real Multiboot memory map)
+- Paging enabled (identity-mapped 0-64MB), with a page-fault handler
+  that decodes the faulting address instead of triple-faulting
+- ATA PIO disk driver + a read-only FAT32 filesystem
+- Shell `ls`/`cat` commands, backed by a real disk image (`make disk.img`)
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -52,13 +59,14 @@ novaos/
 │   ├── arch/x86/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, IDT, ISR, IRQ
-│   │   └── mm/         # Heap allocator (paging: Phase 3)
-│   ├── drivers/        # vga, serial, timer, keyboard
+│   │   └── mm/         # PMM, paging, heap allocator
+│   ├── drivers/        # vga, serial, timer, keyboard, ata
+│   ├── fs/             # VFS pass-through + FAT32 (read-only)
 │   ├── shell/          # minimal built-in shell
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing
-├── tools/              # linker script, grub.cfg
+├── tools/              # linker script, grub.cfg, FAT32 test fixtures
 ├── scripts/            # per-OS setup scripts
 ├── .github/workflows/  # CI (build + make test on every push)
 ├── Dockerfile          # reproducible cross-platform build environment

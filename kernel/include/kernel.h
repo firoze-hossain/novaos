@@ -5,10 +5,10 @@
 #include "version.h"
 
 // Kernel entry point (called from bootloader)
-void kernel_main(void);
+void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr);
 
 // Kernel initialization functions
-void kernel_early_init(void);
+void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr);
 void kernel_late_init(void);
 void kernel_panic(const char* message);
 

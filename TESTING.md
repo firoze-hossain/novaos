@@ -131,11 +131,29 @@ After `make run`, verify at the `nova>` prompt:
 
 - [ ] `help` lists all commands
 - [ ] `echo hello` prints `hello`
-- [ ] `meminfo` shows non-zero total/used/free heap bytes
+- [ ] `meminfo` shows non-zero heap AND physical-frame totals (Phase 3)
 - [ ] `uptime` increases each time you re-run it
+- [ ] `ls` lists `HELLO.TXT` from the test disk image (Phase 3)
+- [ ] `cat HELLO.TXT` prints its contents (Phase 3)
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu
+
+### About the test disk image (Phase 3+)
+
+`make run`/`make debug`/`make test` all depend on `disk.img`, a 64MB
+FAT32 image built automatically from `tools/fixtures/` via `mtools`
+(`mformat`/`mcopy`) - no loop-device mounting or root privileges
+needed, so this works identically on Windows/WSL2, Linux, and macOS.
+Delete `disk.img` and re-run `make run`/`make test` any time to
+regenerate it from scratch; `make clean` also removes it.
+
+If you attach your own additional `-drive` to a manual QEMU invocation,
+remember `-boot order=d` - without it, the BIOS may try to boot from
+the non-bootable data disk instead of the NovaOS ISO, which looks like
+a silent hang (no error message, no serial output, no crash - it's just
+sitting in the BIOS's own boot menu logic; see PROGRESS.md's Phase 3
+notes for how this was diagnosed).
 
 ## Debugging a boot failure
 

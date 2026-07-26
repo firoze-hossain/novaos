@@ -1,0 +1,1 @@
+Hello from NovaOS FAT32! This file was read via the ATA PIO driver.

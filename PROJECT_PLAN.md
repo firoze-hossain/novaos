@@ -83,8 +83,9 @@ at the end. Concretely, in the order it gets built:
 | Ring 0 / ring 3 GDT segments | 2 | Done - segments exist; nothing runs in ring 3 yet |
 | Masked-by-default IRQs (a driver must opt in) | 2 | Done |
 | Fault isolation: CPU exceptions panic cleanly with a full register dump instead of silently corrupting state | 2 | Done |
-| Paging + per-process address spaces (no process can read another's memory) | 3 | Planned |
-| NX (non-executable) data pages - stack/heap can't be executed as code | 3 | Planned |
+| Paging (single flat 64MB address space) | 3 | Done |
+| Per-process address spaces (no process can read another's memory) | 4 | Planned |
+| NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
 | Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Planned |
 | Least-privilege process model (capabilities, not raw root/non-root) | 5 | Planned |
 | Mandatory sandboxing for GUI apps (Android/iOS-style permission prompts, not Windows-style "click Yes and hope") | 5 | Planned |
@@ -110,8 +111,8 @@ at the end. Concretely, in the order it gets built:
 |---|---|---|
 | **P1** | Bootloader & Kernel Foundation | Complete |
 | **P2** | Memory Management & Interrupts | Complete (this update) |
-| **P3** | Paging, heap hardening, filesystem (VFS + FAT32), storage (ATA) drivers | Next |
-| **P4** | Usermode processes, syscalls, scheduler, real shell | Planned |
+| **P3** | Paging, physical memory management, filesystem (VFS + FAT32, read-only), ATA storage driver | Complete (scoped - see PROGRESS.md) |
+| **P4** | Usermode processes, syscalls, scheduler, real shell | Next |
 | **P5** | Security hardening layer (capabilities, sandboxing) | Planned |
 | **P6** | Networking (NE2000/virtio-net, TCP/IP, sockets) | Planned |
 | **P7** | Graphics mode + windowing system | Planned |

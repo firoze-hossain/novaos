@@ -56,6 +56,18 @@ ASMFLAGS = -f elf32 -g
 # so turning it off is free.
 QEMU_FLAGS = -M pc,smm=off -m 512M -no-reboot
 
+# Test FAT32 disk image, built with mtools (mformat/mcopy) so it works
+# identically on Windows/WSL2, Linux, and macOS without needing loop-
+# device mounting or root privileges. `-boot order=d` is required once
+# a second drive is attached, or the BIOS may try (and silently hang,
+# since it isn't bootable) to boot from the data disk instead of the
+# NovaOS ISO - see TESTING.md if you ever see a boot that seems to hang
+# after adding your own extra -drive.
+DISK_IMG = disk.img
+DISK_SIZE_MB = 64
+DISK_FIXTURES_DIR = tools/fixtures
+DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk
+
 # Directories
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -99,13 +111,21 @@ $(ISO_FILE): $(KERNEL_BIN)
 	$(GRUB_MKRESCUE) -o $(ISO_FILE) $(ISO_DIR)
 	@echo "✅ NovaOS ISO created: $(ISO_FILE)"
 
+# Create the FAT32 test disk image (Phase 3+). Requires `mtools`
+# (mformat/mcopy) - installed by `make setup` on every supported OS.
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT
+	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
+	mformat -i $(DISK_IMG) -F ::
+	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.TXT ::HELLO.TXT
+	@echo "✅ FAT32 test disk image created: $(DISK_IMG)"
+
 # Run in QEMU (interactive, graphical window)
-run: $(ISO_FILE)
-	$(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) -vga std
+run: $(ISO_FILE) $(DISK_IMG)
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
-debug: $(ISO_FILE)
-	$(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) -s -S -vga std &
+debug: $(ISO_FILE) $(DISK_IMG)
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
@@ -119,20 +139,22 @@ debug: $(ISO_FILE)
 TEST_TIMEOUT ?= 15
 TEST_LOG = build/test-serial.log
 
-test: $(ISO_FILE)
+test: $(ISO_FILE) $(DISK_IMG)
 	@mkdir -p $(BUILD_DIR)
 	@rm -f $(TEST_LOG)
 	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
-	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(QEMU_FLAGS) \
+	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(QEMU_FLAGS) \
 	    -display none -serial file:$(TEST_LOG) || true
 	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
+	    grep -q "FAT32 mounted" $(TEST_LOG) && \
+	    grep -q "FILE READ OK: HELLO.TXT" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 
 # Clean
 clean:
-	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE)
+	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG)
 
 # Setup
 setup:
@@ -142,6 +164,7 @@ setup:
 help:
 	@echo "🌌 NovaOS Build Commands:"
 	@echo "  make          - Build ISO"
+	@echo "  make disk.img - Build the FAT32 test disk image"
 	@echo "  make run      - Run in QEMU (graphical window)"
 	@echo "  make debug    - Debug with GDB"
 	@echo "  make test     - Headless boot smoke test (for CI)"

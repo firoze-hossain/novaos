@@ -9,7 +9,7 @@ fi
 
 # Install dependencies
 echo "Installing dependencies..."
-brew install nasm make qemu xorriso gdb coreutils
+brew install nasm make qemu xorriso gdb coreutils mtools
 
 # For Apple Silicon, install cross-compiler
 if [[ $(uname -m) == "arm64" ]]; then
