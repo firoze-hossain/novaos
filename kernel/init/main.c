@@ -20,6 +20,7 @@
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
 #include "../shell/shell.h"
+#include "../shell/firstrun.h"
 #include "../lib/string.h"
 #include "../lib/stdio.h"
 #include <stdarg.h>
@@ -231,6 +232,8 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_late_init();
 
     print_banner();
+
+    firstrun_check_and_run();
 
     process_init();
     process_create_kernel_task("idle", idle_task_entry);

@@ -20,6 +20,8 @@
 #include "../drivers/mouse/ps2mouse.h"
 #include "../gui/compositor.h"
 #include "../pkg/pkgmgr.h"
+#include "../drivers/rtc/rtc.h"
+#include "firstrun.h"
 #include "../task/process.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -66,12 +68,15 @@ static void cmd_help(void) {
               "mouse, ESC to exit\n");
     vga_puts("  pkg list  - show available packages (pkg installed, "
               "pkg install NAME, pkg remove NAME)\n");
+    vga_puts("  date      - show the current date/time (CMOS RTC)\n");
+    vga_puts("  hostname  - show this computer's configured hostname\n");
+    vga_puts("  whoami    - show the configured username\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 8: nova-pkg Package Manager (CLI)\n");
+    vga_puts("Phase 9: First-Run Setup, RTC, and Persistent Identity\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -241,6 +246,31 @@ static void cmd_pkg(const char* arg) {
     }
 }
 
+static const char* MONTH_NAMES[] = {
+    "?",   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+};
+
+static void cmd_date(void) {
+    rtc_time_t now;
+    rtc_read(&now);
+    const char* month = (now.month >= 1 && now.month <= 12)
+                             ? MONTH_NAMES[now.month]
+                             : MONTH_NAMES[0];
+    vga_printf("%s %d %d %d:%d:%d UTC\n", month, (int)now.day, (int)now.year,
+               (int)now.hour, (int)now.minute, (int)now.second);
+}
+
+static void cmd_hostname(void) {
+    vga_puts(firstrun_get_hostname());
+    vga_putchar('\n');
+}
+
+static void cmd_whoami(void) {
+    vga_puts(firstrun_get_username());
+    vga_putchar('\n');
+}
+
 static void cmd_gui(void) {
     if (!ps2mouse_is_present()) {
         vga_puts("gui: no PS/2 mouse detected - nothing to interact with\n");
@@ -333,6 +363,12 @@ static void dispatch(char* line) {
         cmd_pkg("");
     } else if (strncmp(line, "pkg ", 4) == 0) {
         cmd_pkg(line + 4);
+    } else if (strcmp(line, "date") == 0) {
+        cmd_date();
+    } else if (strcmp(line, "hostname") == 0) {
+        cmd_hostname();
+    } else if (strcmp(line, "whoami") == 0) {
+        cmd_whoami();
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');
@@ -346,7 +382,7 @@ void shell_run(void) {
 
     for (;;) {
         vga_set_color(VGA_COLOR_CYAN, VGA_COLOR_BLACK);
-        vga_puts("nova> ");
+        vga_printf("%s@%s> ", firstrun_get_username(), firstrun_get_hostname());
         vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
 
         read_line(line);

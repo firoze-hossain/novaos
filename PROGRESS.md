@@ -16,7 +16,7 @@ in the same PR as the code it describes.
 | P6 - Networking | Complete (scoped - see below) |
 | P7 - Graphics Mode & Windowing | Complete (scoped - see below) |
 | P8 - Package Manager (nova-pkg CLI) | Complete (scoped - see below) |
-| P9 | Not started |
+| P9 - First-Run Setup, RTC & Persistent Identity | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -864,6 +864,114 @@ pattern didn't apply, because the trap was avoided up front instead.
   filesystem would want proper journaling or at least ordered,
   rollback-capable operations.
 
-## Phase 9 and beyond
+## Phase 9 - First-Run Setup, RTC & Persistent Identity
 
-Not started. See PROJECT_PLAN.md section 6 for scope.
+**Status: Complete, at a deliberately scoped-down scope.** The
+original phase name in PROJECT_PLAN.md was "Installer, first-run
+wizard, driver support, public release polish" - this delivers the
+realistic version of all four for where NovaOS actually is right now.
+
+### Scope note: what "installer" means here, and what it doesn't
+
+A traditional OS installer writes a bootloader to a hard disk's boot
+sector so the machine can boot independently of the install media.
+NovaOS still boots from a live CD/USB image every time (see
+PROJECT_PLAN.md) - writing our own bootloader, or replicating enough
+of what GRUB does to install it from inside our own kernel, is a
+substantial separate undertaking that was not attempted here and
+isn't secretly half-done; it's simply not started.
+
+What *is* built, and is the realistic "installer" for a live-boot
+design like this one - the same pattern many live-CD Linux
+distributions use for persistence - is a first-run setup wizard that
+asks for a hostname and username once, then saves them to the
+attached disk so every later boot recognizes the machine instead of
+re-asking. That's genuinely useful (it's most of what a "first-run
+wizard" step of a real installer does anyway, minus the disk
+partitioning), and it's honestly the whole of what got built.
+
+### What was built
+
+- **`kernel/drivers/rtc/rtc.c`** - reads the CMOS real-time clock.
+  Handles both BCD and binary storage modes (checked via CMOS Status
+  Register B, not assumed) and both 12/24-hour formats, using the
+  standard "wait for update-not-in-progress, then read twice and
+  require the results to match" technique to avoid a torn reading -
+  this is how every real RTC driver has to handle this chip, not a
+  NovaOS-specific workaround.
+- **`kernel/config/sysconfig.*`** - reads/writes a small fixed-size
+  `SYSTEM.CFG` file (hostname + username) with overwrite semantics
+  (delete-then-recreate, since the underlying `fat32_write_file()`
+  from Phase 8 is create-only).
+- **`kernel/shell/firstrun.*`** - the wizard itself. Called once from
+  `kernel_main()`, after the boot banner and before any tasks are
+  created (deliberately not part of the shell's command loop, so the
+  shell task never needs "is this the first run" logic of its own).
+  Loads `SYSTEM.CFG` if present and greets the returning user; runs an
+  interactive hostname/username prompt and saves the result if not.
+- **Shell**: the prompt is now `username@hostname>` instead of the
+  generic `nova>`; added `date` (RTC), `hostname`, and `whoami`.
+
+### Verified behavior - three separate, escalating checks
+
+1. **Returning-user path**: the test disk image now includes a
+   pre-seeded `SYSTEM.CFG` (`tools/fixtures/SYSTEM.CFG`), so headless
+   `make test` exercises this path automatically. Boot log:
+   `[ OK ] First-run check: returning user 'demo' on 'novaos-test'` -
+   exact match to the fixture, first try.
+2. **Interactive wizard path**: booted with a disk that had
+   `SYSTEM.CFG` deliberately removed, and scripted real keystrokes
+   through the QEMU monitor answering the hostname ("mypc") and
+   username ("alice") prompts. Boot log:
+   `[ OK ] First-run wizard complete: 'alice' on 'mypc'` - exact
+   match, first try. Screenshots confirmed the interactive prompts and
+   the personalized `alice@mypc>` shell prompt rendered correctly, and
+   `whoami`/`hostname`/`date` all worked.
+3. **The check that actually matters - persistence across a real
+   reboot**: rebooted with that *same* disk image (now containing the
+   `SYSTEM.CFG` the wizard had just written) and confirmed:
+   `[ OK ] First-run check: returning user 'alice' on 'mypc'`. This is
+   the property the whole feature exists to provide, and it's the one
+   that was actually tested end to end rather than assumed.
+- Clean build, zero warnings under `-Wall -Wextra`; zero regression -
+  every Phase 2-8 `make test` marker still passes.
+- `make test` now also asserts `First-run check: returning user`
+  appears in the boot log.
+
+### Known limitations / follow-ups (tracked for Phase 10+)
+
+- **No real installer.** See the scope note above - this is the
+  honest, permanent state of this item until someone builds a
+  bootloader-writing installation step, which is out of scope for the
+  foreseeable roadmap, not merely "not yet built this phase."
+- **RTC is read-only.** No setting the clock, no timezone handling
+  (always whatever the CMOS clock says, presented as "UTC" without
+  actually knowing that's true), no leap-second/leap-year edge-case
+  hardening beyond what the chip itself provides.
+- **`date`'s output isn't zero-padded** (e.g. `9:5:3` rather than
+  `09:05:03`) - `vsnprintf`'s `%d` has no width/padding support, a
+  known libc-subset gap since Phase 2, not something this phase
+  attempted to fix.
+- **The wizard has minimal input validation** - an empty hostname or
+  username falls back to a default ("novaos"/"user"), but there's no
+  length/character-set enforcement beyond the field's fixed buffer
+  size, no confirmation step, and no way to re-run setup later short
+  of manually deleting `SYSTEM.CFG` (there's no shell command for
+  that yet either - `pkg`-style tooling to reset system config is a
+  reasonable small follow-up).
+- **Single user, no accounts/permissions.** "Username" here is a
+  cosmetic identity string, not a real multi-user account system with
+  authentication - NovaOS still has no login, no passwords, no
+  per-user permissions.
+- **No public-release polish beyond what's described above** -
+  packaging, licensing decisions, a real project website, etc. are
+  all still open, ordinary open-source-project maintenance tasks
+  rather than anything this phase specifically addresses.
+
+## Phase 10 and beyond
+
+Not started. See PROJECT_PLAN.md section 6 for scope (note: the
+original plan only went up to Phase 9 - a Phase 10+ roadmap doesn't
+exist yet and would need its own planning pass, likely returning to
+the security-hardening items - capabilities, sandboxing - that have
+been deferred since Phase 5).

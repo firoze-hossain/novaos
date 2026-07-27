@@ -161,6 +161,14 @@ After `make run`, verify at the `nova>` prompt:
       differently here - removing only deletes the installed `.APP`
       copy, not the original `.PKG` - `pkg install Editor` should
       work again afterward)
+- [ ] On a truly fresh disk image (no `SYSTEM.CFG`), booting shows the
+      first-run wizard prompting for a hostname and username; on every
+      later boot it should instead greet you by name and skip the
+      prompts (Phase 9) - the test disk image built by `make disk.img`
+      comes with a pre-seeded `SYSTEM.CFG`, so you'll need to `mdel -i
+      disk.img ::SYSTEM.CFG` (via `mtools`) to see the wizard yourself
+- [ ] The shell prompt shows `you@yourhost>` instead of the old
+      generic `nova>`; `date`/`hostname`/`whoami` all work
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

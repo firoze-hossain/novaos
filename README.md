@@ -73,6 +73,14 @@ manager, and Windows-style usability conventions. See
   `pkg remove NAME`
 - No GUI "Software Center" yet - see PROGRESS.md for why
 
+**Phase 9 - First-Run Setup, RTC & Persistent Identity**
+- A first-run wizard - the realistic "installer" for a live-boot OS -
+  asks for a hostname/username once and persists them to disk
+- CMOS real-time clock driver
+- Personalized shell prompt (`user@host>`); `date`/`hostname`/`whoami`
+- Persistence verified across an actual reboot, not just within one
+  session - see PROGRESS.md
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -101,13 +109,14 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2)
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
 │   ├── net/            # ethernet, arp, ipv4, icmp
 │   ├── gui/            # compositor (windowing demo), small digit font
 │   ├── pkg/            # nova-pkg package manager
+│   ├── config/         # persistent system identity (hostname/username)
 │   ├── task/           # process table, scheduler, syscall demo task
-│   ├── shell/          # minimal built-in shell
+│   ├── shell/          # minimal built-in shell + first-run wizard
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing

@@ -121,12 +121,13 @@ $(ISO_FILE): $(KERNEL_BIN)
 
 # Create the FAT32 test disk image (Phase 3+). Requires `mtools`
 # (mformat/mcopy) - installed by `make setup` on every supported OS.
-$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
 	mformat -i $(DISK_IMG) -F ::
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.TXT ::HELLO.TXT
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/EDITOR.PKG ::EDITOR.PKG
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/GAME.PKG ::GAME.PKG
+	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/SYSTEM.CFG ::SYSTEM.CFG
 	@echo "✅ FAT32 test disk image created: $(DISK_IMG)"
 
 # Run in QEMU (interactive, graphical window)
@@ -164,6 +165,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "PING OK" $(TEST_LOG) && \
 	    grep -q "PKG INSTALL OK" $(TEST_LOG) && \
 	    grep -q "PKG REMOVE OK" $(TEST_LOG) && \
+	    grep -q "First-run check: returning user" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 

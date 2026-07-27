@@ -105,7 +105,7 @@ at the end. Concretely, in the order it gets built:
 | `nova-pkg`: CLI package manager | 8 | Done (scoped) - install/remove/list a single-file `.PKG` format; no dependency resolution, no signing, no network fetch (see PROGRESS.md) |
 | "Software Center": GUI front-end for `nova-pkg` | 9+ | Deferred - needs general text rendering in graphics mode, which Phase 7 deliberately didn't build (see PROGRESS.md) |
 | Windowing system / desktop shell | 7 | Done (scoped) - VGA Mode 13h graphics, a 3-window compositor, PS/2 mouse; no taskbar, no general text rendering, no window create/close yet |
-| First-run setup wizard (locale, user account, Wi-Fi) | 9 | The "Windows OOBE"-like ask |
+| First-run setup wizard (hostname, username) | 9 | Done (scoped) - no locale, Wi-Fi (no wireless driver exists), or disk partitioning step; see PROGRESS.md |
 | Automatic security update service | 8-9 | Opt-out, not opt-in, by default |
 
 ## 6. Development Phases
@@ -120,7 +120,16 @@ at the end. Concretely, in the order it gets built:
 | **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; TCP/UDP/sockets deferred) |
 | **P7** | Graphics mode (VGA Mode 13h) + minimal windowing, PS/2 mouse | Complete (scoped - see PROGRESS.md; drag-and-drop needs manual confirmation) |
 | **P8** | Package manager: `nova-pkg` CLI + FAT32 write support | Complete (scoped - see PROGRESS.md; GUI Software Center deferred) |
-| **P9** | Installer, first-run wizard, driver support, public release polish | Next |
+| **P9** | First-run setup wizard (the realistic "installer" for a live-boot design), RTC driver, persistent identity | Complete (scoped - see PROGRESS.md; no bootloader-writing installer) |
+
+**P1-P9 above were the full originally-planned roadmap; all nine are
+now complete at the scoped level described in each row and in
+PROGRESS.md.** Further work (a real installer, capabilities/sandboxing
+from the security roadmap in section 4, TCP/UDP/sockets, a GUI
+Software Center, general text rendering in graphics mode, and
+whatever else follows) needs a fresh Phase 10+ planning pass rather
+than slotting into a plan that was scoped for nine phases from the
+start.
 
 Detailed, living status for what's actually implemented (as opposed to
 planned) lives in **PROGRESS.md**, which is updated every phase instead
