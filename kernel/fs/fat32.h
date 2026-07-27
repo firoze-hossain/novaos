@@ -3,10 +3,12 @@
 
 #include "../include/types.h"
 
-/* Read-only FAT32 driver: root directory only (no subdirectories),
- * 8.3 filenames only (no long filename / VFAT entries), no write
- * support. Reads through kernel/drivers/ata/ata.c. See PROGRESS.md
- * for what's deferred. */
+/* FAT32 driver: root directory only (no subdirectories), 8.3
+ * filenames only (no long filename / VFAT entries). Read support
+ * landed in Phase 3; write support (create + delete a file) landed in
+ * Phase 8 to back the package manager. Reads/writes through
+ * kernel/drivers/ata/ata.c. See PROGRESS.md for what's still
+ * deferred (no append/truncate/rename, no subdirectories). */
 
 /* Parses the boot sector at LBA 0 and confirms it's actually FAT32.
  * Returns true if mounted successfully. */
@@ -27,5 +29,19 @@ void fat32_list_root(fat32_list_callback_t callback);
  * `buf`. Returns the number of bytes read, or -1 if the file wasn't
  * found. */
 int fat32_read_file(const char* filename, void* buf, uint32_t buf_size);
+
+/* Creates a new file in the root directory with the given contents.
+ * Fails (returns false) if a file with that name already exists -
+ * there's no overwrite/truncate/append here, only create-new and
+ * delete-then-recreate (see fat32_delete_file). Allocates a fresh
+ * cluster chain, writes the data, extends the root directory with a
+ * new cluster if it's completely full of existing entries. */
+bool fat32_write_file(const char* filename, const void* data,
+                       uint32_t size);
+
+/* Removes a file: marks its directory entry deleted and frees its
+ * entire cluster chain back to the free pool. Returns false if the
+ * file wasn't found. */
+bool fat32_delete_file(const char* filename);
 
 #endif

@@ -153,6 +153,14 @@ After `make run`, verify at the `nova>` prompt:
       confirmation either way
 - [ ] `ESC` inside `gui` returns cleanly to the text shell, which
       keeps responding normally to `help`/`ps`/etc. afterward
+- [ ] `pkg list` shows Editor and Game as available (Phase 8)
+- [ ] `pkg install Editor` succeeds, `pkg installed` then shows it,
+      and `cat EDITOR.APP` prints its payload
+- [ ] `pkg remove Editor` succeeds, and `pkg installed` no longer
+      shows it (though `EDITOR.APP` and `EDITOR.PKG` behave
+      differently here - removing only deletes the installed `.APP`
+      copy, not the original `.PKG` - `pkg install Editor` should
+      work again afterward)
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

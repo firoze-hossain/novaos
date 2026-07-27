@@ -13,6 +13,7 @@
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
+#include "../pkg/pkgmgr.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
 #include "../task/process.h"
@@ -146,6 +147,42 @@ void kernel_late_init(void) {
         } else {
             kernel_log("[WARN] Gateway did not reply to ping (no route? "
                        "check QEMU -netdev config)\n");
+        }
+    }
+
+    /* Self-test: if the demo packages are present (EDITOR.PKG, GAME.PKG
+     * - see `make disk.img` / tools/fixtures), install one and read
+     * back its installed payload - this is what actually proves Phase
+     * 8's new FAT32 write support works end to end, not just that it
+     * compiles - then remove it and confirm pkg_is_installed() agrees
+     * it's gone. Silently skipped if no disk is present. */
+    if (vfs_is_mounted()) {
+        if (pkg_install("Editor")) {
+            char installed_buf[256];
+            int n = vfs_read_file("EDITOR.APP", installed_buf,
+                                   sizeof(installed_buf) - 1);
+            if (n > 0) {
+                installed_buf[n] = '\0';
+                kernel_log("[ OK ] PKG INSTALL OK: EDITOR.APP (%d bytes): %s\n",
+                           n, installed_buf);
+            } else {
+                kernel_log("[WARN] pkg self-test: EDITOR.APP not readable "
+                           "after install\n");
+            }
+
+            bool was_installed = pkg_is_installed("Editor");
+            pkg_remove("Editor");
+            bool still_installed = pkg_is_installed("Editor");
+
+            if (was_installed && !still_installed) {
+                kernel_log("[ OK ] PKG REMOVE OK: Editor no longer "
+                           "installed\n");
+            } else {
+                kernel_log("[WARN] pkg self-test: remove didn't behave as "
+                           "expected\n");
+            }
+        } else {
+            kernel_log("[WARN] pkg self-test: install of 'Editor' failed\n");
         }
     }
 }

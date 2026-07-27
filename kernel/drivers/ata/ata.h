@@ -7,11 +7,10 @@
 
 /* Polling PIO driver for the primary ATA bus's master device only
  * (no IRQ, no secondary bus, no ATAPI/CD-ROM, no DMA). That's a real
- * limitation for anything performance-sensitive, but it's the
- * simplest correct way to read a data disk and is enough to back a
- * read-only FAT32 filesystem (see kernel/fs/fat32.c). Tracked in
- * PROGRESS.md as a Phase 3 follow-up (IRQ-driven + secondary bus +
- * write support).
+ * limitation for anything performance-sensitive, but it's simple and
+ * correct enough to back a FAT32 filesystem with both read (Phase 3)
+ * and write (Phase 8) support - see kernel/fs/fat32.c. Tracked in
+ * PROGRESS.md as a follow-up (IRQ-driven + secondary bus).
  *
  * Runs IDENTIFY on init and logs whether a usable ATA (not ATAPI)
  * drive was found; every other function silently no-ops (returns
@@ -23,5 +22,12 @@ bool ata_is_present(void);
  * `lba` into `buffer` (must be at least sector_count*512 bytes).
  * Returns true on success. */
 bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer);
+
+/* Writes `sector_count` consecutive 512-byte sectors starting at LBA
+ * `lba` from `buffer`, then flushes the drive's write cache before
+ * returning - added in Phase 8 to back FAT32 write support (see
+ * kernel/fs/fat32.c). Returns true on success. */
+bool ata_write_sectors(uint32_t lba, uint8_t sector_count,
+                        const void* buffer);
 
 #endif

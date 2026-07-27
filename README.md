@@ -64,6 +64,15 @@ manager, and Windows-style usability conventions. See
 - A small compositor: 3 draggable, titled, colored windows
 - Shell `gui` command (ESC to return to the text shell)
 
+**Phase 8 - Package Manager (nova-pkg CLI)**
+- FAT32 gained write support (create + delete files) - every phase
+  before this was read-only
+- `nova-pkg`: install/remove/list packages from a simple single-file
+  `.PKG` format
+- Shell `pkg list` / `pkg installed` / `pkg install NAME` /
+  `pkg remove NAME`
+- No GUI "Software Center" yet - see PROGRESS.md for why
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -93,9 +102,10 @@ novaos/
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
 │   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2)
-│   ├── fs/             # VFS pass-through + FAT32 (read-only)
+│   ├── fs/             # VFS pass-through + FAT32 (read + write)
 │   ├── net/            # ethernet, arp, ipv4, icmp
 │   ├── gui/            # compositor (windowing demo), small digit font
+│   ├── pkg/            # nova-pkg package manager
 │   ├── task/           # process table, scheduler, syscall demo task
 │   ├── shell/          # minimal built-in shell
 │   ├── lib/            # freestanding string/stdio subset

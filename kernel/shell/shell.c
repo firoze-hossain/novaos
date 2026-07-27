@@ -19,6 +19,7 @@
 #include "../drivers/video/vga_graphics.h"
 #include "../drivers/mouse/ps2mouse.h"
 #include "../gui/compositor.h"
+#include "../pkg/pkgmgr.h"
 #include "../task/process.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -63,12 +64,14 @@ static void cmd_help(void) {
     vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2)\n");
     vga_puts("  gui       - enter graphics mode; drag windows with the "
               "mouse, ESC to exit\n");
+    vga_puts("  pkg list  - show available packages (pkg installed, "
+              "pkg install NAME, pkg remove NAME)\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 7: Graphics Mode & a Minimal Windowing System\n");
+    vga_puts("Phase 8: nova-pkg Package Manager (CLI)\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -190,6 +193,54 @@ static void cmd_ping(const char* arg) {
     }
 }
 
+static void print_pkg_entry(const char* filename, const char* name,
+                             const char* version, const char* description,
+                             bool installed) {
+    (void)filename;
+    vga_printf("  %s %s - %s%s\n", name, version, description,
+               installed ? "  [installed]" : "");
+}
+
+static void print_installed_entry(const char* filename, const char* name,
+                                   const char* version,
+                                   const char* description, bool installed) {
+    (void)installed;
+    vga_printf("  %s %s - %s  (%s)\n", name, version, description, filename);
+}
+
+static void cmd_pkg(const char* arg) {
+    if (!vfs_is_mounted()) {
+        vga_puts("pkg: no filesystem mounted\n");
+        return;
+    }
+
+    if (strcmp(arg, "list") == 0) {
+        vga_puts("Available packages:\n");
+        pkg_list_available(print_pkg_entry);
+    } else if (strcmp(arg, "installed") == 0) {
+        vga_puts("Installed packages:\n");
+        pkg_list_installed(print_installed_entry);
+    } else if (strncmp(arg, "install ", 8) == 0) {
+        const char* name = arg + 8;
+        if (pkg_install(name)) {
+            vga_printf("Installed '%s'.\n", name);
+        } else {
+            vga_printf("pkg install: failed - see 'help' or try 'pkg list' "
+                       "to check the name (%s)\n", name);
+        }
+    } else if (strncmp(arg, "remove ", 7) == 0) {
+        const char* name = arg + 7;
+        if (pkg_remove(name)) {
+            vga_printf("Removed '%s'.\n", name);
+        } else {
+            vga_printf("pkg remove: '%s' is not installed\n", name);
+        }
+    } else {
+        vga_puts("Usage: pkg list | pkg installed | pkg install NAME | "
+                  "pkg remove NAME\n");
+    }
+}
+
 static void cmd_gui(void) {
     if (!ps2mouse_is_present()) {
         vga_puts("gui: no PS/2 mouse detected - nothing to interact with\n");
@@ -278,6 +329,10 @@ static void dispatch(char* line) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "ping ", 5) == 0) {
         cmd_ping(line + 5);
+    } else if (strcmp(line, "pkg") == 0) {
+        cmd_pkg("");
+    } else if (strncmp(line, "pkg ", 4) == 0) {
+        cmd_pkg(line + 4);
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');

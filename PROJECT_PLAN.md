@@ -90,7 +90,7 @@ at the end. Concretely, in the order it gets built:
 | Least-privilege process model (capabilities, not raw root/non-root) | 6+ | Planned - needs a filesystem permissions model first |
 | Mandatory sandboxing for GUI apps | 7+ | Planned - needs a GUI to sandbox in the first place |
 | NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
-| Signed packages + signature verification in the package manager | 8 | Planned |
+| Signed packages + signature verification in the package manager | 9+ | Planned - Phase 8 built the package manager itself with no signing yet |
 | Verified/measured boot (GRUB to kernel signature check) | 9 | Stretch goal |
 | Disk encryption offered at install time | 9 | Stretch goal |
 
@@ -102,8 +102,8 @@ at the end. Concretely, in the order it gets built:
 | Filesystem-backed shell commands (`ls`, `cat`) | 3 | Done |
 | Process listing (`ps`) | 4 | Done |
 | Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs a real filesystem-backed multi-process model first (Phase 4 process/syscall groundwork exists; a spawn/exec syscall doesn't yet) |
-| `nova-pkg`: apt-style package manager (CLI) | 8 | Dependency resolution, signed packages |
-| "Software Center": GUI front-end for `nova-pkg` | 8 | The literal "Ubuntu-like" ask |
+| `nova-pkg`: CLI package manager | 8 | Done (scoped) - install/remove/list a single-file `.PKG` format; no dependency resolution, no signing, no network fetch (see PROGRESS.md) |
+| "Software Center": GUI front-end for `nova-pkg` | 9+ | Deferred - needs general text rendering in graphics mode, which Phase 7 deliberately didn't build (see PROGRESS.md) |
 | Windowing system / desktop shell | 7 | Done (scoped) - VGA Mode 13h graphics, a 3-window compositor, PS/2 mouse; no taskbar, no general text rendering, no window create/close yet |
 | First-run setup wizard (locale, user account, Wi-Fi) | 9 | The "Windows OOBE"-like ask |
 | Automatic security update service | 8-9 | Opt-out, not opt-in, by default |
@@ -119,8 +119,8 @@ at the end. Concretely, in the order it gets built:
 | **P5** | Security hardening: per-process address space isolation | Complete (scoped - see PROGRESS.md) |
 | **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; TCP/UDP/sockets deferred) |
 | **P7** | Graphics mode (VGA Mode 13h) + minimal windowing, PS/2 mouse | Complete (scoped - see PROGRESS.md; drag-and-drop needs manual confirmation) |
-| **P8** | Package manager + Software Center ("the distro layer") | Next |
-| **P9** | Installer, first-run wizard, driver support, public release polish | Planned |
+| **P8** | Package manager: `nova-pkg` CLI + FAT32 write support | Complete (scoped - see PROGRESS.md; GUI Software Center deferred) |
+| **P9** | Installer, first-run wizard, driver support, public release polish | Next |
 
 Detailed, living status for what's actually implemented (as opposed to
 planned) lives in **PROGRESS.md**, which is updated every phase instead

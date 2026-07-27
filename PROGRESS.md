@@ -15,7 +15,8 @@ in the same PR as the code it describes.
 | P5 - Security Hardening (address-space isolation) | Complete (scoped - see below) |
 | P6 - Networking | Complete (scoped - see below) |
 | P7 - Graphics Mode & Windowing | Complete (scoped - see below) |
-| P8-P9 | Not started |
+| P8 - Package Manager (nova-pkg CLI) | Complete (scoped - see below) |
+| P9 | Not started |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -740,6 +741,129 @@ input rather than scripted monitor commands.
   keyboard check.
 - **PS/2 mouse only** - no USB HID mouse/tablet support.
 
-## Phase 8 and beyond
+## Phase 8 - Package Manager (nova-pkg CLI)
+
+**Status: Complete, at a deliberately scoped-down scope.** The
+technically significant part of this phase is that **FAT32 gained
+write support** - every phase since Phase 3 has been read-only. The
+package manager itself is a straightforward CLI built on top of that.
+
+### Scope note: no GUI "Software Center"
+
+The original Phase 8 plan (PROJECT_PLAN.md) called for both a CLI
+package manager *and* a GUI front-end. Only the CLI half is built
+here - a GUI needs general text rendering in graphics mode, which
+doesn't exist yet (Phase 7's VGA Mode 13h mode has only a handful of
+hand-built digit glyphs, see `kernel/gui/font5x7.h`, deliberately kept
+that small - see Phase 7's own notes on why). Tracked as follow-up
+work once a real font exists.
+
+### What was built
+
+- **`kernel/drivers/ata/ata.c`** gained `ata_write_sectors()` (the
+  WRITE SECTORS command, followed by FLUSH CACHE for durability) -
+  the foundation everything else in this phase sits on.
+- **`kernel/fs/fat32.c`** gained real write support:
+  `fat_set_next_cluster()` (read-modify-write, preserving the
+  reserved top 4 bits, updates *every* FAT copy for redundancy - real
+  FAT32 usually has two), a linear free-cluster scanner and cluster-
+  chain allocator/freer, and directory-entry create/delete - including
+  automatically extending the root directory with a fresh cluster if
+  every existing entry slot is full. `fat32_write_file()` (create-only,
+  fails if the name already exists - no overwrite/append/truncate) and
+  `fat32_delete_file()` round out the read-only Phase 3 API.
+- **`kernel/pkg/pkgmgr.*`** - nova-pkg itself. A package is a single
+  `<NAME>.PKG` file (there are no subdirectories to build a real
+  repository layout with yet) - a small fixed manifest header (magic,
+  name, version, description, payload size) followed immediately by
+  the raw payload. `pkg_install()` copies a package's payload out to
+  `<NAME>.APP` and records the install in `INSTALL.DB` (a flat array
+  of fixed-size records, rewritten wholesale on every change - simple,
+  and plenty for a package count in the single digits);
+  `pkg_remove()` deletes both.
+- **Shell**: `pkg list`, `pkg installed`, `pkg install NAME`,
+  `pkg remove NAME`.
+- **Two demo packages** (`tools/fixtures/EDITOR.PKG`,
+  `tools/fixtures/GAME.PKG`) baked into the test disk image.
+- **Boot self-test**: installs "Editor", reads back `EDITOR.APP` and
+  logs its exact content (proving the write path produced byte-correct
+  data, not just "didn't crash"), then removes it and confirms
+  `pkg_is_installed()` agrees it's gone.
+
+### A reentrancy trap avoided, not hit - worth documenting anyway
+
+While writing `pkgmgr.c`, one design constraint mattered enough to
+shape the whole file's structure: `fat32.c`'s directory-walk and
+file-read functions share static scratch buffers (`cluster_buf`,
+`fat_sector_buf`) rather than using the heap or the stack for them.
+Calling `vfs_read_file()` from *inside* a directory-listing callback
+would silently corrupt the very listing still being iterated, since
+both paths reuse the same buffer. Every function in `pkgmgr.c` that
+needs both "list files" and "read a file's contents" does so in two
+clearly separate passes instead of nesting them - see the comment at
+the top of the file. This was caught by reasoning through the existing
+code before writing new code that called it, not by hitting a bug at
+runtime - the one phase so far where the "find a bug via testing"
+pattern didn't apply, because the trap was avoided up front instead.
+
+### Verified behavior
+
+- Clean build, zero warnings under `-Wall -Wextra`.
+- **Zero regression**: every Phase 2-7 `make test` marker still
+  passes.
+- Full boot log, unedited:
+  ```
+  [ OK ] Installed package 'Editor' -> EDITOR.APP
+  [ OK ] PKG INSTALL OK: EDITOR.APP (62 bytes): This is the Editor application payload.
+  NovaOS nova-pkg demo.
+
+  [ OK ] Removed package 'Editor'
+  [ OK ] PKG REMOVE OK: Editor no longer installed
+  ```
+  The installed file's content matches the original package's payload
+  exactly.
+- Ran 20 seconds headless with no crash or fault.
+- Interactively exercised `ls`, `pkg list`, `pkg install Game`,
+  `pkg installed`, `cat GAME.APP`, and `pkg remove Game` through the
+  shell; the serial log confirmed each operation succeeded with no
+  faults, and the resulting screens showed real, non-corrupted text
+  output (sanity-checked via color-palette diversity in addition to
+  visual inspection).
+- `make test` now asserts `PKG INSTALL OK` and `PKG REMOVE OK` appear
+  in the boot log alongside every earlier phase's markers.
+
+### Known limitations / follow-ups (tracked for Phase 9+)
+
+- **No GUI Software Center** - see the scope note above.
+- **No package repository or network fetch.** Packages must already
+  exist on the mounted disk; NovaOS's network stack (Phase 6) only
+  speaks ICMP, not HTTP/FTP, so there's nothing to fetch a package
+  *from* yet even if a repository format existed.
+- **`fat32_write_file()` is create-only** - no overwrite, append, or
+  truncate. "Reinstalling" a package that's still installed requires
+  removing it first (which `pkg_install()` already enforces via the
+  install-database check, so this isn't a gap in the package manager's
+  own behavior, just in the underlying filesystem primitive).
+- **No subdirectories**, still (a Phase 3 limitation, unchanged) - a
+  real package repository with categories, or an installed-apps
+  directory separate from the root, needs this.
+- **`INSTALL.DB` and package files live in the one shared, flat root
+  directory** alongside everything else on the disk (`HELLO.TXT`, the
+  `.PKG` files themselves, etc.) - there's no dedicated "system"
+  location.
+- **No package signing or integrity verification** - the security
+  roadmap in PROJECT_PLAN.md has always listed this as Phase 8+ scope;
+  it remains unstarted. A malicious or corrupted `.PKG` file's payload
+  is trusted and installed as-is.
+- **Failure paths are not perfectly atomic.** `alloc_cluster_chain()`
+  doesn't roll back partial allocations if it runs out of space
+  partway through; `pkg_remove()` proceeds to delete the `.APP` file
+  even if updating `INSTALL.DB` afterward fails (logged, not silent,
+  but could leave a stale database record - see the code comment in
+  `pkgmgr.c`). Fine for a single-user hobby OS's current needs; a real
+  filesystem would want proper journaling or at least ordered,
+  rollback-capable operations.
+
+## Phase 9 and beyond
 
 Not started. See PROJECT_PLAN.md section 6 for scope.

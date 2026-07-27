@@ -24,8 +24,10 @@
 #define STATUS_DF   0x20
 #define STATUS_BSY  0x80
 
-#define CMD_READ_SECTORS 0x20
-#define CMD_IDENTIFY     0xEC
+#define CMD_READ_SECTORS  0x20
+#define CMD_WRITE_SECTORS 0x30
+#define CMD_FLUSH_CACHE   0xE7
+#define CMD_IDENTIFY      0xEC
 
 static bool drive_present = false;
 
@@ -130,6 +132,44 @@ bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
             buf16[s * (ATA_SECTOR_SIZE / 2) + i] = inw(REG_DATA);
         }
     }
+
+    return true;
+}
+
+bool ata_write_sectors(uint32_t lba, uint8_t sector_count, const void* buffer) {
+    if (!drive_present || sector_count == 0) {
+        return false;
+    }
+
+    const uint16_t* buf16 = (const uint16_t*)buffer;
+
+    wait_busy_clear();
+
+    outb(REG_DRIVE_HEAD, (uint8_t)(0xE0 | ((lba >> 24) & 0x0F)));
+    outb(REG_SECCOUNT, sector_count);
+    outb(REG_LBA_LOW, (uint8_t)(lba & 0xFF));
+    outb(REG_LBA_MID, (uint8_t)((lba >> 8) & 0xFF));
+    outb(REG_LBA_HIGH, (uint8_t)((lba >> 16) & 0xFF));
+    outb(REG_COMMAND, CMD_WRITE_SECTORS);
+
+    for (uint8_t s = 0; s < sector_count; s++) {
+        wait_busy_clear();
+        if (!wait_drq_or_error()) {
+            kernel_log("[FAULT] ATA write error at LBA %d\n", (int)(lba + s));
+            return false;
+        }
+        for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
+            outw(REG_DATA, buf16[s * (ATA_SECTOR_SIZE / 2) + i]);
+        }
+        /* The drive needs a moment to actually commit each sector
+         * after the last data word before it's safe to check status
+         * for the next one - polling BSY at the top of the next loop
+         * iteration (or after the loop, below) handles that. */
+    }
+
+    wait_busy_clear();
+    outb(REG_COMMAND, CMD_FLUSH_CACHE);
+    wait_busy_clear();
 
     return true;
 }

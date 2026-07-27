@@ -36,9 +36,30 @@ void vfs_ls(void) {
     fat32_list_root(print_entry);
 }
 
+void vfs_list_files(vfs_list_callback_t callback) {
+    if (!vfs_is_mounted()) {
+        return;
+    }
+    fat32_list_root(callback);
+}
+
 int vfs_read_file(const char* filename, void* buf, uint32_t buf_size) {
     if (!vfs_is_mounted()) {
         return -1;
     }
     return fat32_read_file(filename, buf, buf_size);
+}
+
+bool vfs_write_file(const char* filename, const void* data, uint32_t size) {
+    if (!vfs_is_mounted()) {
+        return false;
+    }
+    return fat32_write_file(filename, data, size);
+}
+
+bool vfs_delete_file(const char* filename) {
+    if (!vfs_is_mounted()) {
+        return false;
+    }
+    return fat32_delete_file(filename);
 }
