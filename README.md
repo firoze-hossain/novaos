@@ -81,6 +81,16 @@ manager, and Windows-style usability conventions. See
 - Persistence verified across an actual reboot, not just within one
   session - see PROGRESS.md
 
+**Phase 10 - UDP, TFTP Client & Networked Package Fetching**
+- Minimal UDP (send + single-listener receive), wired into the IPv4
+  stack alongside ICMP
+- A read-only TFTP client (RFC 1350)
+- `pkg fetch NAME` downloads a package over the network and makes it
+  installable - closing Phase 8's "nothing to fetch a package from
+  yet" gap
+- Not part of the original 9-phase plan - the first phase chosen from
+  open follow-up items once that plan was complete (see PROGRESS.md)
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -111,7 +121,7 @@ novaos/
 │   │   └── mm/         # PMM, paging, heap allocator
 │   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
-│   ├── net/            # ethernet, arp, ipv4, icmp
+│   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp
 │   ├── gui/            # compositor (windowing demo), small digit font
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)

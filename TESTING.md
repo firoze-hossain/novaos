@@ -169,6 +169,12 @@ After `make run`, verify at the `nova>` prompt:
       disk.img ::SYSTEM.CFG` (via `mtools`) to see the wizard yourself
 - [ ] The shell prompt shows `you@yourhost>` instead of the old
       generic `nova>`; `date`/`hostname`/`whoami` all work
+- [ ] `pkg fetch Weather` downloads a package over TFTP from the
+      gateway; `pkg list` then shows it as available, `pkg install
+      weather` installs it, and `cat WEATHER.APP` prints its payload
+      (Phase 10)
+- [ ] `tftp get WEATHER.PKG` (without `pkg fetch`'s wrapping) also
+      works directly, saving the raw file to disk
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu
@@ -201,6 +207,16 @@ If you want NovaOS to reach the real internet (not just the gateway),
 that depends on SLIRP's own outbound access working on your machine -
 it usually does, but is out of NovaOS's control and isn't required for
 anything `make test` checks.
+
+### About networked package fetching (Phase 10+)
+
+`make run`/`make debug`/`make test` all serve `tools/fixtures/tftproot/`
+over TFTP at the gateway address (10.0.2.2) via QEMU's built-in SLIRP
+TFTP server - no real network access, no separate server process to
+run yourself. `pkg fetch NAME` and `tftp get FILE` both talk to that
+server by default. Drop your own `.PKG` files into
+`tools/fixtures/tftproot/` (or point `tftp get FILE SERVER_IP` at a
+real TFTP server elsewhere) to try fetching something else.
 
 ### About graphics mode and the mouse (Phase 7+)
 

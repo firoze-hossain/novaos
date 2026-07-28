@@ -74,7 +74,12 @@ DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,med
 # network access from the host/CI runner, which is what makes the
 # Phase 6 ping self-test (see kernel/init/main.c) work identically
 # everywhere `make test` runs. A fixed MAC keeps output reproducible.
-NET_FLAGS = -netdev user,id=net0 -device ne2k_isa,netdev=net0,iobase=0x300,mac=52:54:00:12:34:56
+#
+# Phase 10 adds tftp=...: SLIRP runs a TFTP server on the gateway
+# address serving files from this host directory - no real network
+# access needed, same self-contained-test principle as the ping
+# self-test above. See tools/fixtures/tftproot/.
+NET_FLAGS = -netdev user,id=net0,tftp=tools/fixtures/tftproot -device ne2k_isa,netdev=net0,iobase=0x300,mac=52:54:00:12:34:56
 
 # Directories
 KERNEL_DIR = kernel
@@ -163,9 +168,11 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
 	    grep -q "PING OK" $(TEST_LOG) && \
+	    grep -q "TFTP FETCH OK" $(TEST_LOG) && \
 	    grep -q "PKG INSTALL OK" $(TEST_LOG) && \
 	    grep -q "PKG REMOVE OK" $(TEST_LOG) && \
 	    grep -q "First-run check: returning user" $(TEST_LOG) && \
+	    grep -q "TFTP FETCH OK" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 

@@ -16,6 +16,7 @@
 #include "../pkg/pkgmgr.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
+#include "../net/tftp.h"
 #include "../task/process.h"
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
@@ -148,6 +149,24 @@ void kernel_late_init(void) {
         } else {
             kernel_log("[WARN] Gateway did not reply to ping (no route? "
                        "check QEMU -netdev config)\n");
+        }
+
+        /* Self-test: fetch a test package over TFTP from the gateway
+         * (QEMU's SLIRP runs a TFTP server there when configured with
+         * -netdev ...,tftp=DIR - see Makefile's NET_FLAGS and
+         * tools/fixtures/tftproot/). Proves the whole
+         * UDP -> TFTP -> network-fetch chain works headlessly, no
+         * real network access required, the same self-contained-test
+         * principle as the ping self-test just above. */
+        static uint8_t tftp_buf[512];
+        int tftp_n = tftp_get(NET_GATEWAY_IP, "WEATHER.PKG", tftp_buf,
+                               sizeof(tftp_buf));
+        if (tftp_n > 0) {
+            kernel_log("[ OK ] TFTP FETCH OK: WEATHER.PKG (%d bytes)\n",
+                       tftp_n);
+        } else {
+            kernel_log("[WARN] TFTP fetch of WEATHER.PKG failed (no TFTP "
+                       "server configured? check QEMU -netdev tftp=...)\n");
         }
     }
 

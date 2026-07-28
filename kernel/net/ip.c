@@ -5,6 +5,7 @@
 #include "ethernet.h"
 #include "arp.h"
 #include "icmp.h"
+#include "udp.h"
 #include "net.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -95,8 +96,11 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
         case IP_PROTO_ICMP:
             icmp_handle_packet(src_ip, transport, transport_len);
             break;
+        case IP_PROTO_UDP:
+            udp_handle_packet(src_ip, transport, transport_len);
+            break;
         default:
-            break; /* UDP/TCP not implemented - see PROGRESS.md */
+            break; /* TCP not implemented - see PROGRESS.md */
     }
     (void)src_mac;
 }

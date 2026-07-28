@@ -102,7 +102,7 @@ at the end. Concretely, in the order it gets built:
 | Filesystem-backed shell commands (`ls`, `cat`) | 3 | Done |
 | Process listing (`ps`) | 4 | Done |
 | Full POSIX-ish shell (pipes, scripts, job control) | - | Not yet planned in detail; needs a real filesystem-backed multi-process model first (Phase 4 process/syscall groundwork exists; a spawn/exec syscall doesn't yet) |
-| `nova-pkg`: CLI package manager | 8 | Done (scoped) - install/remove/list a single-file `.PKG` format; no dependency resolution, no signing, no network fetch (see PROGRESS.md) |
+| `nova-pkg`: CLI package manager | 8 | Done (scoped) - install/remove/list a single-file `.PKG` format; no dependency resolution, no signing; network fetch added in Phase 10 (TFTP only, see PROGRESS.md) |
 | "Software Center": GUI front-end for `nova-pkg` | 9+ | Deferred - needs general text rendering in graphics mode, which Phase 7 deliberately didn't build (see PROGRESS.md) |
 | Windowing system / desktop shell | 7 | Done (scoped) - VGA Mode 13h graphics, a 3-window compositor, PS/2 mouse; no taskbar, no general text rendering, no window create/close yet |
 | First-run setup wizard (hostname, username) | 9 | Done (scoped) - no locale, Wi-Fi (no wireless driver exists), or disk partitioning step; see PROGRESS.md |
@@ -117,19 +117,22 @@ at the end. Concretely, in the order it gets built:
 | **P3** | Paging, physical memory management, filesystem (VFS + FAT32, read-only), ATA storage driver | Complete (scoped - see PROGRESS.md) |
 | **P4** | Usermode processes, syscalls, scheduler, real shell | Complete (scoped - see PROGRESS.md) |
 | **P5** | Security hardening: per-process address space isolation | Complete (scoped - see PROGRESS.md) |
-| **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; TCP/UDP/sockets deferred) |
+| **P6** | Networking: NE2000 driver, Ethernet/ARP/IPv4/ICMP | Complete (scoped - see PROGRESS.md; UDP added in P10, TCP/sockets still deferred) |
 | **P7** | Graphics mode (VGA Mode 13h) + minimal windowing, PS/2 mouse | Complete (scoped - see PROGRESS.md; drag-and-drop needs manual confirmation) |
-| **P8** | Package manager: `nova-pkg` CLI + FAT32 write support | Complete (scoped - see PROGRESS.md; GUI Software Center deferred) |
+| **P8** | Package manager: `nova-pkg` CLI + FAT32 write support | Complete (scoped - see PROGRESS.md; network fetch added in P10, GUI Software Center still deferred) |
 | **P9** | First-run setup wizard (the realistic "installer" for a live-boot design), RTC driver, persistent identity | Complete (scoped - see PROGRESS.md; no bootloader-writing installer) |
+| **P10** | UDP + a TFTP client + networked package fetching for `nova-pkg` | Complete (scoped - see PROGRESS.md) |
 
-**P1-P9 above were the full originally-planned roadmap; all nine are
-now complete at the scoped level described in each row and in
-PROGRESS.md.** Further work (a real installer, capabilities/sandboxing
-from the security roadmap in section 4, TCP/UDP/sockets, a GUI
-Software Center, general text rendering in graphics mode, and
-whatever else follows) needs a fresh Phase 10+ planning pass rather
-than slotting into a plan that was scoped for nine phases from the
-start.
+**P1-P9 above were the full originally-planned roadmap; all nine
+completed it at the scoped level described in each row and in
+PROGRESS.md.** Phase 10 was the first phase chosen from open follow-up
+items - closing P6's deferred UDP and P8's deferred network-fetch gap
+together - rather than from a pre-written plan, since none exists past
+P9. Further work (a real bootloader-writing installer,
+capabilities/sandboxing from the security roadmap in section 4, TCP/
+sockets, a GUI Software Center, general text rendering in graphics
+mode, and whatever else follows) remains open and should each be
+scoped on their own terms rather than assumed as "next."
 
 Detailed, living status for what's actually implemented (as opposed to
 planned) lives in **PROGRESS.md**, which is updated every phase instead

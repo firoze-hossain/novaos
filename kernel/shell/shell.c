@@ -16,6 +16,7 @@
 #include "../fs/vfs.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
+#include "../net/tftp.h"
 #include "../drivers/video/vga_graphics.h"
 #include "../drivers/mouse/ps2mouse.h"
 #include "../gui/compositor.h"
@@ -67,7 +68,9 @@ static void cmd_help(void) {
     vga_puts("  gui       - enter graphics mode; drag windows with the "
               "mouse, ESC to exit\n");
     vga_puts("  pkg list  - show available packages (pkg installed, "
-              "pkg install NAME, pkg remove NAME)\n");
+              "pkg install NAME, pkg remove NAME, pkg fetch NAME)\n");
+    vga_puts("  tftp get FILE [IP] - fetch a file over TFTP (default "
+              "server: the gateway, 10.0.2.2)\n");
     vga_puts("  date      - show the current date/time (CMOS RTC)\n");
     vga_puts("  hostname  - show this computer's configured hostname\n");
     vga_puts("  whoami    - show the configured username\n");
@@ -76,7 +79,7 @@ static void cmd_help(void) {
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 9: First-Run Setup, RTC, and Persistent Identity\n");
+    vga_puts("Phase 10: UDP, TFTP Client & Networked Package Fetching\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -198,6 +201,58 @@ static void cmd_ping(const char* arg) {
     }
 }
 
+static void cmd_tftp(const char* arg) {
+    if (!net_is_up()) {
+        vga_puts("tftp: no network adapter present\n");
+        return;
+    }
+    if (strncmp(arg, "get ", 4) != 0) {
+        vga_puts("Usage: tftp get FILENAME [SERVER_IP]\n");
+        return;
+    }
+
+    const char* rest = arg + 4;
+    char filename[64];
+    char server_str[32];
+    int i = 0;
+    while (rest[i] && rest[i] != ' ' && i < (int)sizeof(filename) - 1) {
+        filename[i] = rest[i];
+        i++;
+    }
+    filename[i] = '\0';
+
+    uint32_t server_ip = NET_GATEWAY_IP;
+    if (rest[i] == ' ') {
+        int j = 0;
+        const char* ip_part = rest + i + 1;
+        while (ip_part[j] && j < (int)sizeof(server_str) - 1) {
+            server_str[j] = ip_part[j];
+            j++;
+        }
+        server_str[j] = '\0';
+        uint32_t parsed;
+        if (parse_ipv4(server_str, &parsed)) {
+            server_ip = parsed;
+        }
+    }
+
+    vga_printf("Fetching '%s' via TFTP...\n", filename);
+    static uint8_t tftp_buf[8192];
+    int n = tftp_get(server_ip, filename, tftp_buf, sizeof(tftp_buf));
+    if (n < 0) {
+        vga_puts("tftp: fetch failed (timed out or server error)\n");
+        return;
+    }
+
+    if (!vfs_write_file(filename, tftp_buf, (uint32_t)n)) {
+        vga_printf("tftp: fetched %d bytes but failed to save '%s' "
+                   "(already exists on disk?)\n", n, filename);
+        return;
+    }
+
+    vga_printf("Fetched and saved '%s' (%d bytes).\n", filename, n);
+}
+
 static void print_pkg_entry(const char* filename, const char* name,
                              const char* version, const char* description,
                              bool installed) {
@@ -240,9 +295,42 @@ static void cmd_pkg(const char* arg) {
         } else {
             vga_printf("pkg remove: '%s' is not installed\n", name);
         }
+    } else if (strncmp(arg, "fetch ", 6) == 0) {
+        if (!net_is_up()) {
+            vga_puts("pkg fetch: no network adapter present\n");
+            return;
+        }
+        const char* name = arg + 6;
+        char pkg_filename[20];
+        int i = 0;
+        while (name[i] && name[i] != ' ' && i < 15) {
+            pkg_filename[i] = (char)((name[i] >= 'a' && name[i] <= 'z')
+                                          ? name[i] - 32
+                                          : name[i]);
+            i++;
+        }
+        strcpy(pkg_filename + i, ".PKG");
+
+        vga_printf("Fetching '%s' via TFTP from the gateway...\n",
+                   pkg_filename);
+        static uint8_t fetch_buf[8192];
+        int n = tftp_get(NET_GATEWAY_IP, pkg_filename, fetch_buf,
+                          sizeof(fetch_buf));
+        if (n < 0) {
+            vga_puts("pkg fetch: TFTP transfer failed (not found on the "
+                      "server, or timed out)\n");
+            return;
+        }
+        if (!vfs_write_file(pkg_filename, fetch_buf, (uint32_t)n)) {
+            vga_printf("pkg fetch: fetched %d bytes but couldn't save "
+                       "'%s' (already present locally?)\n", n, pkg_filename);
+            return;
+        }
+        vga_printf("Fetched '%s' (%d bytes). Try 'pkg list' then "
+                   "'pkg install %s'.\n", pkg_filename, n, name);
     } else {
         vga_puts("Usage: pkg list | pkg installed | pkg install NAME | "
-                  "pkg remove NAME\n");
+                  "pkg remove NAME | pkg fetch NAME\n");
     }
 }
 
@@ -359,6 +447,8 @@ static void dispatch(char* line) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "ping ", 5) == 0) {
         cmd_ping(line + 5);
+    } else if (strncmp(line, "tftp ", 5) == 0) {
+        cmd_tftp(line + 5);
     } else if (strcmp(line, "pkg") == 0) {
         cmd_pkg("");
     } else if (strncmp(line, "pkg ", 4) == 0) {

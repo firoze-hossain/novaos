@@ -17,6 +17,7 @@ in the same PR as the code it describes.
 | P7 - Graphics Mode & Windowing | Complete (scoped - see below) |
 | P8 - Package Manager (nova-pkg CLI) | Complete (scoped - see below) |
 | P9 - First-Run Setup, RTC & Persistent Identity | Complete (scoped - see below) |
+| P10 - UDP, TFTP Client & Networked Package Fetching | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -968,10 +969,105 @@ partitioning), and it's honestly the whole of what got built.
   all still open, ordinary open-source-project maintenance tasks
   rather than anything this phase specifically addresses.
 
-## Phase 10 and beyond
+## Phase 10 - UDP, TFTP Client & Networked Package Fetching
 
-Not started. See PROJECT_PLAN.md section 6 for scope (note: the
-original plan only went up to Phase 9 - a Phase 10+ roadmap doesn't
-exist yet and would need its own planning pass, likely returning to
-the security-hardening items - capabilities, sandboxing - that have
-been deferred since Phase 5).
+**Status: Complete, at a deliberately scoped-down scope.** This phase
+wasn't part of the original nine-phase plan in PROJECT_PLAN.md - P1-P9
+completed that plan in full (see the note at the end of Phase 9's
+section above). This is the first phase chosen from a fresh look at
+what was already flagged as deferred, rather than from a pre-written
+roadmap: Phase 6 explicitly deferred UDP, and Phase 8 explicitly
+deferred "no network fetch, nothing to download a package from yet."
+Closing both together, with the second built directly on the first,
+made for a coherent unit of work.
+
+A real installer (writing a bootloader to a disk) remains the other
+major deferred item and was deliberately *not* chosen this time - it
+needs new real-mode BIOS/assembly work with no existing infrastructure
+to build on, a meaningfully different risk profile than extending the
+network stack that already works.
+
+### What was built
+
+- **`kernel/net/udp.*`** - minimal UDP: send, and a single-listener
+  receive dispatch wired into `ip_handle_packet()` alongside ICMP.
+  Checksums are disabled on send (0 is a valid "not computed" value
+  per the IPv4 spec) and not validated on receive - a reasonable
+  simplification on a trusted local virtual network, and consistent
+  with `ip.c` already not validating its own header checksum on
+  receive either. Only one thing can be "listening" at a time (a
+  static single slot, not a real port table) - enough for the one
+  thing that uses UDP so far (TFTP), the same one-outstanding-
+  operation simplification `arp.c`'s cache and `icmp.c`'s ping
+  tracking already use.
+- **`kernel/net/tftp.*`** - a read-only TFTP client (RFC 1350): RRQ,
+  receive DATA blocks, send ACK, until a short (<512 byte) block
+  signals end-of-file. Locks onto the server's actual reply port after
+  the first response, since real TFTP servers answer from a new
+  ephemeral port, not port 69 itself. No retransmission on a lost
+  packet - one overall ~10s deadline for the whole transfer rather
+  than a more forgiving per-block timeout with retries.
+- **Shell**: `tftp get FILE [SERVER_IP]` (defaults to the gateway),
+  and `pkg fetch NAME` - downloads `<NAME>.PKG` via TFTP from the
+  gateway and saves it locally, ready for the existing `pkg install`.
+- **`tools/fixtures/tftproot/WEATHER.PKG`** - a third demo package,
+  served over TFTP rather than baked directly onto the disk image like
+  `EDITOR.PKG`/`GAME.PKG` are, specifically to exercise the network
+  path. QEMU's SLIRP runs a TFTP server on the gateway address when
+  given `-netdev ...,tftp=DIR` (see `Makefile`'s `NET_FLAGS`) - no
+  real network access needed, the same self-contained-test principle
+  every earlier network self-test already relies on.
+- **Boot self-test**: fetches `WEATHER.PKG` over TFTP right after the
+  existing ping self-test and logs the result.
+
+### Verified behavior
+
+- Clean build, zero warnings under `-Wall -Wextra`; zero regression -
+  every Phase 2-9 `make test` marker still passes.
+- Boot log, first try, no debugging needed:
+  `[ OK ] TFTP FETCH OK: WEATHER.PKG (172 bytes)` - an exact byte-count
+  match to the source fixture file.
+- Full interactive workflow scripted through the QEMU monitor:
+  `pkg fetch Weather` -> `pkg list` (shows Weather as available) ->
+  `pkg install Weather` -> `cat WEATHER.APP` (prints the exact fetched
+  payload) -> `pkg installed` (shows it installed). Serial log
+  confirms `Installed package 'Weather' -> WEATHER.APP`. Zero faults
+  throughout.
+- Screenshots confirmed legitimate, non-corrupted text output at every
+  step (sanity-checked via color-palette diversity in addition to
+  visual inspection, the same approach used since Phase 8).
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **No TCP.** ICMP (Phase 6) and now UDP are the only transport-layer
+  protocols. No sockets API, no HTTP - a real package repository
+  server (as opposed to a single flat TFTP directory) would want at
+  least one of these.
+- **UDP supports exactly one listener at a time.** A second concurrent
+  UDP-based feature would need a real port table, not the current
+  single static slot.
+- **No UDP checksum validation** (or computation on send, beyond
+  emitting the valid "disabled" value 0) - see the design note above.
+- **TFTP is read-only** (no WRQ/write support) and has **no
+  retransmission** - a real network with meaningful packet loss would
+  need both before this could be relied on beyond a controlled local
+  virtual network.
+- **No DNS.** `tftp get`/`pkg fetch` only accept a raw IP address for
+  the server (defaulting to the gateway) - no hostname resolution
+  exists anywhere in the network stack yet.
+- **The "package repository" is still just a flat directory of
+  `.PKG` files** - TFTP serving them over the network doesn't change
+  that there's no real repository format, versioning/dependency
+  metadata, or index beyond what each package's own manifest header
+  carries (unchanged from Phase 8).
+
+## Phase 11 and beyond
+
+Not started. The originally-planned roadmap (P1-P9) is complete;
+Phase 10 was the first phase chosen from open follow-up items rather
+than a pre-written plan. Remaining candidates for future work, in no
+particular order: a real bootloader-writing installer, TCP/sockets,
+the capabilities/sandboxing security items deferred since Phase 5, a
+GUI Software Center (needs general text rendering in graphics mode,
+deferred since Phase 7), and PCI/USB/sound drivers. Each would benefit
+from being scoped on its own terms rather than assumed as "next."
