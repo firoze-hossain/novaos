@@ -87,7 +87,7 @@ at the end. Concretely, in the order it gets built:
 | Ring 3 execution + preemptive scheduling | 4 | Done - real CPL=3 processes, round-robin scheduler; see PROGRESS.md |
 | Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Done - int 0x80, DPL=3 gate is the only path from ring 3 into the kernel |
 | Per-process address spaces (no process can read another's memory) | 5 | Done - each process gets its own page directory and private stack; proven by a boot-time test, not just claimed (see PROGRESS.md) |
-| Least-privilege process model (capabilities, not raw root/non-root) | 6+ | Planned - needs a filesystem permissions model first |
+| Least-privilege process model (capabilities, not raw root/non-root) | 11 | Done (scoped) - syscall-gated, per-process file capability lists; proven with a falsifiable allow/deny test, not just claimed (see PROGRESS.md). Filesystem only - not extended to network/process-creation/other resources yet |
 | Mandatory sandboxing for GUI apps | 7+ | Planned - needs a GUI to sandbox in the first place |
 | NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
 | Signed packages + signature verification in the package manager | 9+ | Planned - Phase 8 built the package manager itself with no signing yet |
@@ -122,16 +122,18 @@ at the end. Concretely, in the order it gets built:
 | **P8** | Package manager: `nova-pkg` CLI + FAT32 write support | Complete (scoped - see PROGRESS.md; network fetch added in P10, GUI Software Center still deferred) |
 | **P9** | First-run setup wizard (the realistic "installer" for a live-boot design), RTC driver, persistent identity | Complete (scoped - see PROGRESS.md; no bootloader-writing installer) |
 | **P10** | UDP + a TFTP client + networked package fetching for `nova-pkg` | Complete (scoped - see PROGRESS.md) |
+| **P11** | Capability-based file access control for ring-3 processes | Complete (scoped - see PROGRESS.md) |
 
 **P1-P9 above were the full originally-planned roadmap; all nine
 completed it at the scoped level described in each row and in
-PROGRESS.md.** Phase 10 was the first phase chosen from open follow-up
-items - closing P6's deferred UDP and P8's deferred network-fetch gap
-together - rather than from a pre-written plan, since none exists past
-P9. Further work (a real bootloader-writing installer,
-capabilities/sandboxing from the security roadmap in section 4, TCP/
+PROGRESS.md.** P10 and P11 were each chosen from open follow-up items
+rather than a pre-written plan, since none exists past P9: P10 closed
+P6's deferred UDP and P8's deferred network-fetch gap together; P11
+closed the capabilities/least-privilege item from the security roadmap
+in section 4. Further work (a real bootloader-writing installer, TCP/
 sockets, a GUI Software Center, general text rendering in graphics
-mode, and whatever else follows) remains open and should each be
+mode, extending capability-based access control to resources beyond
+files, and whatever else follows) remains open and should each be
 scoped on their own terms rather than assumed as "next."
 
 Detailed, living status for what's actually implemented (as opposed to

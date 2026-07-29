@@ -17,6 +17,14 @@
  * shared 0-64MB kernel range so it can never collide with it. */
 #define USER_STACK_VIRT_BASE 0x40000000u
 
+/* Phase 11: how many distinct filenames a sandboxed process can be
+ * granted access to at creation time. Small and fixed - a real
+ * capability system would want a dynamic, revocable grant mechanism;
+ * this is deliberately just enough to prove the enforcement mechanism
+ * works (see kernel/arch/x86/cpu/syscall.c's SYS_OPEN handler and
+ * PROGRESS.md). */
+#define MAX_CAPABILITIES 4
+
 typedef enum {
     PROCESS_UNUSED = 0, /* slot is free */
     PROCESS_READY,
@@ -36,6 +44,15 @@ typedef struct process {
 
     /* Only used for is_user tasks; kept so the slot can be freed. */
     void* kernel_stack_alloc;
+
+    /* Phase 11: the exact set of filenames this process is allowed to
+     * SYS_OPEN. Empty (allowed_file_count == 0) by default for every
+     * process, including plain process_create_user_task() ones - a
+     * process must be explicitly created via
+     * process_create_sandboxed_task() to be granted anything at all.
+     * Least privilege as the default, not an opt-out. */
+    char allowed_files[MAX_CAPABILITIES][13];
+    int allowed_file_count;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -57,6 +74,13 @@ int process_create_kernel_task(const char* name, void (*entry)(void));
  * convention - it just got its starting address the easy way. See
  * PROGRESS.md for the honest scope. */
 int process_create_user_task(const char* name, void (*entry)(void));
+
+/* Same as process_create_user_task(), but also grants the new process
+ * a capability list: the exact filenames (8.3, e.g. "HELLO.TXT") it
+ * will be allowed to SYS_OPEN. `filenames` is copied at creation time,
+ * not referenced afterward. `count` is clamped to MAX_CAPABILITIES. */
+int process_create_sandboxed_task(const char* name, void (*entry)(void),
+                                   const char** filenames, int count);
 
 /* Marks the current process TERMINATED and switches away from it
  * permanently. Called by the SYS_EXIT syscall handler; never returns. */

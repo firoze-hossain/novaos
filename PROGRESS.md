@@ -18,6 +18,7 @@ in the same PR as the code it describes.
 | P8 - Package Manager (nova-pkg CLI) | Complete (scoped - see below) |
 | P9 - First-Run Setup, RTC & Persistent Identity | Complete (scoped - see below) |
 | P10 - UDP, TFTP Client & Networked Package Fetching | Complete (scoped - see below) |
+| P11 - Capability-Based File Access Control | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1061,13 +1062,127 @@ network stack that already works.
   metadata, or index beyond what each package's own manifest header
   carries (unchanged from Phase 8).
 
-## Phase 11 and beyond
+## Phase 11 - Capability-Based File Access Control
 
-Not started. The originally-planned roadmap (P1-P9) is complete;
-Phase 10 was the first phase chosen from open follow-up items rather
-than a pre-written plan. Remaining candidates for future work, in no
-particular order: a real bootloader-writing installer, TCP/sockets,
-the capabilities/sandboxing security items deferred since Phase 5, a
-GUI Software Center (needs general text rendering in graphics mode,
-deferred since Phase 7), and PCI/USB/sound drivers. Each would benefit
-from being scoped on its own terms rather than assumed as "next."
+**Status: Complete, at a deliberately scoped-down scope.** Closes the
+"least-privilege process model (capabilities, not raw root/non-root)"
+item from PROJECT_PLAN.md's security roadmap, deferred since Phase 5.
+Chosen over the other open candidates (a real installer, TCP/sockets)
+specifically because it builds on infrastructure that already exists
+(syscalls since Phase 4, FAT32 since Phase 3/8, per-process address
+spaces since Phase 5) rather than needing a new subsystem, and because
+it's the most directly security-relevant of the remaining options.
+
+### The actual gap this closes
+
+Every ring-3 process since Phase 4 could do exactly three things:
+print a string, yield, and exit. None of them could touch the
+filesystem at all - `nova-pkg`, `ls`, `cat`, and everything else
+file-related has only ever run as kernel (ring-0) code from the shell.
+This phase gives ring-3 code a real, narrow path to file I/O, gated by
+an explicit per-process grant list checked in the kernel - not
+something a process can expand by asking nicely, guessing a handle
+number, or any other means short of an actual kernel bug.
+
+### What was built
+
+- **`kernel/arch/x86/cpu/syscall.h`**: three new syscalls - `SYS_OPEN`
+  (EBX = filename, returns a handle or -1), `SYS_READ` (EBX = handle,
+  ECX = buffer, EDX = max length, returns bytes read or -1), and
+  `SYS_CLOSE`. These are the first syscalls in NovaOS to return a
+  value: `syscall_handler()` writes it into `registers_t.eax`, which
+  is exactly the in-memory slot the entry stub's final `popa` restores
+  real EAX from - no separate return channel needed, it falls out of
+  the existing stack-frame design from Phase 4.
+- **`kernel/task/process.h`**: `process_t` gained `allowed_files[4]`
+  and `allowed_file_count` - the capability list. Empty by default for
+  *every* process, including ones made with the existing
+  `process_create_user_task()`; only the new
+  `process_create_sandboxed_task(name, entry, filenames, count)`
+  grants anything. Least privilege as the default a caller has to
+  affirmatively opt out of, not a feature a caller has to remember to
+  turn on.
+- **`kernel/arch/x86/cpu/syscall.c`**: the actual enforcement.
+  `SYS_OPEN` checks the calling process's capability list
+  (`process_current()->allowed_files`) before allocating a handle from
+  a small global open-file table (8 slots); denied opens are logged at
+  `[SECURITY]` level with the pid and filename. `SYS_READ`/`SYS_CLOSE`
+  additionally verify the calling process's pid matches the handle's
+  recorded owner - a process can't use a handle index it didn't
+  receive from its own `SYS_OPEN` call, even by guessing.
+- **`kernel/task/sandbox_demo.*`** - a ring-3 process created with a
+  capability list containing only `"HELLO.TXT"`. Deliberately tries
+  both an allowed open (`HELLO.TXT`, should succeed) and a disallowed
+  one (`SYSTEM.CFG`, should be denied) and reports PASS/FAIL for each
+  - a falsifiable test, the same approach Phase 5 used to prove
+  address-space isolation actually held rather than merely claiming it.
+
+### Verified behavior
+
+- Clean build, zero warnings under `-Wall -Wextra`; zero regression -
+  every Phase 2-10 `make test` marker still passes.
+- Full boot log, unedited, first try - no debugging needed:
+  ```
+  [SYSCALL] pid 5 SYS_OPEN('HELLO.TXT') -> handle 0 (capability granted)
+  [SYSCALL] SYS_WRITE from pid 5 ('[sandbox] PASS: HELLO.TXT opened and read (allowed by capability list): ')
+  [SYSCALL] SYS_WRITE from pid 5 ('Hello from NovaOS FAT32! ...')
+  [SECURITY] pid 5 denied SYS_OPEN('SYSTEM.CFG') - not in its capability list
+  [SYSCALL] SYS_WRITE from pid 5 ('[sandbox] PASS: SYS_OPEN("SYSTEM.CFG") correctly denied - not in my capability list.')
+  [ OK ] Process 'sandbox' (pid 5) exited
+  ```
+  Both the allowed-file success and the disallowed-file denial matched
+  expectations exactly - the process's own PASS/FAIL self-check and
+  the kernel's independent `[SECURITY]` log line agree.
+- Interactively confirmed via `ps` that the sandbox process appears
+  and terminates cleanly alongside the existing demo processes, with
+  no crashes or faults in the serial log.
+- `make test` now also asserts both PASS lines and the `[SECURITY]`
+  denial line all appear.
+- Along the way, confirmed (by reasoning about the existing Phase 4/5
+  design rather than by hitting a bug) that syscall handlers can
+  safely dereference "user" pointers (like `SYS_READ`'s buffer
+  argument) directly: a syscall doesn't switch CR3, so the page
+  directory active while handling a process's syscall is that same
+  process's own - the pointer is valid in exactly the context it's
+  being read in.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **Fixed capability list, granted only at process creation.** No
+  runtime grant/revoke, no wildcard or directory-scoped grants (every
+  entry is one exact 8.3 filename), and the list is small and static
+  (`MAX_CAPABILITIES = 4`) rather than a dynamic, resizable structure.
+- **No write/create/delete syscalls** - `SYS_OPEN`/`SYS_READ` are
+  read-only; a ring-3 process still cannot write to the filesystem at
+  all, regardless of capabilities. Extending the same gating pattern
+  to a future `SYS_WRITE_FILE` is straightforward but wasn't needed
+  for this phase's proof.
+- **`SYS_READ` re-reads the whole file from the start on every call**
+  rather than the underlying `vfs_read_file()` supporting a real
+  offset/seek - correct for the small demo files this is exercised
+  against, wasteful for anything larger.
+- **The global open-file table is shared and fixed-size (8 slots)**
+  across all processes combined, not a real per-process file
+  descriptor table with its own numbering.
+- **This is filesystem-only sandboxing.** Network access, process
+  creation, and every other privileged operation remain either fully
+  open to any ring-3 code that already has a syscall for it (none do
+  yet, beyond SYS_WRITE/EXIT/YIELD) or simply inaccessible from ring 3
+  entirely (there's no SYS_SOCKET, no SYS_SPAWN). A real capability
+  system would extend this same pattern to every resource type, not
+  just files.
+- **No sandboxing for the *existing* demo/network/GUI code** - `nova-pkg`,
+  the shell, and everything else file-related still runs as trusted
+  kernel (ring-0) code with unrestricted filesystem access. This phase
+  proves the mechanism works for a process that opts into using it via
+  syscalls; it doesn't retrofit the rest of NovaOS to go through it.
+
+## Phase 12 and beyond
+
+Not started. Remaining candidates for future work, in no particular
+order: a real bootloader-writing installer, TCP/sockets, a GUI
+Software Center (needs general text rendering in graphics mode,
+deferred since Phase 7), extending capability-based access control to
+other resource types (network, process creation), and PCI/USB/sound
+drivers. Each would benefit from being scoped on its own terms rather
+than assumed as "next."

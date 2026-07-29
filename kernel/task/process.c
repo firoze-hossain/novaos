@@ -77,22 +77,30 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->kernel_stack_top = kstack_top;
     p->kernel_stack_alloc = kstack;
     p->page_directory_phys = paging_kernel_directory_phys();
+    p->allowed_file_count = 0;
 
     scheduler_add(p);
     return p->pid;
 }
 
-int process_create_user_task(const char* name, void (*entry)(void)) {
+/* Shared setup for both process_create_user_task() and
+ * process_create_sandboxed_task() - everything except the capability
+ * list, which the two callers fill in differently (empty vs. granted).
+ * Returns the new process with state already READY and already
+ * registered with the scheduler; the caller only needs to set
+ * allowed_files/allowed_file_count and return p->pid. */
+static process_t* create_user_task_common(const char* name,
+                                           void (*entry)(void)) {
     process_t* p = allocate_slot();
     if (p == NULL) {
         kernel_log("[FAULT] process_create_user_task: process table full\n");
-        return -1;
+        return NULL;
     }
 
     void* kstack = kmalloc(KERNEL_STACK_SIZE);
     if (kstack == NULL) {
         kernel_log("[FAULT] process_create_user_task: out of memory (kstack)\n");
-        return -1;
+        return NULL;
     }
 
     /* Unlike the kernel stack (only ever touched by kernel code on
@@ -112,7 +120,7 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
         if (frame == 0) {
             kernel_log("[FAULT] process_create_user_task: out of memory "
                        "(user stack frame %d/%d)\n", i + 1, stack_pages);
-            return -1;
+            return NULL;
         }
         uint32_t virt = USER_STACK_VIRT_BASE + (uint32_t)i * 4096u;
         paging_map_page(pd, virt, frame,
@@ -147,6 +155,35 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
     p->kernel_stack_top = kstack_top;
     p->kernel_stack_alloc = kstack;
     p->page_directory_phys = address_space;
+    p->allowed_file_count = 0; /* least privilege by default */
+
+    return p;
+}
+
+int process_create_user_task(const char* name, void (*entry)(void)) {
+    process_t* p = create_user_task_common(name, entry);
+    if (p == NULL) {
+        return -1;
+    }
+    scheduler_add(p);
+    return p->pid;
+}
+
+int process_create_sandboxed_task(const char* name, void (*entry)(void),
+                                   const char** filenames, int count) {
+    process_t* p = create_user_task_common(name, entry);
+    if (p == NULL) {
+        return -1;
+    }
+
+    if (count > MAX_CAPABILITIES) {
+        count = MAX_CAPABILITIES;
+    }
+    for (int i = 0; i < count; i++) {
+        copy_name(p->allowed_files[i], filenames[i],
+                  sizeof(p->allowed_files[i]));
+    }
+    p->allowed_file_count = count;
 
     scheduler_add(p);
     return p->pid;

@@ -175,6 +175,12 @@ After `make run`, verify at the `nova>` prompt:
       (Phase 10)
 - [ ] `tftp get WEATHER.PKG` (without `pkg fetch`'s wrapping) also
       works directly, saving the raw file to disk
+- [ ] `ps` shows a `sandbox` process (in addition to `demo-a`/`demo-b`)
+      that has already run and shows `TERMINATED` shortly after boot
+      (Phase 11) - watch the boot output for `[sandbox] PASS` (x2) and
+      a `[SECURITY] ... denied SYS_OPEN('SYSTEM.CFG')` line; seeing
+      `FAIL` instead of either `PASS` would mean the capability
+      enforcement is broken and is worth reporting
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

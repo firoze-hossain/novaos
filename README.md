@@ -91,6 +91,18 @@ manager, and Windows-style usability conventions. See
 - Not part of the original 9-phase plan - the first phase chosen from
   open follow-up items once that plan was complete (see PROGRESS.md)
 
+**Phase 11 - Capability-Based File Access Control**
+- Three new syscalls (`SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`) - the first
+  ring-3 code could ever touch the filesystem at all
+- Every process is filesystem-capability-empty by default; only
+  explicitly granted filenames can be opened, enforced in the kernel
+- Proven with a falsifiable test, not just claimed: a demo process
+  successfully reads an allowed file and is genuinely denied a
+  disallowed one, logged independently by both the kernel's security
+  check and the process's own self-verification
+- Closes the "least-privilege process model" item from the security
+  roadmap, deferred since Phase 5
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -125,7 +137,7 @@ novaos/
 │   ├── gui/            # compositor (windowing demo), small digit font
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
-│   ├── task/           # process table, scheduler, syscall demo task
+│   ├── task/           # process table, scheduler, syscall + sandbox demo tasks
 │   ├── shell/          # minimal built-in shell + first-run wizard
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers

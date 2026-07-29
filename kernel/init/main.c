@@ -20,6 +20,7 @@
 #include "../task/process.h"
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
+#include "../task/sandbox_demo.h"
 #include "../shell/shell.h"
 #include "../shell/firstrun.h"
 #include "../lib/string.h"
@@ -259,8 +260,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_create_kernel_task("shell", shell_run);
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);
+
+    const char* sandbox_caps[] = {"HELLO.TXT"};
+    process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
+                                   1);
+
     kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
-               "demo-a + demo-b (ring 3, private address spaces)\n");
+               "demo-a + demo-b (ring 3, private address spaces), "
+               "sandbox (ring 3, capability: HELLO.TXT only)\n");
 
     scheduler_start(); /* never returns */
 }

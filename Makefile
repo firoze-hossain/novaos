@@ -172,7 +172,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "PKG INSTALL OK" $(TEST_LOG) && \
 	    grep -q "PKG REMOVE OK" $(TEST_LOG) && \
 	    grep -q "First-run check: returning user" $(TEST_LOG) && \
-	    grep -q "TFTP FETCH OK" $(TEST_LOG) && \
+	    grep -q "sandbox. PASS: HELLO.TXT opened" $(TEST_LOG) && \
+	    grep -q "sandbox. PASS: SYS_OPEN" $(TEST_LOG) && \
+	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 
