@@ -181,6 +181,15 @@ After `make run`, verify at the `nova>` prompt:
       a `[SECURITY] ... denied SYS_OPEN('SYSTEM.CFG')` line; seeing
       `FAIL` instead of either `PASS` would mean the capability
       enforcement is broken and is worth reporting
+- [ ] `store` opens the Software Center, showing Editor and Game with
+      readable text (the title "NOVAOS SOFTWARE CENTER" and both
+      package names should be clearly legible - this is the main
+      thing to eyeball, since the font was hand-built) - clicking
+      INSTALL/REMOVE with a real mouse should install or remove the
+      package and update the button; **please report back if clicking
+      doesn't work**, since automated headless testing of this
+      specific interaction hit the same unresolved limitation Phase 7
+      found for window-dragging (see PROGRESS.md's Phase 12 section)
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

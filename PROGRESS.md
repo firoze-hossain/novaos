@@ -19,6 +19,7 @@ in the same PR as the code it describes.
 | P9 - First-Run Setup, RTC & Persistent Identity | Complete (scoped - see below) |
 | P10 - UDP, TFTP Client & Networked Package Fetching | Complete (scoped - see below) |
 | P11 - Capability-Based File Access Control | Complete (scoped - see below) |
+| P12 - GUI Software Center | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1177,12 +1178,116 @@ number, or any other means short of an actual kernel bug.
   proves the mechanism works for a process that opts into using it via
   syscalls; it doesn't retrofit the rest of NovaOS to go through it.
 
-## Phase 12 and beyond
+## Phase 12 - GUI Software Center
+
+**Status: Complete, at a deliberately scoped-down scope, with one
+honestly-unresolved verification gap flagged below (the same kind of
+gap Phase 7 had, and for the same underlying reason).** Connects
+`nova-pkg` (Phase 8/10) to the windowing system (Phase 7) for the
+first time - the biggest visible gap left from the project's original
+"Linux kernel + Ubuntu-style package manager/GUI + Windows UX" vision
+in PROJECT_PLAN.md.
+
+### What was built
+
+- **`kernel/gui/font5x7.h`** gained 26 hand-built uppercase letter
+  glyphs (A-Z) plus `.` and `-`, extending Phase 7's digit-only font.
+  Built the same deliberate way as the digits - each letter reasoned
+  through as a 5x7 shape and hand-encoded, not transcribed from an
+  existing font table (the same reasoning Phase 7 used to avoid the
+  transcription risk of a larger existing font, just applied to more
+  glyphs this time since there's now a real use for them).
+- **`kernel/gui/canvas.*`** - generic pixel-buffer drawing primitives
+  (put_pixel, fill_rect, draw_rect, draw_char, draw_text), written
+  fresh rather than refactored out of `compositor.c`'s existing
+  private helpers - deliberately avoids touching already-verified
+  Phase 7 code for a phase that doesn't need to change it.
+- **`kernel/gui/store.*`** - the Software Center itself. Lists every
+  available package (via `pkg_list_available()`) with an INSTALL or
+  REMOVE button per row; clicking calls the real `pkg_install()`/
+  `pkg_remove()` and refreshes the list. ESC returns to the text
+  shell, the same convention `gui` already uses.
+- **Shell**: added `store`.
+
+### Verified behavior - an unusually rigorous check on the highest-risk part
+
+The hand-built font was the part most likely to have a subtle mistake
+that would be easy to miss with casual visual inspection, so it got a
+correspondingly more rigorous check: rather than eyeballing a
+screenshot, a script compared the *exact* pixel pattern QEMU rendered
+against the intended bit pattern for each glyph, bit by bit.
+
+- Every letter checked - `N`, `O`, `V`, `A`, `S`, `F`, `T`, `W`, `R`,
+  `E`, `C` (11 of 26, covering most of the distinct stroke shapes used
+  across the alphabet) - matched **exactly**, pixel-for-pixel, between
+  the intended font data and the actual rendered output. The
+  rendering pipeline (`canvas_draw_char` -> `vga_put_pixel` -> the
+  Mode 13h framebuffer) is proven correct, not just "looked right."
+- Package rows render correctly: a fresh disk image with 2 available
+  packages (Editor, Game) produced exactly 2 detected row borders at
+  the expected screen positions.
+- `ESC` correctly restores text mode, verified the same way Phase 7's
+  mode switch was: measured screendump dimensions (720x400 with the
+  expected black/white/cyan text-mode palette), not just "looks like
+  it went back."
+- Clean build, zero warnings under `-Wall -Wextra`; zero regression -
+  every Phase 2-11 `make test` marker still passes.
+- Along the way, found (via code review, not by hitting a runtime bug)
+  and fixed a stale `about` command string that Phase 11 had missed
+  updating - still said "Phase 10" despite Phase 11 having shipped.
+
+### Known limitation: click-driven install/remove is not conclusively verified
+
+This is the same kind of gap Phase 7 flagged for window-dragging, and
+for the same root cause. Three different scripted mouse-movement
+patterns were tried against the Software Center's INSTALL button - a
+multi-step sequence of varying deltas, one single larger move, and a
+sequence of repeated *identical* small deltas (the one pattern Phase 7
+found reliable) - and all three showed the same unreliable cursor
+positioning already characterized in Phase 7's PROGRESS.md entry: a
+QEMU `-display none` + monitor-scripted-input quirk with no real-usage
+analogue, not something correctable from inside NovaOS. The
+click-handling code in `store.c` (rising-edge button detection via
+`state.left_button && !prev_left_button`, then a `point_in_rect()`
+check) is structurally identical to `compositor.c`'s window-dragging
+logic from Phase 7, which real mouse/display usage has since
+confirmed works - but that confirmation hasn't specifically happened
+for this file yet.
+
+**If you try `store` with `make run` and clicking INSTALL/REMOVE
+doesn't work, that's worth reporting** - the underlying package
+install/remove functions themselves are independently proven correct
+by Phase 8/10's boot self-test (which installs and removes a package
+without any GUI involved at all), so a failure here would specifically
+implicate the click-detection code, not the package manager underneath
+it.
+
+### Other known limitations / follow-ups (tracked for future phases)
+
+- **Font covers uppercase A-Z, 0-9, `.`, `-`, and space only** - no
+  lowercase, no other punctuation. A package description using an
+  unsupported character silently gets a gap, not a crash or a
+  wrong-looking glyph (see `font5x7_lookup()`).
+- **No scrolling** - `MAX_STORE_ROWS = 8` rows fit on screen at
+  `ROW_HEIGHT = 20`; a package list longer than that is silently
+  truncated rather than scrollable.
+- **No confirmation dialogs, no progress indication, no error
+  reporting in the GUI itself** - a failed install (e.g. disk full)
+  fails silently from the Software Center's perspective; the failure
+  is only visible in the serial log, the same way the CLI's `pkg`
+  command already logs failures there today.
+- **Refreshes the whole package list from disk on every click**, not
+  an incremental update - fine for the tiny package counts this has
+  ever been tested with, wasteful for a much larger catalog.
+- **Still no fetch-and-install-in-one-click** - `pkg fetch` (Phase 10)
+  remains CLI-only; the Software Center only shows packages already
+  present on the local disk.
+
+## Phase 13 and beyond
 
 Not started. Remaining candidates for future work, in no particular
-order: a real bootloader-writing installer, TCP/sockets, a GUI
-Software Center (needs general text rendering in graphics mode,
-deferred since Phase 7), extending capability-based access control to
-other resource types (network, process creation), and PCI/USB/sound
+order: a real bootloader-writing installer, TCP/sockets, extending
+capability-based access control to other resource types (network,
+process creation), lowercase/extended font coverage, and PCI/USB/sound
 drivers. Each would benefit from being scoped on its own terms rather
 than assumed as "next."

@@ -20,6 +20,7 @@
 #include "../drivers/video/vga_graphics.h"
 #include "../drivers/mouse/ps2mouse.h"
 #include "../gui/compositor.h"
+#include "../gui/store.h"
 #include "../pkg/pkgmgr.h"
 #include "../drivers/rtc/rtc.h"
 #include "firstrun.h"
@@ -67,6 +68,8 @@ static void cmd_help(void) {
     vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2)\n");
     vga_puts("  gui       - enter graphics mode; drag windows with the "
               "mouse, ESC to exit\n");
+    vga_puts("  store     - Software Center GUI: install/remove packages "
+              "with the mouse\n");
     vga_puts("  pkg list  - show available packages (pkg installed, "
               "pkg install NAME, pkg remove NAME, pkg fetch NAME)\n");
     vga_puts("  tftp get FILE [IP] - fetch a file over TFTP (default "
@@ -79,7 +82,7 @@ static void cmd_help(void) {
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 10: UDP, TFTP Client & Networked Package Fetching\n");
+    vga_puts("Phase 12: GUI Software Center for nova-pkg\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -443,6 +446,8 @@ static void dispatch(char* line) {
         cmd_ps();
     } else if (strcmp(line, "gui") == 0) {
         cmd_gui();
+    } else if (strcmp(line, "store") == 0) {
+        store_run();
     } else if (strncmp(line, "cat ", 4) == 0) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "ping ", 5) == 0) {

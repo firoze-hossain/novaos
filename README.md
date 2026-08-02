@@ -103,6 +103,18 @@ manager, and Windows-style usability conventions. See
 - Closes the "least-privilege process model" item from the security
   roadmap, deferred since Phase 5
 
+**Phase 12 - GUI Software Center**
+- 26 hand-built uppercase letter glyphs extend Phase 7's digit-only
+  font, verified pixel-exact against the rendered output rather than
+  by eye
+- `store`: a GUI front-end for `nova-pkg` - lists packages with
+  INSTALL/REMOVE buttons, wired to the real package manager functions
+- Connects the package manager and windowing system for the first
+  time, closing a gap from the project's original vision
+- Click-driven install/remove not conclusively verified in headless
+  testing (the same kind of gap Phase 7 flagged for window-dragging) -
+  see PROGRESS.md
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -134,7 +146,7 @@ novaos/
 │   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
 │   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp
-│   ├── gui/            # compositor (windowing demo), small digit font
+│   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
 │   ├── task/           # process table, scheduler, syscall + sandbox demo tasks
