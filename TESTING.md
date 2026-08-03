@@ -194,6 +194,17 @@ After `make run`, verify at the `nova>` prompt:
       controller (all Intel/vendor `8086`) - these come from QEMU's
       base chipset emulation and should be present regardless of which
       `-device` flags were used to start the VM (Phase 13)
+- [ ] `lspci` also shows an Ethernet controller, vendor `10ec` device
+      `8139` (RTL8139) - `ping`/`tftp`/`pkg fetch` should all still
+      work exactly as before, now running over this driver instead of
+      the ISA NE2000 one (Phase 16)
+- [ ] Boot output shows both `[sandbox] PASS: SYS_NET_SEND to the
+      gateway succeeded` and `[sandbox] PASS: SYS_NET_SEND to
+      10.0.2.100 correctly denied` (Phase 14) - the same kind of
+      capability check as Phase 11's file test, now for network access
+- [ ] `store` now shows each package's description on a second line,
+      not just its name (Phase 15) - "A TINY TEXT EDITOR (DEMO
+      PACKAGE)" should render with legible parentheses
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

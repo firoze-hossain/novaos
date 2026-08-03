@@ -126,6 +126,17 @@ manager, and Windows-style usability conventions. See
   rather than a driver itself - detection only, no new PCI-based
   hardware support
 
+**Phases 14-16 - Network Capabilities, Font Polish & a Second NIC (delivered together)**
+- Phase 14: `SYS_NET_SEND` extends Phase 11's capability model to
+  network destinations - a process can only send UDP packets to IPs
+  it was explicitly granted, enforced in the kernel
+- Phase 15: added missing punctuation (parentheses, `!`, `,`) and the
+  Software Center now shows full package descriptions, not just names
+- Phase 16: a full RTL8139 PCI NIC driver, found via Phase 13's
+  enumeration rather than a fixed address - the entire existing
+  network stack (ARP, ICMP ping, TFTP) now runs correctly over it,
+  proving PCI detection leads to real usable hardware support
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -154,7 +165,7 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc, pci
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
 │   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas

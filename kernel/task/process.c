@@ -78,6 +78,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->kernel_stack_alloc = kstack;
     p->page_directory_phys = paging_kernel_directory_phys();
     p->allowed_file_count = 0;
+    p->allowed_host_count = 0;
 
     scheduler_add(p);
     return p->pid;
@@ -156,6 +157,7 @@ static process_t* create_user_task_common(const char* name,
     p->kernel_stack_alloc = kstack;
     p->page_directory_phys = address_space;
     p->allowed_file_count = 0; /* least privilege by default */
+    p->allowed_host_count = 0;
 
     return p;
 }
@@ -170,20 +172,29 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
 }
 
 int process_create_sandboxed_task(const char* name, void (*entry)(void),
-                                   const char** filenames, int count) {
+                                   const char** filenames, int file_count,
+                                   const uint32_t* hosts, int host_count) {
     process_t* p = create_user_task_common(name, entry);
     if (p == NULL) {
         return -1;
     }
 
-    if (count > MAX_CAPABILITIES) {
-        count = MAX_CAPABILITIES;
+    if (file_count > MAX_CAPABILITIES) {
+        file_count = MAX_CAPABILITIES;
     }
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < file_count; i++) {
         copy_name(p->allowed_files[i], filenames[i],
                   sizeof(p->allowed_files[i]));
     }
-    p->allowed_file_count = count;
+    p->allowed_file_count = file_count;
+
+    if (host_count > MAX_CAPABILITIES) {
+        host_count = MAX_CAPABILITIES;
+    }
+    for (int i = 0; i < host_count; i++) {
+        p->allowed_hosts[i] = hosts[i];
+    }
+    p->allowed_host_count = host_count;
 
     scheduler_add(p);
     return p->pid;

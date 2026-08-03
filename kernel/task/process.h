@@ -53,6 +53,13 @@ typedef struct process {
      * Least privilege as the default, not an opt-out. */
     char allowed_files[MAX_CAPABILITIES][13];
     int allowed_file_count;
+
+    /* Phase 14: same idea, extended to network destinations - the
+     * exact set of IPv4 addresses (host byte order) this process is
+     * allowed to SYS_NET_SEND to. Empty by default, same as file
+     * capabilities. */
+    uint32_t allowed_hosts[MAX_CAPABILITIES];
+    int allowed_host_count;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -76,11 +83,15 @@ int process_create_kernel_task(const char* name, void (*entry)(void));
 int process_create_user_task(const char* name, void (*entry)(void));
 
 /* Same as process_create_user_task(), but also grants the new process
- * a capability list: the exact filenames (8.3, e.g. "HELLO.TXT") it
- * will be allowed to SYS_OPEN. `filenames` is copied at creation time,
- * not referenced afterward. `count` is clamped to MAX_CAPABILITIES. */
+ * two capability lists: the exact filenames (8.3, e.g. "HELLO.TXT") it
+ * may SYS_OPEN, and the exact IPv4 addresses (host byte order) it may
+ * SYS_NET_SEND to. Either list may be empty (pass NULL/0 for the pair
+ * you don't need) - a process only gets what's explicitly granted in
+ * whichever lists are non-empty. Both are copied at creation time, not
+ * referenced afterward; each count is clamped to MAX_CAPABILITIES. */
 int process_create_sandboxed_task(const char* name, void (*entry)(void),
-                                   const char** filenames, int count);
+                                   const char** filenames, int file_count,
+                                   const uint32_t* hosts, int host_count);
 
 /* Marks the current process TERMINATED and switches away from it
  * permanently. Called by the SYS_EXIT syscall handler; never returns. */

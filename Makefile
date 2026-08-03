@@ -68,18 +68,28 @@ DISK_SIZE_MB = 64
 DISK_FIXTURES_DIR = tools/fixtures
 DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk
 
-# Phase 6+: QEMU user-mode ("SLIRP") networking with an NE2000 ISA NIC
-# at the fixed I/O base the driver expects. SLIRP always answers pings
-# to its own gateway address (10.0.2.2) even with no real outbound
-# network access from the host/CI runner, which is what makes the
-# Phase 6 ping self-test (see kernel/init/main.c) work identically
+# Phase 6+: QEMU user-mode ("SLIRP") networking. SLIRP always answers
+# pings to its own gateway address (10.0.2.2) even with no real
+# outbound network access from the host/CI runner, which is what makes
+# the Phase 6 ping self-test (see kernel/init/main.c) work identically
 # everywhere `make test` runs. A fixed MAC keeps output reproducible.
 #
 # Phase 10 adds tftp=...: SLIRP runs a TFTP server on the gateway
 # address serving files from this host directory - no real network
 # access needed, same self-contained-test principle as the ping
 # self-test above. See tools/fixtures/tftproot/.
-NET_FLAGS = -netdev user,id=net0,tftp=tools/fixtures/tftproot -device ne2k_isa,netdev=net0,iobase=0x300,mac=52:54:00:12:34:56
+# Phase 16: RTL8139 (PCI, I/O base auto-assigned and discovered via
+# Phase 13's PCI enumeration - no fixed iobase= needed, unlike the ISA
+# NE2000 device below) is now the default test NIC, preferred by
+# net.c's driver-selection logic whenever present. This means every
+# existing network self-test (ping, TFTP fetch, pkg fetch) now
+# exercises the new driver through the entire stack, not just a
+# standalone demo. The NE2000 driver remains fully present and
+# functional in the tree (Phase 6) - swap the -device line below back
+# to `ne2k_isa,netdev=net0,iobase=0x300,mac=...` to exercise it
+# instead; net.c's fallback logic picks whichever NIC is actually
+# attached.
+NET_FLAGS = -netdev user,id=net0,tftp=tools/fixtures/tftproot -device rtl8139,netdev=net0,mac=52:54:00:12:34:56
 
 # Directories
 KERNEL_DIR = kernel
@@ -176,6 +186,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "sandbox. PASS: SYS_OPEN" $(TEST_LOG) && \
 	    grep -q "PCI ENUMERATION OK" $(TEST_LOG) && \
 	    grep -q "vendor=0x8086 device=0x1237" $(TEST_LOG) && \
+	    grep -q "Network up (RTL8139)" $(TEST_LOG) && \
+	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \
+	    grep -q "SECURITY. pid .* denied SYS_NET_SEND" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)

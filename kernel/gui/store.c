@@ -13,7 +13,7 @@
 #include "../lib/string.h"
 
 #define MAX_STORE_ROWS 8
-#define ROW_HEIGHT 20
+#define ROW_HEIGHT 32
 #define LIST_TOP 26
 #define LIST_LEFT 8
 #define LIST_WIDTH 300
@@ -101,6 +101,22 @@ static void render(void) {
                           y, LIST_WIDTH, ROW_HEIGHT - 2, COLOR_ROW_BORDER);
         canvas_draw_text(backbuffer, VGA_GFX_WIDTH, VGA_GFX_HEIGHT,
                           LIST_LEFT + 4, y + 3, rows[i].name, COLOR_TEXT);
+
+        /* Description on its own line below the name, added in Phase
+         * 15 once the font gained the punctuation real descriptions
+         * actually use (parentheses, see font5x7.h). Truncated rather
+         * than wrapped or scrolled - a long description silently
+         * loses its tail instead of overflowing into the next row or
+         * off the edge of the screen. */
+        char truncated[48];
+        size_t desc_len = strlen(rows[i].description);
+        if (desc_len >= sizeof(truncated)) {
+            desc_len = sizeof(truncated) - 1;
+        }
+        memcpy(truncated, rows[i].description, desc_len);
+        truncated[desc_len] = '\0';
+        canvas_draw_text(backbuffer, VGA_GFX_WIDTH, VGA_GFX_HEIGHT,
+                          LIST_LEFT + 4, y + 15, truncated, COLOR_TEXT);
 
         int bx, by;
         row_button_rect(i, &bx, &by);

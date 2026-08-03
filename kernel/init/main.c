@@ -285,12 +285,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_create_user_task("demo-b", user_demo_task_b);
 
     const char* sandbox_caps[] = {"HELLO.TXT"};
+    const uint32_t sandbox_hosts[] = {NET_GATEWAY_IP};
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
-                                   1);
+                                   1, sandbox_hosts, 1);
 
     kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
                "demo-a + demo-b (ring 3, private address spaces), "
-               "sandbox (ring 3, capability: HELLO.TXT only)\n");
+               "sandbox (ring 3, capabilities: HELLO.TXT + gateway "
+               "network access only)\n");
 
     scheduler_start(); /* never returns */
 }

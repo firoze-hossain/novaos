@@ -21,6 +21,7 @@
 #include "gdt.h"
 #include "../../drivers/vga/vga.h"
 #include "../../fs/vfs.h"
+#include "../../net/udp.h"
 #include "../../task/process.h"
 #include "../../task/scheduler.h"
 #include "../../lib/string.h"
@@ -58,6 +59,17 @@ static int str_eq_ci(const char* a, const char* b) {
 static bool process_has_capability(const process_t* p, const char* filename) {
     for (int i = 0; i < p->allowed_file_count; i++) {
         if (str_eq_ci(p->allowed_files[i], filename)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Phase 14: same idea as process_has_capability() above, for the
+ * network host capability list instead of filenames. */
+static bool process_has_host_capability(const process_t* p, uint32_t ip) {
+    for (int i = 0; i < p->allowed_host_count; i++) {
+        if (p->allowed_hosts[i] == ip) {
             return true;
         }
     }
@@ -161,6 +173,39 @@ static void handle_close(registers_t* regs) {
     }
 }
 
+/* Phase 14's SYS_NET_SEND: the same capability-gate-then-act pattern
+ * as handle_open() above, just for a network destination instead of a
+ * filename. Uses a fixed source port for this demo syscall rather
+ * than allocating a real ephemeral one per call - fine for "prove the
+ * capability check works," not meant to be a general sockets API (see
+ * PROGRESS.md). */
+#define SYS_NET_SEND_SOURCE_PORT 51000
+
+static void handle_net_send(registers_t* regs) {
+    process_t* p = process_current();
+    uint32_t dest_ip = regs->ebx;
+    uint16_t dest_port = (uint16_t)regs->ecx;
+    const char* message = (const char*)regs->edx;
+
+    if (p == NULL || !process_has_host_capability(p, dest_ip)) {
+        kernel_log("[SECURITY] pid %d denied SYS_NET_SEND to %d.%d.%d.%d - "
+                   "not in its capability list\n",
+                   p != NULL ? p->pid : -1, (int)(dest_ip >> 24) & 0xFF,
+                   (int)(dest_ip >> 16) & 0xFF, (int)(dest_ip >> 8) & 0xFF,
+                   (int)dest_ip & 0xFF);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    bool ok = udp_send(dest_ip, SYS_NET_SEND_SOURCE_PORT, dest_port, message,
+                        (uint16_t)strlen(message));
+    kernel_log("[SYSCALL] pid %d SYS_NET_SEND to %d.%d.%d.%d:%d (capability "
+               "granted) -> %s\n", p->pid, (int)(dest_ip >> 24) & 0xFF,
+               (int)(dest_ip >> 16) & 0xFF, (int)(dest_ip >> 8) & 0xFF,
+               (int)dest_ip & 0xFF, (int)dest_port, ok ? "sent" : "failed");
+    regs->eax = ok ? 0 : (uint32_t)-1;
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -190,6 +235,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_CLOSE:
             handle_close(regs);
+            break;
+
+        case SYS_NET_SEND:
+            handle_net_send(regs);
             break;
 
         default:

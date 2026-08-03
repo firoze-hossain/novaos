@@ -29,10 +29,23 @@ void net_init(void);
 bool net_is_up(void);
 
 /* Drains at most one received frame from the NIC and dispatches it.
- * Since the NE2000 driver is polled (no IRQ), something has to call
+ * Since neither NIC driver is interrupt-driven, something has to call
  * this regularly for networking to do anything at all - the idle task
  * does, once per trip through its loop (see kernel/init/main.c). */
 void net_poll(void);
+
+/* Phase 16: a small seam so kernel/net/ethernet.c doesn't need to know
+ * which physical NIC driver is actually active. net_init() picks one
+ * (preferring the RTL8139 PCI NIC if Phase 13's enumeration finds one,
+ * falling back to the NE2000 ISA driver otherwise - see net.c) and
+ * these three functions forward to whichever was chosen. Not a
+ * general driver-model abstraction (there's no way to register a
+ * third NIC type without editing net.c directly) - just enough to let
+ * two concrete drivers coexist in the same tree without ethernet.c
+ * hardcoding either one's name. */
+bool net_driver_send(const void* frame, uint16_t length);
+uint16_t net_driver_receive(void* buffer);
+const uint8_t* net_driver_mac_address(void);
 
 /* Standard Internet checksum (RFC 1071): ones-complement sum of every
  * 16-bit word, carries folded back in, then complemented. Shared by

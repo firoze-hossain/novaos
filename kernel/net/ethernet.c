@@ -5,7 +5,7 @@
 #include "ethernet.h"
 #include "arp.h"
 #include "ip.h"
-#include "../drivers/net/ne2000.h"
+#include "net.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -19,12 +19,12 @@ bool eth_send(const uint8_t dest_mac[6], uint16_t ethertype,
 
     eth_header_t* hdr = (eth_header_t*)frame;
     memcpy(hdr->dest_mac, dest_mac, 6);
-    memcpy(hdr->src_mac, ne2000_mac_address(), 6);
+    memcpy(hdr->src_mac, net_driver_mac_address(), 6);
     hdr->ethertype = eth_htons(ethertype);
 
     memcpy(frame + ETH_HEADER_LEN, payload, payload_len);
 
-    return ne2000_send(frame, (uint16_t)(ETH_HEADER_LEN + payload_len));
+    return net_driver_send(frame, (uint16_t)(ETH_HEADER_LEN + payload_len));
 }
 
 void eth_handle_frame(const uint8_t* frame, uint16_t length) {

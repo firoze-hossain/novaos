@@ -65,14 +65,35 @@ static const uint8_t font5x7_period[7] = {
 static const uint8_t font5x7_hyphen[7] = {
     0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00,
 };
+/* Added in Phase 15 specifically because real package descriptions
+ * (e.g. "A tiny game (demo package)") use them - found by checking
+ * the actual fixture text rather than guessing what punctuation a
+ * font "should" have. */
+static const uint8_t font5x7_lparen[7] = {
+    0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02,
+};
+static const uint8_t font5x7_rparen[7] = {
+    0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08,
+};
+static const uint8_t font5x7_exclaim[7] = {
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04,
+};
+static const uint8_t font5x7_comma[7] = {
+    0x00, 0x00, 0x00, 0x00, 0x06, 0x04, 0x08,
+};
 
 /* Single entry point covering every glyph this file defines - digits,
- * uppercase letters (lowercase input is upcased), '.', '-', and space
- * (blank, which is just "don't draw anything", the same as any other
- * unrecognized character - a Software Center package description with
- * a character outside this small set silently gets a gap rather than
- * a crash or a wrong-but-plausible-looking glyph). Returns false (and
- * leaves *out untouched) for anything not represented. */
+ * uppercase letters (lowercase input is upcased - see the honest
+ * limitation note in PROGRESS.md's Phase 15 entry: this means text
+ * renders correctly but not case-accurately, a deliberate choice over
+ * the added risk of hand-crafting 26 more true lowercase forms for a
+ * purely cosmetic improvement), '.', '-', '(', ')', '!', ',', and
+ * space (blank, which is just "don't draw anything", the same as any
+ * other unrecognized character - a Software Center package
+ * description with a character outside this small set silently gets
+ * a gap rather than a crash or a wrong-but-plausible-looking glyph).
+ * Returns false (and leaves *out untouched) for anything not
+ * represented. */
 static inline bool font5x7_lookup(char c, const uint8_t** out) {
     if (c >= 'a' && c <= 'z') {
         c = (char)(c - 32);
@@ -91,6 +112,22 @@ static inline bool font5x7_lookup(char c, const uint8_t** out) {
     }
     if (c == '-') {
         *out = font5x7_hyphen;
+        return true;
+    }
+    if (c == '(') {
+        *out = font5x7_lparen;
+        return true;
+    }
+    if (c == ')') {
+        *out = font5x7_rparen;
+        return true;
+    }
+    if (c == '!') {
+        *out = font5x7_exclaim;
+        return true;
+    }
+    if (c == ',') {
+        *out = font5x7_comma;
         return true;
     }
     return false;

@@ -21,6 +21,9 @@ in the same PR as the code it describes.
 | P11 - Capability-Based File Access Control | Complete (scoped - see below) |
 | P12 - GUI Software Center | Complete (scoped - see below) |
 | P13 - PCI Bus Enumeration | Complete (scoped - see below) |
+| P14 - Network Capability Enforcement | Complete (scoped - see below) |
+| P15 - Font Punctuation & Package Descriptions | Complete (scoped - see below) |
+| P16 - RTL8139 PCI NIC Driver | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1383,12 +1386,208 @@ well-defined, simple port-I/O enumeration algorithm.
   configuration fields exist in PCI config space but aren't decoded;
   not needed since no driver here uses PCI-signaled interrupts yet.
 
-## Phase 14 and beyond
+## Phase 14 - Network Capability Enforcement
+
+**Status: Complete.** Delivered together with Phases 15 and 16 in one
+session. Extends Phase 11's per-process capability pattern to a
+second resource type: which IPv4 addresses a process may send UDP
+packets to.
+
+### What was built
+
+- **`kernel/task/process.h`**: `process_t` gained `allowed_hosts[4]` +
+  `allowed_host_count`, the same shape as Phase 11's `allowed_files`.
+  `process_create_sandboxed_task()` now takes both a filename list and
+  a host list (either may be empty).
+- **`kernel/arch/x86/cpu/syscall.h`/`.c`**: new `SYS_NET_SEND` syscall
+  (EBX = destination IP, ECX = destination port, EDX = message
+  pointer). `handle_net_send()` checks the calling process's
+  `allowed_hosts` before calling the real `udp_send()` - denied
+  attempts are logged at `[SECURITY]` level, the same pattern
+  `SYS_OPEN` established.
+- **`kernel/task/sandbox_demo.c`**: extended (not duplicated) to also
+  test network capability - granted only the gateway (10.0.2.2), it
+  sends there (should succeed) and to 10.0.2.100 (should be denied).
+
+### Verified behavior
+
+First try, no debugging needed - all four PASS conditions (2 file, 2
+network) appear in the boot log, with the kernel's independent
+`[SECURITY]` log and the process's own self-check agreeing on both
+denials:
+```
+[SYSCALL] pid 5 SYS_NET_SEND to 10.0.2.2:9999 (capability granted) -> sent
+[sandbox] PASS: SYS_NET_SEND to the gateway succeeded - it's in my capability list.
+[SECURITY] pid 5 denied SYS_NET_SEND to 10.0.2.100 - not in its capability list
+[sandbox] PASS: SYS_NET_SEND to 10.0.2.100 correctly denied - not in my capability list.
+```
+Zero regression, zero new compiler warnings. `make test` now also
+asserts the network PASS and `[SECURITY]` denial lines appear.
+
+### Known limitations
+
+- **Coarse-grained**: capability is per-destination-IP only, not
+  per-port or per-protocol - a granted IP can be reached on any port.
+- **`SYS_NET_SEND` is UDP-only, fixed source port, text-payload only**
+  (a real send syscall would take a separate length argument instead
+  of assuming a NUL-terminated string) - a minimal proof of the
+  enforcement mechanism, not a general sockets API.
+- **Still filesystem+network only.** Process creation, and every other
+  privileged operation, remain outside this capability model.
+
+## Phase 15 - Font Punctuation & Package Descriptions
+
+**Status: Complete.** Checked the actual fixture package descriptions
+(e.g. "A tiny game (demo package)") rather than guessing what
+punctuation a font "should" have, and found parentheses were missing
+entirely.
+
+### What was built
+
+- **`kernel/gui/font5x7.h`**: four new glyphs - `(`, `)`, `!`, `,` -
+  built the same hand-crafted way as every other glyph in this file.
+- **`kernel/gui/store.c`**: each package row grew a second line
+  showing its description (truncated if too long for the row - not
+  wrapped or scrolled). Row height increased from 20px to 32px to fit
+  it.
+
+### An explicit scope decision, not an oversight
+
+Lowercase input already renders correctly via uppercase substitution
+- existing behavior from Phase 12, not new here. This phase
+deliberately did *not* add 26 true lowercase letterforms: several
+lowercase letters (g, j, p, q, y) have descenders that don't fit
+cleanly in a flat 7-row glyph grid without redesigning the whole
+font's baseline, and the payoff would be purely cosmetic (text is
+already fully legible) for real added risk (26 more hand-crafted
+shapes to get right). Documented in `font5x7_lookup()`'s comment
+directly, not just here.
+
+### Verified behavior
+
+Used the same pixel-exact verification technique Phase 12 introduced:
+compared actual rendered pixels against the intended bit pattern for
+both new parenthesis glyphs, at their real position within a real
+rendered description string in a live screendump - not just
+eyeballing a screenshot. Both matched exactly.
+
+Worth being honest about the process here: an initial verification
+run showed apparent mismatches for two glyphs. Investigating found the
+bug was in the *verification script's* character-index arithmetic (an
+off-by-one when locating where `)` should appear in the string), not
+in the rendering - corrected and re-verified before concluding it
+actually passed, rather than either accepting a spurious failure or
+casually explaining it away without checking.
+
+Zero regression (every Phase 2-14 `make test` marker still passes),
+zero new compiler warnings, no crashes in the serial log during
+interactive testing.
+
+### Known limitations
+
+- Same font-coverage limitations as Phase 12 (no lowercase forms, no
+  scrolling in the package list) plus the four new characters covering
+  only what current fixture text happens to need - any other
+  punctuation still silently renders as a gap.
+
+## Phase 16 - RTL8139 PCI NIC Driver
+
+**Status: Complete.** The natural capstone to Phase 13's PCI
+enumeration: proving hardware *detection* leads to actual usable
+hardware *support*, not just an `lspci` listing.
+
+### What was built
+
+- **`kernel/drivers/net/rtl8139.*`** - a full second NIC driver,
+  architecturally quite different from Phase 6's NE2000: the RTL8139
+  DMAs directly to/from physical system memory addresses the driver
+  hands it (a receive ring buffer, four transmit descriptor slots)
+  rather than NE2000's page-indexed remote-DMA protocol through
+  onboard NIC memory. Found via Phase 13's `pci_enumerate()` (vendor
+  `0x10EC`, device `0x8139`) rather than a fixed I/O base - its actual
+  I/O address comes from reading the PCI BAR0 config register at
+  runtime, the real payoff of having PCI enumeration at all. Requires
+  explicitly enabling PCI bus mastering (setting a bit in the PCI
+  command register) for the card to be allowed to perform DMA at
+  all - easy to forget, called out directly in the code.
+- **`kernel/net/net.c`** gained a small NIC-selection seam
+  (`net_driver_send()`/`net_driver_receive()`/
+  `net_driver_mac_address()`): `net_init()` prefers the RTL8139 if
+  Phase 13's enumeration finds one, falling back to NE2000 otherwise.
+  `kernel/net/ethernet.c` was updated to call through this seam
+  instead of hardcoding `ne2000_*` - the only change to
+  already-verified Phase 6 code in this whole three-phase batch, and a
+  narrow, mechanical one (swap which function names get called, not a
+  logic change).
+- **`Makefile`**: the default test NIC is now RTL8139 (`-device
+  rtl8139` in place of `-device ne2k_isa`) - meaning every existing
+  network self-test (ping, TFTP fetch) now exercises the new driver
+  through the *entire* stack, not a standalone demo. NE2000 remains
+  fully present and functional; swapping the `-device` line back
+  exercises it instead, and `net.c`'s fallback logic picks whichever
+  NIC is actually attached.
+
+### Verified behavior - worked first try on real complexity
+
+Unlike NE2000 (Phase 6) and the PS/2 mouse (Phase 7), which each had a
+real bug caught during testing, this driver worked correctly on the
+first attempt - worth stating plainly rather than manufacturing a
+"bugs found" narrative where none occurred. The boot log:
+```
+[ OK ] RTL8139 NIC at PCI 0:3.0, I/O base 0xC000, MAC 52:54:0:12:34:56
+[ OK ] Network up (RTL8139): IP 10.0.2.15, gateway 10.0.2.2
+[ OK ] PING OK: gateway replied in 0 ticks (~0ms)
+[ OK ] TFTP FETCH OK: WEATHER.PKG (172 bytes)
+```
+- PCI enumeration correctly found the card as a distinct device
+  (`vendor=0x10EC device=0x8139 class=0x2`, i.e. an Ethernet
+  controller) among the chipset devices Phase 13 already detects.
+- The I/O base (`0xC000`) came from actually reading the PCI BAR0
+  register at boot, not a hardcoded guess - different every time QEMU
+  assigns PCI addresses differently, and it still worked.
+- The full existing stack - ARP resolution, ICMP ping, UDP, TFTP -
+  worked correctly running entirely over the new driver, with zero
+  `[WARN] RTL8139: unexpected packet header` messages (the ring-buffer
+  desync class of bug NE2000 hit in Phase 6) across a 25-second
+  stability run and multiple real packet exchanges (ARP request/reply,
+  ICMP echo/reply, TFTP RRQ/DATA/ACK).
+- Interactively confirmed `ping 10.0.2.2` through the shell over
+  RTL8139 with no faults in the serial log.
+- Zero regression - every Phase 2-15 `make test` marker still passes.
+  `make test` now also asserts `Network up (RTL8139)` appears.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **I/O-space BAR only** - if a hypothetical RTL8139 variant exposed
+  only a memory-mapped BAR, this driver logs and declines rather than
+  supporting it (real RTL8139 hardware always provides an I/O BAR
+  too, so this hasn't been a practical limitation, just a documented
+  one).
+- **Promiscuous-ish receive filtering** (`RCR` accepts all packets,
+  matching or not) rather than NE2000's tighter unicast+broadcast
+  filtering - simpler to get right initially; a real driver would
+  narrow this once correctness is established.
+- **No IRQ support** - polled, matching NE2000's style for consistency
+  across both drivers, at the same latency/CPU-overhead cost that
+  choice always carries.
+- **No resync logic if the receive ring does desync** - the defensive
+  check that catches a bad packet header just drops that poll cycle
+  and logs a warning rather than attempting to recover by resyncing to
+  the card's own reported position. Never triggered in testing, but
+  the recovery path itself is unexercised.
+- **Static, fixed-size DMA buffers** rather than a general
+  physical-memory-allocation API - fine because they live in NovaOS's
+  identity-mapped low memory (virtual address always equals physical
+  address there), but this approach wouldn't extend to a system with
+  a real virtual/physical split for driver buffers.
+
+## Phase 17 and beyond
 
 Not started. Remaining candidates for future work, in no particular
 order: a real bootloader-writing installer, TCP/sockets, extending
-capability-based access control to other resource types (network,
-process creation), lowercase/extended font coverage, and actual
-drivers for any of the now-*detectable* PCI hardware (a PCI NIC, USB,
-sound). Each would benefit from being scoped on its own terms rather
-than assumed as "next."
+capability-based access control to further resource types (process
+creation), true lowercase font forms, and USB/sound drivers (now that
+Phase 13's PCI enumeration and Phase 16's RTL8139 driver together show
+the full path from "detect hardware" to "use hardware"). Each would
+benefit from being scoped on its own terms rather than assumed as
+"next."

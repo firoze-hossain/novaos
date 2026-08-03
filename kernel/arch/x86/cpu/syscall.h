@@ -31,6 +31,16 @@
                        Returns bytes read, or -1                       */
 #define SYS_CLOSE 6 /* EBX = handle                                    */
 
+/* Phase 14: capability-gated network access, the same pattern as
+ * SYS_OPEN extended to a different resource type. EBX = destination
+ * IPv4 address (host byte order, e.g. built with ip_make() - see
+ * kernel/net/net.h), ECX = destination UDP port, EDX = pointer to a
+ * NUL-terminated string payload (a real send syscall would take a
+ * separate length instead of assuming text - see PROGRESS.md).
+ * Returns 0 on success, -1 if the destination isn't in the calling
+ * process's capability list or the underlying send fails. */
+#define SYS_NET_SEND 7
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
