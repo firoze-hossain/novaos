@@ -23,6 +23,7 @@
 #include "../gui/store.h"
 #include "../pkg/pkgmgr.h"
 #include "../drivers/rtc/rtc.h"
+#include "../drivers/pci/pci.h"
 #include "firstrun.h"
 #include "../task/process.h"
 #include "../lib/string.h"
@@ -77,12 +78,13 @@ static void cmd_help(void) {
     vga_puts("  date      - show the current date/time (CMOS RTC)\n");
     vga_puts("  hostname  - show this computer's configured hostname\n");
     vga_puts("  whoami    - show the configured username\n");
+    vga_puts("  lspci     - list detected PCI devices\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 12: GUI Software Center for nova-pkg\n");
+    vga_puts("Phase 13: PCI Bus Enumeration\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -352,6 +354,17 @@ static void cmd_date(void) {
                (int)now.hour, (int)now.minute, (int)now.second);
 }
 
+static void print_pci_device(const pci_device_t* dev) {
+    vga_printf("%d:%d.%d  %x:%x  %s\n", (int)dev->bus, (int)dev->device,
+               (int)dev->function, (int)dev->vendor_id, (int)dev->device_id,
+               pci_class_name(dev->class_code, dev->subclass));
+}
+
+static void cmd_lspci(void) {
+    vga_puts("BUS:DEV.FN  VENDOR:DEVICE  CLASS\n");
+    pci_enumerate(print_pci_device);
+}
+
 static void cmd_hostname(void) {
     vga_puts(firstrun_get_hostname());
     vga_putchar('\n');
@@ -464,6 +477,8 @@ static void dispatch(char* line) {
         cmd_hostname();
     } else if (strcmp(line, "whoami") == 0) {
         cmd_whoami();
+    } else if (strcmp(line, "lspci") == 0) {
+        cmd_lspci();
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');

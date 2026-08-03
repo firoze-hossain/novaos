@@ -14,6 +14,7 @@
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
 #include "../pkg/pkgmgr.h"
+#include "../drivers/pci/pci.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
 #include "../net/tftp.h"
@@ -93,6 +94,17 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     heap_init();
     kernel_log("[ OK ] Heap initialized (2 MB arena)\n");
+}
+
+static int pci_device_count = 0;
+
+static void pci_log_device(const pci_device_t* dev) {
+    pci_device_count++;
+    kernel_log("[ OK ] PCI %d:%d.%d vendor=0x%x device=0x%x class=0x%x (%s)\n",
+               (int)dev->bus, (int)dev->device, (int)dev->function,
+               (int)dev->vendor_id, (int)dev->device_id,
+               (int)dev->class_code,
+               pci_class_name(dev->class_code, dev->subclass));
 }
 
 /* Everything that needs interrupts to exist as a concept, but not yet
@@ -206,6 +218,17 @@ void kernel_late_init(void) {
             kernel_log("[WARN] pkg self-test: install of 'Editor' failed\n");
         }
     }
+
+    /* Self-test: enumerate the PCI bus and log every function found.
+     * Even a QEMU guest with no explicitly-added PCI devices always
+     * has at least the i440fx chipset's host bridge and PIIX3 ISA/IDE
+     * bridge functions - unlike the filesystem/network/pkg self-tests
+     * above, this one needs no disk or NIC attached at all to produce
+     * a non-empty, verifiable result. */
+    pci_device_count = 0;
+    pci_enumerate(pci_log_device);
+    kernel_log("[ OK ] PCI ENUMERATION OK: %d device(s) found\n",
+               pci_device_count);
 }
 
 static void print_banner(void) {

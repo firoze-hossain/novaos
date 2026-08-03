@@ -31,6 +31,19 @@ static inline uint16_t inw(uint16_t port) {
     return ret;
 }
 
+/* Added in Phase 13 for PCI configuration space access (ports 0xCF8/
+ * 0xCFC are read/written as full 32-bit dwords) - no earlier driver
+ * needed anything wider than 16 bits. */
+static inline void outl(uint16_t port, uint32_t value) {
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint32_t inl(uint16_t port) {
+    uint32_t ret;
+    __asm__ volatile ("inl %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 /* Small delay used after PIC/CMOS writes on real hardware that need the
  * bus to settle. Writing to an unused POST diagnostic port takes about
  * 1-4 microseconds and is a standard OSDev idiom. */

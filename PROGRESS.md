@@ -20,6 +20,7 @@ in the same PR as the code it describes.
 | P10 - UDP, TFTP Client & Networked Package Fetching | Complete (scoped - see below) |
 | P11 - Capability-Based File Access Control | Complete (scoped - see below) |
 | P12 - GUI Software Center | Complete (scoped - see below) |
+| P13 - PCI Bus Enumeration | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1283,11 +1284,111 @@ it.
   remains CLI-only; the Software Center only shows packages already
   present on the local disk.
 
-## Phase 13 and beyond
+## Phase 13 - PCI Bus Enumeration
+
+**Status: Complete, at a deliberately scoped-down scope.** Chosen from
+the open follow-up list specifically because it's foundational for any
+future driver work (USB, sound, additional NICs all need PCI device
+discovery first) and carries much lower risk than the other two big
+remaining items (a real bootloader-writing installer needs new
+real-mode BIOS/assembly work; TCP needs a retransmission/sequencing
+state machine) - no new hardware protocol complexity, just a
+well-defined, simple port-I/O enumeration algorithm.
+
+### What was built
+
+- **`kernel/arch/x86/io.h`** gained `outl()`/`inl()` (32-bit port I/O)
+  - no earlier driver needed anything wider than 16 bits; PCI's
+    configuration address/data ports (0xCF8/0xCFC) are read and
+    written as full 32-bit dwords.
+- **`kernel/drivers/pci/pci.*`** - configuration space access
+  (8/16/32-bit reads, all built on top of the one 32-bit primitive)
+  and `pci_enumerate()`: a brute-force scan of every bus/device/
+  function, calling a callback once for each function that reports a
+  real vendor ID (0xFFFF means "nothing here" - the standard way an
+  empty slot is recognized). Multi-function devices (checked via the
+  header-type byte's top bit) get their functions 1-7 probed too;
+  everything else only needs function 0 checked. Simple rather than
+  optimal - a real enumerator would recursively discover which buses
+  exist via bridge devices instead of scanning the full architectural
+  range of 256, but scanning everything is still correct, just does
+  more (cheap) work than strictly necessary.
+- **Shell**: added `lspci`.
+- **Boot self-test**: enumerates PCI and logs every function found.
+
+### Verified behavior
+
+- Clean build, zero warnings under `-Wall -Wextra`; zero regression -
+  every Phase 2-12 `make test` marker still passes.
+- Full boot log, unedited, first try after fixing one ordering mistake
+  (see below):
+  ```
+  [ OK ] PCI 0:0.0 vendor=0x8086 device=0x1237 class=0x6 (Host bridge)
+  [ OK ] PCI 0:1.0 vendor=0x8086 device=0x7000 class=0x6 (ISA bridge)
+  [ OK ] PCI 0:1.1 vendor=0x8086 device=0x7010 class=0x1 (IDE controller)
+  [ OK ] PCI 0:1.3 vendor=0x8086 device=0x7113 class=0x6 (Bridge device)
+  [ OK ] PCI 0:2.0 vendor=0x1234 device=0x1111 class=0x3 (Display controller)
+  [ OK ] PCI ENUMERATION OK: 5 device(s) found
+  ```
+  These are recognizable real devices, not arbitrary numbers: Intel
+  vendor ID 0x8086 device 0x1237 is the 82441FX host bridge and 0x7000/
+  0x7010 are the PIIX3 ISA/IDE bridge functions - the standard i440fx
+  chipset QEMU's default `-M pc` machine always emulates, regardless of
+  which `-device` flags are added. Vendor 0x1234 device 0x1111 is
+  QEMU's own "stdvga" virtual display adapter - genuine confirmation
+  that enumeration finds real attached hardware, not just the fixed
+  chipset baseline.
+- **Unlike every previous phase's self-test, this one needs no disk or
+  NIC attached at all to produce a non-empty, verifiable result** - the
+  host bridge alone is guaranteed present on any standard QEMU `-M pc`
+  boot, making it an even more environment-independent test than the
+  ping/TFTP self-tests (which at least need SLIRP networking
+  configured).
+- `make test` now asserts both `PCI ENUMERATION OK` and the specific
+  host bridge's `vendor=0x8086 device=0x1237` line appear - checking
+  the *actual decoded values* are correct, not just "found something."
+- Interactively confirmed `lspci` produces the same device list through
+  the shell, with no faults in the serial log.
+- **One real ordering mistake, caught immediately by the build, not by
+  booting**: the PCI enumeration callback was originally defined
+  further down `main.c` than `kernel_late_init()`, which calls it -
+  C doesn't allow forward references to a function defined later in
+  the same file without a prototype. The compiler error was
+  unambiguous and the fix (moving the callback above its call site)
+  took one edit; mentioned here only because every previous phase's
+  "bugs found" section describes something caught by booting and
+  testing, and it's worth being equally clear when a mistake was
+  instead just an ordinary compile error with no runtime behavior to
+  discuss.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **No MMCONFIG/ECAM support** - only the legacy 0xCF8/0xCFC I/O port
+  mechanism, which is universally supported but limited to the
+  original 256-byte configuration space (PCIe's extended 4KB space
+  needs MMCONFIG).
+- **Brute-force full-range scan**, not bridge-driven bus discovery -
+  correct but not how a more sophisticated enumerator would minimize
+  wasted config cycles on hardware with many empty bus numbers.
+- **`pci_class_name()` covers a small hand-picked table** of common
+  classes (storage, network, display, bridge, USB) - anything else
+  reports as "Unknown," which is honest but not informative.
+- **Detection only - no actual PCI device drivers were written.** This
+  phase answers "what hardware exists," not "how do I use it." A PCI-
+  based NIC, sound card, or USB controller found by `lspci` still has
+  no driver to talk to it - Phase 6's NE2000 remains ISA-only (a fixed
+  I/O base, no PCI enumeration involved) and continues to work exactly
+  as before, unaffected by any of this.
+- **No IRQ routing information read** - the interrupt line/pin
+  configuration fields exist in PCI config space but aren't decoded;
+  not needed since no driver here uses PCI-signaled interrupts yet.
+
+## Phase 14 and beyond
 
 Not started. Remaining candidates for future work, in no particular
 order: a real bootloader-writing installer, TCP/sockets, extending
 capability-based access control to other resource types (network,
-process creation), lowercase/extended font coverage, and PCI/USB/sound
-drivers. Each would benefit from being scoped on its own terms rather
+process creation), lowercase/extended font coverage, and actual
+drivers for any of the now-*detectable* PCI hardware (a PCI NIC, USB,
+sound). Each would benefit from being scoped on its own terms rather
 than assumed as "next."

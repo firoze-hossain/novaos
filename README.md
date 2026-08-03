@@ -115,6 +115,17 @@ manager, and Windows-style usability conventions. See
   testing (the same kind of gap Phase 7 flagged for window-dragging) -
   see PROGRESS.md
 
+**Phase 13 - PCI Bus Enumeration**
+- Real PCI configuration space access (32-bit port I/O) and full
+  bus/device/function enumeration
+- `lspci` shell command; a boot self-test that needs no disk or NIC
+  attached to produce a verifiable result
+- Correctly identifies real hardware: Intel's 82441FX host bridge,
+  PIIX3 ISA/IDE bridges, and QEMU's own virtual VGA adapter
+- Foundational for future driver work (USB, sound, additional NICs)
+  rather than a driver itself - detection only, no new PCI-based
+  hardware support
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -143,7 +154,7 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000), video (Mode 13h), mouse (PS/2), rtc, pci
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
 │   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas

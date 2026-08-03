@@ -190,6 +190,10 @@ After `make run`, verify at the `nova>` prompt:
       doesn't work**, since automated headless testing of this
       specific interaction hit the same unresolved limitation Phase 7
       found for window-dragging (see PROGRESS.md's Phase 12 section)
+- [ ] `lspci` lists at least a host bridge, an ISA bridge, and an IDE
+      controller (all Intel/vendor `8086`) - these come from QEMU's
+      base chipset emulation and should be present regardless of which
+      `-device` flags were used to start the VM (Phase 13)
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu

@@ -62,7 +62,7 @@ avoids setting an expectation the project can't deliver on.
 |  +----------------------------------------------------+     |
 |  | Filesystem (VFS + FAT32, later ext-like)             |     |  Phase 3
 |  +----------------------------------------------------+     |
-|  | Device Drivers: VGA/Serial/PS2/PIT/ATA/PCI/NIC       |     |  Phase 1-3,6
+|  | Device Drivers: VGA/Serial/PS2/PIT/ATA/NIC [done]; PCI enumeration [done, Phase 13 - detection only, no PCI-based drivers yet] |     |  Phase 1-3,6,13
 |  +----------------------------------------------------+     |
 |  | Memory Management: GDT, paging, heap                 |     |  Phase 2-3
 |  +----------------------------------------------------+     |
@@ -124,19 +124,22 @@ at the end. Concretely, in the order it gets built:
 | **P10** | UDP + a TFTP client + networked package fetching for `nova-pkg` | Complete (scoped - see PROGRESS.md) |
 | **P11** | Capability-based file access control for ring-3 processes | Complete (scoped - see PROGRESS.md) |
 | **P12** | GUI Software Center - connects `nova-pkg` to the windowing system | Complete (scoped - see PROGRESS.md) |
+| **P13** | PCI bus enumeration | Complete (scoped - see PROGRESS.md; detection only, no PCI-based drivers yet) |
 
 **P1-P9 above were the full originally-planned roadmap; all nine
 completed it at the scoped level described in each row and in
-PROGRESS.md.** P10, P11, and P12 were each chosen from open follow-up
+PROGRESS.md.** P10 through P13 were each chosen from open follow-up
 items rather than a pre-written plan, since none exists past P9: P10
 closed P6's deferred UDP and P8's deferred network-fetch gap together;
 P11 closed the capabilities/least-privilege item from the security
 roadmap in section 4; P12 closed the GUI Software Center gap by
 building a small hand-crafted font rather than waiting for general
-text rendering. Further work (a real bootloader-writing installer,
-TCP/sockets, extending capability-based access control to resources
-beyond files, lowercase/extended font coverage, and whatever else
-follows) remains open and should each be scoped on their own terms
+text rendering; P13 added PCI device detection, foundational for any
+future USB/sound/additional-NIC driver work. Further work (a real
+bootloader-writing installer, TCP/sockets, extending capability-based
+access control to resources beyond files, lowercase/extended font
+coverage, and actual drivers for now-detectable PCI hardware) remains
+open and should each be scoped on their own terms
 rather than assumed as "next."
 
 Detailed, living status for what's actually implemented (as opposed to
