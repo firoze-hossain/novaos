@@ -24,6 +24,7 @@
 #include "../../net/udp.h"
 #include "../../task/process.h"
 #include "../../task/scheduler.h"
+#include "../../task/greeter_task.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
 
@@ -206,6 +207,29 @@ static void handle_net_send(registers_t* regs) {
     regs->eax = ok ? 0 : (uint32_t)-1;
 }
 
+/* Phase 17's SYS_SPAWN: the same capability-gate-then-act pattern as
+ * handle_open()/handle_net_send() above, for process creation instead
+ * of a filename or a network destination. process_create_user_task()
+ * (not process_create_sandboxed_task()) is used for the new process
+ * deliberately - a spawned process starts with no capabilities of its
+ * own; the ability to spawn does not imply the ability to grant
+ * capabilities to what's spawned; see PROGRESS.md. */
+static void handle_spawn(registers_t* regs) {
+    process_t* p = process_current();
+
+    if (p == NULL || !p->can_spawn) {
+        kernel_log("[SECURITY] pid %d denied SYS_SPAWN - spawn capability "
+                   "not granted\n", p != NULL ? p->pid : -1);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int new_pid = process_create_user_task("spawned", greeter_task);
+    kernel_log("[SYSCALL] pid %d SYS_SPAWN (capability granted) -> new "
+               "pid %d\n", p->pid, new_pid);
+    regs->eax = (uint32_t)new_pid;
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -239,6 +263,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_NET_SEND:
             handle_net_send(regs);
+            break;
+
+        case SYS_SPAWN:
+            handle_spawn(regs);
             break;
 
         default:

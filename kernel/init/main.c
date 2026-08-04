@@ -15,13 +15,16 @@
 #include "../fs/vfs.h"
 #include "../pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
+#include "../drivers/sound/ac97.h"
 #include "../net/net.h"
+#include "../net/dns.h"
 #include "../net/icmp.h"
 #include "../net/tftp.h"
 #include "../task/process.h"
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
 #include "../task/sandbox_demo.h"
+#include "../task/unprivileged_demo.h"
 #include "../shell/shell.h"
 #include "../shell/firstrun.h"
 #include "../lib/string.h"
@@ -229,6 +232,63 @@ void kernel_late_init(void) {
     pci_enumerate(pci_log_device);
     kernel_log("[ OK ] PCI ENUMERATION OK: %d device(s) found\n",
                pci_device_count);
+
+    /* Self-test: if an AC97 audio device is present, initialize it and
+     * play a short beep. Unlike every earlier self-test, there's no
+     * way to check "did this actually work" from headless kernel code
+     * alone - playback happens in the background on real/emulated
+     * hardware, with nothing to read back that proves audible sound
+     * came out. Verified instead by capturing QEMU's actual audio
+     * output to a WAV file during testing and inspecting its PCM data
+     * directly - see PROGRESS.md for how, and TESTING.md for how to
+     * reproduce it. */
+    ac97_init();
+    if (ac97_is_present()) {
+        ac97_beep();
+
+        /* Replaying after a previous beep has already finished is
+         * exactly the scenario that caught a real bug during
+         * interactive testing: the PCM OUT engine's internal state
+         * (CIV and related registers) was left wherever the first
+         * playback's completion left it, and simply rewriting BDBAR/
+         * LVI/CR without resetting first wasn't enough to make the
+         * card recognize a genuinely new play request - the first
+         * beep played correctly but a second one produced no audible
+         * output at all despite the function running and logging
+         * normally. Fixed in ac97_beep() itself (see its comment);
+         * exercising the replay here, not just once, is what makes
+         * that fix regression-proof in the automated self-test rather
+         * than relying solely on the interactive check that first
+         * caught it. */
+        timer_sleep_ms(400); /* let the first beep finish before replaying */
+        ac97_beep();
+    }
+
+    /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS
+     * proxy (10.0.2.3) - the same self-contained-test principle as
+     * the gateway ping and TFTP fetch self-tests above, extended to a
+     * third SLIRP-provided service. Unlike those two, this one's
+     * result (a real IP address for a real domain) depends on SLIRP's
+     * own upstream DNS resolution actually working, which in turn
+     * depends on outbound network access existing somewhere beneath
+     * this sandboxed environment - true in the environment this was
+     * developed and tested in, but not something NovaOS itself
+     * controls the way it controls answering its own ARP requests.
+     * Logged as a WARN rather than treated as a failure if it doesn't
+     * resolve, for exactly that reason. */
+    if (net_is_up()) {
+        uint32_t resolved_ip;
+        if (dns_resolve("example.com", NET_DNS_SERVER_IP, &resolved_ip)) {
+            kernel_log("[ OK ] DNS RESOLVE OK: example.com -> %d.%d.%d.%d\n",
+                       (int)(resolved_ip >> 24) & 0xFF,
+                       (int)(resolved_ip >> 16) & 0xFF,
+                       (int)(resolved_ip >> 8) & 0xFF,
+                       (int)resolved_ip & 0xFF);
+        } else {
+            kernel_log("[WARN] DNS resolve of example.com failed (no "
+                       "upstream network access from the DNS proxy?)\n");
+        }
+    }
 }
 
 static void print_banner(void) {
@@ -287,12 +347,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     const char* sandbox_caps[] = {"HELLO.TXT"};
     const uint32_t sandbox_hosts[] = {NET_GATEWAY_IP};
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
-                                   1, sandbox_hosts, 1);
+                                   1, sandbox_hosts, 1, true);
+    process_create_user_task("unprivileged", unprivileged_demo_task);
 
     kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
                "demo-a + demo-b (ring 3, private address spaces), "
                "sandbox (ring 3, capabilities: HELLO.TXT + gateway "
-               "network access only)\n");
+               "network access + spawn), unprivileged (ring 3, no "
+               "capabilities)\n");
 
     scheduler_start(); /* never returns */
 }

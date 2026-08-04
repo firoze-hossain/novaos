@@ -91,6 +91,19 @@ DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,med
 # attached.
 NET_FLAGS = -netdev user,id=net0,tftp=tools/fixtures/tftproot -device rtl8139,netdev=net0,mac=52:54:00:12:34:56
 
+# Phase 18: AC97 PCI audio, always attached with the portable "none"
+# backend - a real QEMU audiodev driver that discards audio and needs
+# no host audio hardware, guaranteeing `make test`/`make run` work
+# identically on any machine (a CI runner with no sound card included)
+# the same way every other self-test in this Makefile is designed to.
+# The tradeoff: with this backend, `beep` (or the boot-time self-test)
+# won't produce audible sound even on a real machine. To actually hear
+# it via `make run`, override AUDIO_FLAGS with a real backend for your
+# platform - e.g. `make run AUDIO_FLAGS="-audiodev pa,id=snd0 -device
+# AC97,audiodev=snd0"` on Linux with PulseAudio, or `-audiodev
+# coreaudio,id=snd0` on macOS. See TESTING.md.
+AUDIO_FLAGS = -audiodev none,id=noaudio -device AC97,audiodev=noaudio
+
 # Directories
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -147,11 +160,11 @@ $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DI
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
@@ -169,7 +182,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	@mkdir -p $(BUILD_DIR)
 	@rm -f $(TEST_LOG)
 	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
-	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(QEMU_FLAGS) \
+	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) \
 	    -display none -serial file:$(TEST_LOG) || true
 	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
@@ -187,6 +200,11 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "PCI ENUMERATION OK" $(TEST_LOG) && \
 	    grep -q "vendor=0x8086 device=0x1237" $(TEST_LOG) && \
 	    grep -q "Network up (RTL8139)" $(TEST_LOG) && \
+	    grep -q "sandbox. PASS: SYS_SPAWN succeeded" $(TEST_LOG) && \
+	    grep -q "unprivileged. PASS: SYS_SPAWN correctly denied" $(TEST_LOG) && \
+	    grep -q "greeter. Hello" $(TEST_LOG) && \
+	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
+	    grep -q "AC97 beep: playing" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_NET_SEND" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \

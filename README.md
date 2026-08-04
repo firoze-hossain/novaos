@@ -137,6 +137,18 @@ manager, and Windows-style usability conventions. See
   network stack (ARP, ICMP ping, TFTP) now runs correctly over it,
   proving PCI detection leads to real usable hardware support
 
+**Phases 17-19 - Spawn Capability, Sound & DNS (delivered together)**
+- Phase 17: `SYS_SPAWN` extends the capability model a third time to
+  process creation - the spawned process genuinely runs independently
+  (own PID, own output), not just a returned success code
+- Phase 18: a full AC97 PCI sound driver, found by PCI class code
+  rather than a specific vendor ID - verified by capturing and
+  analyzing real PCM audio output, which also caught and fixed a real
+  bug (replaying a beep after the first one finished produced silence)
+- Phase 19: a minimal DNS client - `ping`/`nslookup` now resolve real
+  hostnames, verified against actual external DNS resolution, not just
+  protocol-level correctness
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -165,13 +177,13 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci, sound (ac97)
 │   ├── fs/             # VFS pass-through + FAT32 (read + write)
-│   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp
+│   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp, dns
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
-│   ├── task/           # process table, scheduler, syscall + sandbox demo tasks
+│   ├── task/           # process table, scheduler, syscall + sandbox/greeter/unprivileged demo tasks
 │   ├── shell/          # minimal built-in shell + first-run wizard
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers

@@ -24,6 +24,9 @@ in the same PR as the code it describes.
 | P14 - Network Capability Enforcement | Complete (scoped - see below) |
 | P15 - Font Punctuation & Package Descriptions | Complete (scoped - see below) |
 | P16 - RTL8139 PCI NIC Driver | Complete (scoped - see below) |
+| P17 - Process Creation Capability | Complete (scoped - see below) |
+| P18 - AC97 PCI Sound Driver | Complete (scoped - see below) |
+| P19 - Minimal DNS Client | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1581,13 +1584,232 @@ first attempt - worth stating plainly rather than manufacturing a
   address there), but this approach wouldn't extend to a system with
   a real virtual/physical split for driver buffers.
 
-## Phase 17 and beyond
+## Phase 17 - Process Creation Capability
+
+**Status: Complete.** Delivered together with Phases 18 and 19 in one
+session. Extends Phase 11/14's per-process capability pattern to a
+third resource type: whether a process may create another process at
+all.
+
+### What was built
+
+- **`kernel/task/process.h`/`.c`**: `process_t` gained a boolean
+  `can_spawn` (rather than a list, like the other two capabilities) -
+  there's currently exactly one spawnable task type, so a list of
+  "which ones" would be pointless; a fixed yes/no is the honest scope
+  until NovaOS has a real exec-a-file mechanism.
+  `process_create_sandboxed_task()` gained a `can_spawn` parameter.
+- **`kernel/arch/x86/cpu/syscall.h`/`.c`**: new `SYS_SPAWN` syscall, no
+  arguments. `handle_spawn()` checks the calling process's `can_spawn`
+  before calling `process_create_user_task()` - deliberately not
+  `process_create_sandboxed_task()`, so the ability to spawn does not
+  imply the ability to grant capabilities to what's spawned.
+- **`kernel/task/greeter_task.*`**: the one spawnable task - prints a
+  message and exits, enough to prove a spawned process genuinely runs
+  as its own independent process (own PID, own address space) rather
+  than `SYS_SPAWN` merely returning a fake success.
+- **`kernel/task/unprivileged_demo.*`**: a new, deliberately
+  capability-free process (plain `process_create_user_task()`) that
+  proves the denied case - the existing sandbox process was granted
+  spawn capability and already proves the allowed case, so this needed
+  a separate process rather than a third code path in the same one.
+
+### Verified behavior
+
+First try, no debugging needed. The spawned process's own
+`[greeter] Hello!` message and its own `exited` log line are genuine
+proof it ran as an independent process, not just a returned success
+code:
+```
+[SYSCALL] pid 5 SYS_SPAWN (capability granted) -> new pid 7
+[sandbox] PASS: SYS_SPAWN succeeded - spawn capability was granted.
+[unprivileged] Starting; I have no capabilities at all (plain process_create_user_task).
+[SECURITY] pid 6 denied SYS_SPAWN - spawn capability not granted
+[unprivileged] PASS: SYS_SPAWN correctly denied - I was never granted spawn capability.
+[ OK ] Process 'unprivileged' (pid 6) exited
+[greeter] Hello! I was spawned by another process via SYS_SPAWN.
+[ OK ] Process 'spawned' (pid 7) exited
+```
+Both PASS conditions (allowed via sandbox, denied via unprivileged)
+appear correctly, with the kernel's `[SECURITY]` log agreeing with the
+denied process's own self-check. Zero regression, zero new compiler
+warnings. `make test` asserts both PASS lines and the greeter's
+message appear.
+
+### Known limitations
+
+- **Exactly one spawnable task type, chosen automatically** - there is
+  no way for the caller to select which one (moot today with only one
+  to choose from, but a real limitation the moment a second exists).
+- **Still filesystem+network+spawn only** as the complete set of
+  capability-gated resources - every other privileged operation
+  remains either fully open to any syscall that already exists for it
+  (none currently touch anything else privileged) or simply
+  inaccessible from ring 3 entirely.
+
+## Phase 18 - AC97 PCI Sound Driver
+
+**Status: Complete.** A full second PCI DMA driver, and the natural
+next step after Phase 16's RTL8139: proving the "detect hardware via
+PCI, then actually drive it" pattern generalizes beyond networking.
+
+### What was built
+
+- **`kernel/drivers/sound/ac97.*`**: found via `pci_enumerate()` by
+  PCI **class code** (0x04/0x01, multimedia audio device) rather than
+  a hardcoded vendor/device ID the way RTL8139's driver matches - the
+  more correct, general approach here, since AC97 is a standardized
+  register interface implemented by many different vendors' chipsets,
+  not one specific card. Reads both PCI BARs (BAR0 = Native Audio
+  Mixer for codec/volume registers, BAR1 = Native Audio Bus Master for
+  DMA control), enables PCI bus mastering, resets the codec, sets full
+  volume, and plays a short tone through a buffer descriptor list
+  DMA'd directly from a static kernel-image buffer - the same
+  "identity-mapped low memory needs no separate physical allocator"
+  reasoning RTL8139's driver already established. The tone itself is
+  an integer-only square wave (no floating point / FPU dependency this
+  kernel hasn't set up).
+- **`kernel/drivers/pci/pci.c`**: added a multimedia/audio class name,
+  fixing a cosmetic "Unknown" label found while testing.
+- **Shell**: added `beep`.
+- **`Makefile`**: AC97 is now always attached via a new `AUDIO_FLAGS`
+  variable defaulting to QEMU's portable `none` backend (no host audio
+  hardware required, works identically in CI) - overridable for a real
+  backend to actually hear output via `make run`.
+
+### Verified with real rigor - and a real bug found
+
+Unlike every other self-test in this project, there's no way to check
+"did audio actually play" from headless kernel code alone - playback
+happens in hardware, with nothing to read back that proves audible
+sound came out. Verified instead by capturing QEMU's actual audio
+output via its `-audiodev wav` backend and parsing the raw PCM samples
+directly in Python:
+- Confirmed non-silent audio starting exactly when the self-test runs,
+  with regular waveform transitions at approximately the target
+  440Hz, lasting almost exactly the requested 0.3 seconds, followed by
+  clean silence - not just "a WAV file was created," but "the WAV file
+  contains the specific tone this driver was asked to produce."
+
+**A real bug, caught by this verification, not assumed away**: the
+first beep played correctly, but replaying after it had already
+finished produced no audible output at all, despite the function
+running and logging normally. The PCM engine's internal state (CIV and
+related registers) was left wherever the first playback's completion
+left it; simply rewriting BDBAR/LVI/CR without resetting first wasn't
+enough to make the card recognize a genuinely new play request. Fixed
+by explicitly stopping and resetting the channel (the `CR_RR` bit)
+before every play, then reconfirmed via a second WAV capture showing
+two correctly-shaped, distinct tone regions instead of one real tone
+followed by silence on the replay. The boot self-test now plays twice
+with a delay between, specifically to keep this regression-proof in
+automated testing rather than relying solely on the interactive check
+that first caught it.
+
+Zero regression (every Phase 2-17 `make test` marker still passes);
+`make test` now also asserts both the AC97 init and beep lines appear.
+
+### Known limitations / follow-ups
+
+- **PCM output only** - no recording (PCM in/mic in), no variable
+  sample rate (fixed at the AC97 standard 48kHz), no volume control
+  exposed to the user (hardcoded to maximum).
+- **One fixed tone** - no way to specify frequency, duration, or
+  waveform shape from the shell; `beep` always plays the same 440Hz
+  square wave.
+- **No IRQ support** - polled, matching the style of every other
+  driver in this tree, at the same latency/CPU-overhead tradeoff that
+  choice always carries.
+- **I/O-space BARs only**, matching RTL8139's same limitation and for
+  the same reason - not a practical problem for real AC97 hardware,
+  which always provides an I/O BAR, but not a general MMIO fallback.
+
+## Phase 19 - Minimal DNS Client
+
+**Status: Complete.** Closes a real, previously-flagged gap: every
+network command (`ping`, `tftp`, `pkg fetch`) only ever accepted raw
+IP addresses. Chosen instead of full TCP/sockets (the other major
+open networking item) as a much lower-risk way to still meaningfully
+extend what NovaOS's network stack can do - no connection state, no
+retransmission/congestion-control state machine, just a single
+request/response over UDP, the same shape as the existing TFTP client.
+
+### What was built
+
+- **`kernel/net/dns.*`**: RFC 1035 A-record queries only. Builds a
+  standard DNS query (recursion desired), sends it via the existing
+  UDP layer (Phase 10), and parses the response - including handling
+  DNS name compression (a 2-byte pointer back into the message,
+  standard in every real-world response's answer section) enough to
+  correctly skip over a compressed name, though not general enough to
+  *build* one. The same synchronous, single-outstanding-request,
+  bounded-timeout pattern `arp_resolve()`, `icmp_ping()`, and
+  `tftp_get()` already use.
+- **`kernel/net/net.h`**: added `NET_DNS_SERVER_IP` (10.0.2.3) - QEMU
+  SLIRP's conventional built-in DNS proxy address, one more of the
+  "SLIRP always answers this" addresses the gateway ping and TFTP
+  self-tests already rely on.
+- **Shell**: added `nslookup HOSTNAME`; `ping` now tries DNS resolution
+  automatically whenever its argument isn't a raw dotted-quad IP,
+  falling back cleanly to the old error message if that also fails.
+
+### Verified behavior - genuine external resolution, not just protocol correctness
+
+Unlike the gateway ping and TFTP fetch self-tests (which SLIRP answers
+entirely on its own, with zero dependency on real internet access),
+this one asked SLIRP to resolve a real public hostname and got back
+real answers:
+```
+[ OK ] DNS RESOLVE OK: example.com -> 104.20.23.154
+```
+(A second run during testing returned a different, equally valid IP -
+`172.66.147.243` - consistent with `example.com` actually being served
+from multiple addresses; both are genuine, not fabricated.) Interactive
+testing confirmed `nslookup example.com` and `ping example.com` (which
+correctly printed the resolved IP before pinging it) both work through
+the shell with zero crashes in the serial log. Zero regression - every
+Phase 2-18 `make test` marker still passes.
+
+### A deliberate exception to this project's usual self-contained-testing principle
+
+Every other network self-test in this project (ping, TFTP fetch) is
+answered directly by QEMU SLIRP itself and therefore works with zero
+dependency on real outbound network access from the host or CI runner
+- a core design principle followed since Phase 6. DNS resolution
+breaks that: SLIRP's DNS proxy forwards the query upstream to whatever
+real DNS resolution the host environment provides, which this project
+does not control the way it controls SLIRP's own self-answering
+behavior. The self-test therefore logs `[WARN]` rather than being
+treated as a hard failure, and is **not** included in `make test`'s
+pass/fail assertion chain - deliberately, so a CI environment or
+sandboxed host with no outbound network access doesn't fail the entire
+test suite over something outside NovaOS's control. This is called out
+explicitly rather than silently making the check "soft" without
+explanation.
+
+### Known limitations / follow-ups
+
+- **A-records only** - no AAAA (IPv6), no MX/CNAME/TXT/other record
+  types, no reverse lookups.
+- **No caching** - every `ping`/`nslookup` call re-resolves from
+  scratch, even for a hostname just looked up moments ago.
+- **No retry beyond the single bounded wait** - a single lost UDP
+  packet (query or response) means the whole resolution fails and has
+  to be manually retried by the user, the same tradeoff `tftp_get()`
+  already accepts for the same reason (a local virtual network with
+  effectively zero packet loss).
+- **Fixed DNS server** (`NET_DNS_SERVER_IP`, hardcoded to SLIRP's
+  proxy address) - no way to configure a different resolver, and no
+  DHCP-provided DNS server option either (NovaOS has no DHCP client at
+  all, unchanged since Phase 6).
+
+## Phase 20 and beyond
 
 Not started. Remaining candidates for future work, in no particular
 order: a real bootloader-writing installer, TCP/sockets, extending
-capability-based access control to further resource types (process
-creation), true lowercase font forms, and USB/sound drivers (now that
-Phase 13's PCI enumeration and Phase 16's RTL8139 driver together show
-the full path from "detect hardware" to "use hardware"). Each would
-benefit from being scoped on its own terms rather than assumed as
-"next."
+capability-based access control to further resource types beyond
+files/network/spawn, true lowercase font forms, and USB drivers (now
+that Phase 13's PCI enumeration plus Phase 16 and 18's two real PCI
+drivers show the full path from "detect hardware" to "use hardware"
+for more than one device class). Each would benefit from being scoped
+on its own terms rather than assumed as "next."

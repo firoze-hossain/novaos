@@ -16,6 +16,7 @@
 #include "../fs/vfs.h"
 #include "../net/net.h"
 #include "../net/icmp.h"
+#include "../net/dns.h"
 #include "../net/tftp.h"
 #include "../drivers/video/vga_graphics.h"
 #include "../drivers/mouse/ps2mouse.h"
@@ -24,6 +25,7 @@
 #include "../pkg/pkgmgr.h"
 #include "../drivers/rtc/rtc.h"
 #include "../drivers/pci/pci.h"
+#include "../drivers/sound/ac97.h"
 #include "firstrun.h"
 #include "../task/process.h"
 #include "../lib/string.h"
@@ -66,7 +68,9 @@ static void cmd_help(void) {
     vga_puts("  ls        - list files on the mounted disk\n");
     vga_puts("  cat FILE  - print a file's contents\n");
     vga_puts("  ps        - list running processes\n");
-    vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2)\n");
+    vga_puts("  ping IP   - send an ICMP echo request (e.g. ping 10.0.2.2, "
+              "or ping example.com)\n");
+    vga_puts("  nslookup HOSTNAME - resolve a hostname to an IP via DNS\n");
     vga_puts("  gui       - enter graphics mode; drag windows with the "
               "mouse, ESC to exit\n");
     vga_puts("  store     - Software Center GUI: install/remove packages "
@@ -79,12 +83,13 @@ static void cmd_help(void) {
     vga_puts("  hostname  - show this computer's configured hostname\n");
     vga_puts("  whoami    - show the configured username\n");
     vga_puts("  lspci     - list detected PCI devices\n");
+    vga_puts("  beep      - play a short tone through AC97 audio\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 13: PCI Bus Enumeration\n");
+    vga_puts("Phase 19: Minimal DNS Client\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -185,6 +190,28 @@ static bool parse_ipv4(const char* text, uint32_t* out_ip) {
     return true;
 }
 
+static void cmd_nslookup(const char* arg) {
+    if (!net_is_up()) {
+        vga_puts("nslookup: no network adapter present\n");
+        return;
+    }
+    if (arg[0] == '\0') {
+        vga_puts("Usage: nslookup HOSTNAME\n");
+        return;
+    }
+
+    uint32_t resolved_ip;
+    if (dns_resolve(arg, NET_DNS_SERVER_IP, &resolved_ip)) {
+        vga_printf("%s -> %d.%d.%d.%d\n", arg,
+                   (int)(resolved_ip >> 24) & 0xFF,
+                   (int)(resolved_ip >> 16) & 0xFF,
+                   (int)(resolved_ip >> 8) & 0xFF, (int)resolved_ip & 0xFF);
+    } else {
+        vga_puts("nslookup: resolution failed (no such host, or no "
+                  "response from the DNS server)\n");
+    }
+}
+
 static void cmd_ping(const char* arg) {
     if (!net_is_up()) {
         vga_puts("ping: no network adapter present\n");
@@ -193,8 +220,18 @@ static void cmd_ping(const char* arg) {
 
     uint32_t dest_ip;
     if (!parse_ipv4(arg, &dest_ip)) {
-        vga_puts("ping: usage: ping A.B.C.D\n");
-        return;
+        /* Not a raw dotted-quad - try resolving it as a hostname
+         * instead, now that Phase 19 added a DNS client. Falls back
+         * cleanly to the old "must be an IP" error if that also
+         * fails, rather than a confusing DNS-specific message for
+         * what might just be a typo'd IP address. */
+        if (!dns_resolve(arg, NET_DNS_SERVER_IP, &dest_ip)) {
+            vga_puts("ping: usage: ping A.B.C.D or ping HOSTNAME\n");
+            return;
+        }
+        vga_printf("(%s resolved to %d.%d.%d.%d)\n", arg,
+                   (int)(dest_ip >> 24) & 0xFF, (int)(dest_ip >> 16) & 0xFF,
+                   (int)(dest_ip >> 8) & 0xFF, (int)dest_ip & 0xFF);
     }
 
     vga_printf("Pinging %s ...\n", arg);
@@ -365,6 +402,15 @@ static void cmd_lspci(void) {
     pci_enumerate(print_pci_device);
 }
 
+static void cmd_beep(void) {
+    if (!ac97_is_present()) {
+        vga_puts("beep: no AC97 audio device detected\n");
+        return;
+    }
+    vga_puts("Beep!\n");
+    ac97_beep();
+}
+
 static void cmd_hostname(void) {
     vga_puts(firstrun_get_hostname());
     vga_putchar('\n');
@@ -465,6 +511,8 @@ static void dispatch(char* line) {
         cmd_cat(line + 4);
     } else if (strncmp(line, "ping ", 5) == 0) {
         cmd_ping(line + 5);
+    } else if (strncmp(line, "nslookup ", 9) == 0) {
+        cmd_nslookup(line + 9);
     } else if (strncmp(line, "tftp ", 5) == 0) {
         cmd_tftp(line + 5);
     } else if (strcmp(line, "pkg") == 0) {
@@ -479,6 +527,8 @@ static void dispatch(char* line) {
         cmd_whoami();
     } else if (strcmp(line, "lspci") == 0) {
         cmd_lspci();
+    } else if (strcmp(line, "beep") == 0) {
+        cmd_beep();
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');

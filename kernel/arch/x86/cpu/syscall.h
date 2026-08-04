@@ -41,6 +41,15 @@
  * process's capability list or the underlying send fails. */
 #define SYS_NET_SEND 7
 
+/* Phase 17: the third capability-gated resource, this one a boolean
+ * rather than a list - can this process create another process at
+ * all. Takes no arguments: there's currently exactly one spawnable
+ * task type (see kernel/task/greeter_task.h) since NovaOS has no
+ * general exec-a-file mechanism yet, so there's nothing for an
+ * argument to select between. Returns the new process's PID, or -1 if
+ * the calling process wasn't granted spawn capability. */
+#define SYS_SPAWN 8
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

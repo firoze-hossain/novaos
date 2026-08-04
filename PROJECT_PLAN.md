@@ -62,7 +62,7 @@ avoids setting an expectation the project can't deliver on.
 |  +----------------------------------------------------+     |
 |  | Filesystem (VFS + FAT32, later ext-like)             |     |  Phase 3
 |  +----------------------------------------------------+     |
-|  | Device Drivers: VGA/Serial/PS2/PIT/ATA/NIC(ISA+PCI) [done]; PCI enumeration [done] |     |  Phase 1-3,6,13,16
+|  | Device Drivers: VGA/Serial/PS2/PIT/ATA/NIC(ISA+PCI)/AC97 [done]; PCI enumeration [done] |     |  Phase 1-3,6,13,16,18
 |  +----------------------------------------------------+     |
 |  | Memory Management: GDT, paging, heap                 |     |  Phase 2-3
 |  +----------------------------------------------------+     |
@@ -87,7 +87,7 @@ at the end. Concretely, in the order it gets built:
 | Ring 3 execution + preemptive scheduling | 4 | Done - real CPL=3 processes, round-robin scheduler; see PROGRESS.md |
 | Syscall-gated kernel entry (user code can't call kernel functions directly) | 4 | Done - int 0x80, DPL=3 gate is the only path from ring 3 into the kernel |
 | Per-process address spaces (no process can read another's memory) | 5 | Done - each process gets its own page directory and private stack; proven by a boot-time test, not just claimed (see PROGRESS.md) |
-| Least-privilege process model (capabilities, not raw root/non-root) | 11, 14 | Done (scoped) - syscall-gated, per-process capability lists for both files (P11) and network destinations (P14); proven with falsifiable allow/deny tests, not just claimed (see PROGRESS.md). Not extended to process-creation or other resources yet |
+| Least-privilege process model (capabilities, not raw root/non-root) | 11, 14, 17 | Done (scoped) - syscall-gated, per-process capability lists for files (P11), network destinations (P14), and process creation (P17); proven with falsifiable allow/deny tests, not just claimed (see PROGRESS.md). Not extended to other resource types yet |
 | Mandatory sandboxing for GUI apps | 7+ | Planned - needs a GUI to sandbox in the first place |
 | NX (non-executable) data pages - stack/heap can't be executed as code | - | Deferred - needs PAE or long mode, which 32-bit non-PAE paging (built in Phase 3) doesn't have |
 | Signed packages + signature verification in the package manager | 9+ | Planned - Phase 8 built the package manager itself with no signing yet |
@@ -128,10 +128,13 @@ at the end. Concretely, in the order it gets built:
 | **P14** | Extend capability-based access control to network destinations | Complete (scoped - see PROGRESS.md) |
 | **P15** | Font punctuation + package descriptions in the Software Center | Complete (scoped - see PROGRESS.md) |
 | **P16** | RTL8139 PCI NIC driver | Complete (scoped - see PROGRESS.md) |
+| **P17** | Extend capability-based access control to process creation | Complete (scoped - see PROGRESS.md) |
+| **P18** | AC97 PCI sound driver | Complete (scoped - see PROGRESS.md) |
+| **P19** | Minimal DNS client | Complete (scoped - see PROGRESS.md) |
 
 **P1-P9 above were the full originally-planned roadmap; all nine
 completed it at the scoped level described in each row and in
-PROGRESS.md.** P10 through P16 were each chosen from open follow-up
+PROGRESS.md.** P10 through P19 were each chosen from open follow-up
 items rather than a pre-written plan, since none exists past P9: P10
 closed P6's deferred UDP and P8's deferred network-fetch gap together;
 P11 closed the capabilities/least-privilege item from the security
@@ -143,11 +146,15 @@ delivered together in one batch - P14 extended P11's capability model
 to network destinations, P15 rounded out the font with punctuation
 real package descriptions actually use, and P16 proved P13's PCI
 detection leads to actual usable hardware support by adding a full
-second NIC driver. Further work (a real bootloader-writing installer,
-TCP/sockets, extending capability-based access control to further
-resources like process creation, true lowercase font forms, and USB/
-sound drivers) remains open and should each be scoped on their own
-terms
+second NIC driver; P17, P18, and P19 were delivered together in a
+second batch - P17 extended the capability model a third time to
+process creation, P18 added a full second PCI driver class (AC97
+audio) proving the "detect then drive" pattern generalizes beyond
+networking, and P19 added hostname resolution as a lower-risk
+alternative to tackling full TCP/sockets. Further work (a real
+bootloader-writing installer, TCP/sockets, extending capability-based
+access control to further resources, true lowercase font forms, and
+USB drivers) remains open and should each be scoped on their own terms
 rather than assumed as "next."
 
 Detailed, living status for what's actually implemented (as opposed to

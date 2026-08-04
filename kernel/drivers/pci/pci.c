@@ -102,6 +102,9 @@ const char* pci_class_name(uint8_t class_code, uint8_t subclass) {
             return "Network controller";
         case 0x03:
             return "Display controller";
+        case 0x04:
+            if (subclass == 0x01) return "Multimedia audio controller";
+            return "Multimedia controller";
         case 0x06:
             if (subclass == 0x00) return "Host bridge";
             if (subclass == 0x01) return "ISA bridge";

@@ -60,6 +60,14 @@ typedef struct process {
      * capabilities. */
     uint32_t allowed_hosts[MAX_CAPABILITIES];
     int allowed_host_count;
+
+    /* Phase 17: a third capability, this one just a boolean rather
+     * than a list - whether this process may SYS_SPAWN at all. There
+     * is currently only one spawnable task type (see
+     * kernel/task/greeter_task.h), so a list of "which ones" would be
+     * pointless; a fixed yes/no is the honest scope. False by default,
+     * same least-privilege pattern as the other two. */
+    bool can_spawn;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -83,15 +91,18 @@ int process_create_kernel_task(const char* name, void (*entry)(void));
 int process_create_user_task(const char* name, void (*entry)(void));
 
 /* Same as process_create_user_task(), but also grants the new process
- * two capability lists: the exact filenames (8.3, e.g. "HELLO.TXT") it
- * may SYS_OPEN, and the exact IPv4 addresses (host byte order) it may
- * SYS_NET_SEND to. Either list may be empty (pass NULL/0 for the pair
- * you don't need) - a process only gets what's explicitly granted in
- * whichever lists are non-empty. Both are copied at creation time, not
- * referenced afterward; each count is clamped to MAX_CAPABILITIES. */
+ * three capabilities: the exact filenames (8.3, e.g. "HELLO.TXT") it
+ * may SYS_OPEN, the exact IPv4 addresses (host byte order) it may
+ * SYS_NET_SEND to, and whether it may SYS_SPAWN at all. Either list
+ * may be empty (pass NULL/0 for the pair you don't need) - a process
+ * only gets what's explicitly granted in whichever lists are
+ * non-empty, plus can_spawn if true. Both lists are copied at
+ * creation time, not referenced afterward; each count is clamped to
+ * MAX_CAPABILITIES. */
 int process_create_sandboxed_task(const char* name, void (*entry)(void),
                                    const char** filenames, int file_count,
-                                   const uint32_t* hosts, int host_count);
+                                   const uint32_t* hosts, int host_count,
+                                   bool can_spawn);
 
 /* Marks the current process TERMINATED and switches away from it
  * permanently. Called by the SYS_EXIT syscall handler; never returns. */

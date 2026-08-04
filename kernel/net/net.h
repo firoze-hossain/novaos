@@ -11,6 +11,16 @@
  * future work in PROGRESS.md. */
 #define NET_OUR_IP      0x0A00020Fu /* 10.0.2.15  */
 #define NET_GATEWAY_IP  0x0A000202u /* 10.0.2.2   */
+#define NET_DNS_SERVER_IP 0x0A000203u /* 10.0.2.3 - QEMU SLIRP's
+                                          conventional built-in DNS
+                                          proxy address, one more of
+                                          the "self-contained test
+                                          target" addresses SLIRP
+                                          always answers on, the same
+                                          principle the gateway ping
+                                          and TFTP self-tests already
+                                          rely on (see Phase 19 in
+                                          PROGRESS.md) */
 #define NET_NETMASK     0xFFFFFF00u /* 255.255.255.0 */
 
 /* Builds a uint32_t from four dotted-decimal octets, host byte order

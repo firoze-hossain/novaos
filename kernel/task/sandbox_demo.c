@@ -52,6 +52,12 @@ static inline int sys_net_send(unsigned int dest_ip, unsigned short dest_port,
     return result;
 }
 
+static inline int sys_spawn(void) {
+    int result = SYS_SPAWN;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
 static inline void sys_exit(void) {
     __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT));
 }
@@ -115,6 +121,18 @@ void sandbox_demo_task(void) {
     } else {
         sys_write("[sandbox] FAIL: 10.0.2.100 should have been denied, but "
                   "SYS_NET_SEND succeeded!\n");
+    }
+
+    /* Spawn capability (allowed case - the denied case is exercised by
+     * a separate, plainly-created process with no capabilities at
+     * all; see kernel_main()). */
+    int spawned_pid = sys_spawn();
+    if (spawned_pid >= 0) {
+        sys_write("[sandbox] PASS: SYS_SPAWN succeeded - spawn capability "
+                  "was granted.\n");
+    } else {
+        sys_write("[sandbox] FAIL: expected SYS_SPAWN to succeed - spawn "
+                  "capability was granted.\n");
     }
 
     sys_exit();

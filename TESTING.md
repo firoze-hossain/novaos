@@ -205,9 +205,39 @@ After `make run`, verify at the `nova>` prompt:
 - [ ] `store` now shows each package's description on a second line,
       not just its name (Phase 15) - "A TINY TEXT EDITOR (DEMO
       PACKAGE)" should render with legible parentheses
+- [ ] Boot output shows `[greeter] Hello! I was spawned by another
+      process via SYS_SPAWN` plus both `[sandbox] PASS: SYS_SPAWN
+      succeeded` and `[unprivileged] PASS: SYS_SPAWN correctly denied`
+      (Phase 17) - the spawned process's own message is what proves it
+      really ran as an independent process, not just a returned code
+- [ ] `beep` plays a short tone - by default this uses a silent "none"
+      audio backend (see below), so you won't actually hear anything
+      unless you override `AUDIO_FLAGS` (Phase 18)
+- [ ] `nslookup example.com` resolves to a real IP address, and `ping
+      example.com` prints the resolved IP before pinging it (Phase
+      19) - both depend on real outbound network access existing
+      somewhere beneath wherever you're running this, unlike every
+      other network self-test in this project
 - [ ] Backspace during typing erases the previous character on screen
 - [ ] `clear` clears the screen and resets the cursor
 - [ ] `reboot` restarts the VM back to the GRUB menu
+
+### About audio (Phase 18+)
+
+`make run`/`make test` always attach an AC97 sound device, but with
+QEMU's `none` audio backend by default - it accepts audio output and
+silently discards it, so `beep` runs without errors but produces no
+actual sound, on any machine, with no host audio hardware required.
+This keeps testing portable the same way every other self-test in this
+project is designed to be.
+
+To actually **hear** `beep`, override `AUDIO_FLAGS` with a backend for
+your platform, for example:
+```bash
+make run AUDIO_FLAGS="-audiodev pa,id=snd0 -device AC97,audiodev=snd0"      # Linux, PulseAudio
+make run AUDIO_FLAGS="-audiodev coreaudio,id=snd0 -device AC97,audiodev=snd0"  # macOS
+make run AUDIO_FLAGS="-audiodev dsound,id=snd0 -device AC97,audiodev=snd0"     # Windows
+```
 
 ### About the test disk image (Phase 3+)
 
