@@ -229,6 +229,30 @@ help:
 	@echo "  make test     - Headless boot smoke test (for CI)"
 	@echo "  make clean    - Clean build files"
 	@echo "  make setup    - Install dependencies"
+	@echo "  make install-image - Build a bootable image + print USB/VM install instructions"
 	@echo "  make help     - Show this help"
 
-.PHONY: all run debug test clean setup help
+# Phase 20: novaos.iso is a hybrid image (xorriso/grub-mkrescue's
+# default output) - the same file boots both as an El Torito CD *and*
+# as a raw BIOS hard disk/USB image via its embedded MBR. This is
+# NovaOS's real installer: no separate bootloader-writing step is
+# needed, because grub-mkrescue already produces one. Verified by
+# attaching novaos.iso directly as a QEMU hard disk (not -cdrom) and
+# confirming the full system - FAT32, networking, everything - boots
+# identically (see PROGRESS.md's Phase 20 entry).
+install-image: $(ISO_FILE) $(DISK_IMG)
+	@echo ""
+	@echo "✅ $(ISO_FILE) is a hybrid image: it boots as a CD *and* as a"
+	@echo "   raw BIOS disk/USB image from the same file - this is"
+	@echo "   NovaOS's installer. To put it on a real USB drive (this ERASES"
+	@echo "   the drive - double check the device path first):"
+	@echo ""
+	@echo "     sudo dd if=$(ISO_FILE) of=/dev/sdX bs=4M status=progress && sync"
+	@echo ""
+	@echo "   To run persistently in a VM (VirtualBox/VMware/QEMU/etc.),"
+	@echo "   attach $(ISO_FILE) as a regular hard disk (NOT a CD/DVD drive)."
+	@echo "   Attach $(DISK_IMG) as a second hard disk for persistent data"
+	@echo "   (packages, SYSTEM.CFG, etc.) - see TESTING.md for why these"
+	@echo "   are still two separate images rather than one, for now."
+
+.PHONY: all run debug test clean setup help install-image

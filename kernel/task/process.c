@@ -205,11 +205,51 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
     return p->pid;
 }
 
+/* Phase 22: frees the resources a ring-3 process exclusively owns -
+ * the physical frames backing its private user stack, the page table
+ * that mapped them, and the process's own page directory. Never
+ * touches the shared kernel range (identity-mapped 0-64MB, copied
+ * into every process's directory by paging_create_address_space()) -
+ * only this process's own exclusive allocations, found by walking
+ * just the one page-directory entry USER_STACK_VIRT_BASE always falls
+ * into, which nothing else ever shares. This closes a real, long-
+ * documented gap: every user process's stack memory, page table, and
+ * page directory leaked permanently on exit since Phase 4/5. */
+static void free_user_address_space(uint32_t page_directory_phys) {
+    uint32_t* pd = (uint32_t*)page_directory_phys;
+    uint32_t pd_index = USER_STACK_VIRT_BASE >> 22;
+
+    if (pd[pd_index] & PAGE_PRESENT) {
+        uint32_t pt_phys = pd[pd_index] & 0xFFFFF000u;
+        uint32_t* pt = (uint32_t*)pt_phys;
+        uint32_t first_pt_entry = (USER_STACK_VIRT_BASE >> 12) & 0x3FFu;
+        uint32_t stack_pages = USER_STACK_SIZE / 4096;
+
+        for (uint32_t i = 0; i < stack_pages; i++) {
+            uint32_t entry = pt[first_pt_entry + i];
+            if (entry & PAGE_PRESENT) {
+                pmm_free_frame(entry & 0xFFFFF000u);
+            }
+        }
+        pmm_free_frame(pt_phys);
+    }
+
+    pmm_free_frame(page_directory_phys);
+}
+
 void process_exit_current(void) {
     process_t* p = scheduler_current();
     if (p != NULL) {
         p->state = PROCESS_TERMINATED;
         kernel_log("[ OK ] Process '%s' (pid %d) exited\n", p->name, p->pid);
+
+        if (p->kernel_stack_alloc != NULL) {
+            kfree(p->kernel_stack_alloc);
+            p->kernel_stack_alloc = NULL;
+        }
+        if (p->is_user) {
+            free_user_address_space(p->page_directory_phys);
+        }
     }
     scheduler_yield();
     /* Should never reach here - a TERMINATED process is never picked

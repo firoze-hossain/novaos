@@ -311,3 +311,23 @@ For a crash that happens *before* your own code can log anything
 (e.g. a bad GDT/IDT descriptor), add `-d int,cpu_reset -D qemu.log` to
 the QEMU invocation in the Makefile temporarily and inspect `qemu.log`
 for the register dump at the point of the fault.
+
+## Installing on real hardware or a persistent VM (Phase 20+)
+
+`novaos.iso` is a hybrid image - the exact same file works as a
+bootable CD *and* as a raw BIOS disk/USB image, verified by attaching
+it as a plain QEMU hard disk (no `-cdrom`) and confirming the full
+system boots identically. Run `make install-image` for the exact
+commands, or directly:
+
+```bash
+# Write to a real USB drive - THIS ERASES THE DRIVE. Double-check
+# the device path (lsblk/diskutil list) before running this.
+sudo dd if=novaos.iso of=/dev/sdX bs=4M status=progress && sync
+```
+
+For a persistent VM (VirtualBox, VMware, QEMU, etc.), attach
+`novaos.iso` as a regular hard disk - **not** a CD/DVD drive - and
+attach `disk.img` as a second hard disk for persistent data (packages,
+`SYSTEM.CFG`, etc.). These are still two separate images rather than
+one unified disk - see PROGRESS.md's Phase 20 entry for why.

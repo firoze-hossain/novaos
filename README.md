@@ -1,12 +1,25 @@
 # NovaOS
 
 [![Build & Boot Test](https://github.com/firoze-hossain/novaos/actions/workflows/ci.yml/badge.svg)](https://github.com/firoze-hossain/novaos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 
 A from-scratch x86 operating system in C and Assembly, combining a
 Linux-style modular kernel, an Ubuntu-style friendly userland/package
 manager, and Windows-style usability conventions. See
-[PROJECT_PLAN.md](PROJECT_PLAN.md) for the full vision and roadmap, and
-[PROGRESS.md](PROGRESS.md) for exactly what's implemented today.
+[PROJECT_PLAN.md](PROJECT_PLAN.md) for the full vision and roadmap,
+[PROGRESS.md](PROGRESS.md) for exactly what's implemented today, and
+[CHANGELOG.md](CHANGELOG.md) for the release history. Licensed under
+[MIT](LICENSE).
+
+## Installing NovaOS
+
+`novaos.iso` is a hybrid image: the same file boots as a CD *and* as a
+real BIOS hard disk/USB image - this is NovaOS's installer, and it
+works today with no extra steps. Run `make install-image` for the
+exact commands to write it to a USB drive or attach it persistently in
+a VM.
+
 
 ## Features
 
@@ -148,6 +161,18 @@ manager, and Windows-style usability conventions. See
 - Phase 19: a minimal DNS client - `ping`/`nslookup` now resolve real
   hostnames, verified against actual external DNS resolution, not just
   protocol-level correctness
+
+**Phases 20-22 - Release: Installable Image, Licensing & Hardening**
+- Phase 20: `novaos.iso` is a hybrid image - verified to boot as a
+  real BIOS disk/USB image with no CD-ROM emulation at all, using
+  GRUB's own proven tooling rather than a custom bootloader. `make
+  install-image` prints the exact steps to install it.
+- Phase 21: MIT license, version bumped to 1.0.0, and a new
+  [CHANGELOG.md](CHANGELOG.md) summarizing the full release.
+- Phase 22: fixed a real, long-documented resource leak - every
+  process's kernel stack, user stack, and page directory now get freed
+  on exit, validated against the project's most demanding existing
+  test coverage (five process exits every single boot).
 
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.

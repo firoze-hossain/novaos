@@ -131,6 +131,12 @@ at the end. Concretely, in the order it gets built:
 | **P17** | Extend capability-based access control to process creation | Complete (scoped - see PROGRESS.md) |
 | **P18** | AC97 PCI sound driver | Complete (scoped - see PROGRESS.md) |
 | **P19** | Minimal DNS client | Complete (scoped - see PROGRESS.md) |
+| **P20** | Installable disk image (GRUB hybrid ISO, not a custom bootloader) | Complete (scoped - see PROGRESS.md) |
+| **P21** | License, versioning (1.0.0), and a changelog | Complete - see PROGRESS.md and CHANGELOG.md |
+| **P22** | Process-exit resource cleanup (real leak fix) | Complete - see PROGRESS.md |
+
+**NovaOS 1.0.0 was released after Phase 22.** See CHANGELOG.md for the
+full release summary.
 
 **P1-P9 above were the full originally-planned roadmap; all nine
 completed it at the scoped level described in each row and in

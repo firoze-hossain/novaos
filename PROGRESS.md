@@ -27,6 +27,9 @@ in the same PR as the code it describes.
 | P17 - Process Creation Capability | Complete (scoped - see below) |
 | P18 - AC97 PCI Sound Driver | Complete (scoped - see below) |
 | P19 - Minimal DNS Client | Complete (scoped - see below) |
+| P20 - Installable Disk Image | Complete (scoped - see below) |
+| P21 - License, Versioning & Changelog | Complete - see below |
+| P22 - Process Exit Resource Cleanup | Complete - see below |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1803,13 +1806,124 @@ explanation.
   DHCP-provided DNS server option either (NovaOS has no DHCP client at
   all, unchanged since Phase 6).
 
-## Phase 20 and beyond
+## Phase 20 - Installable Disk Image
+
+**Status: Complete.** Closes the biggest release-blocking gap:
+without this, NovaOS could only be demonstrated via a CD-ROM image,
+not actually installed anywhere persistent.
+
+### What was found (not built from scratch)
+
+`grub-mkrescue` (already used since Phase 1 to build `novaos.iso`)
+produces a **hybrid** image by default: the same file is simultaneously
+a valid El Torito bootable CD image *and* contains a real MBR that
+lets it boot as a raw BIOS hard disk or USB drive. This was verified,
+not assumed: `file novaos.iso` confirms a "DOS/MBR boot sector," and
+attaching the exact same `novaos.iso` file as a plain QEMU hard disk
+(`-drive file=novaos.iso,format=raw`, no `-cdrom` at all) boots the
+full system - GDT/IDT/paging/heap/scheduler init, ATA detection,
+networking, everything - identically to the CD-ROM path. No custom
+bootloader was written; GRUB's own long-proven tooling already
+provides this.
+
+### What was added
+
+- **`make install-image`**: builds the ISO + data disk and prints the
+  exact `dd` command to write `novaos.iso` to a real USB drive, plus
+  instructions for attaching it as a persistent VM hard disk.
+
+### Known limitation
+
+- **Still two separate images** (a boot image plus a separate FAT32
+  data disk for persistent files), not one unified disk. NovaOS's
+  FAT32 driver (Phase 3) reads directly from LBA 0 expecting a FAT32
+  boot sector, with no MBR-partition-table awareness - combining both
+  into one physical medium would need the driver to become
+  partition-aware first. Tracked as future work, not attempted here
+  given the time constraints of this release push.
+
+## Phase 21 - License, Versioning & Changelog
+
+**Status: Complete.** Ordinary but essential release housekeeping that
+was simply missing before now.
+
+- **`LICENSE`**: MIT, the standard permissive choice for a project
+  like this.
+- **`kernel/include/version.h`**: bumped `0.1.0` -> `1.0.0` for the
+  first full release - every boot log, `about` command, and kernel
+  banner reflects this automatically (all derive from the same
+  `NOVAOS_VERSION_STRING`, so no other file needed a matching edit).
+  Historical version strings quoted verbatim in earlier PROGRESS.md
+  boot-log excerpts were deliberately left as `0.1.0` - they're
+  accurate records of what was actually logged at that point in
+  development, not something to retroactively rewrite.
+- **`CHANGELOG.md`**: a new file summarizing all 22 phases for anyone
+  who wants the release history without reading the full,
+  much-longer PROGRESS.md.
+
+## Phase 22 - Process Exit Resource Cleanup
+
+**Status: Complete.** Fixes a real, long-documented resource leak:
+every ring-3 process's kernel stack, user stack, page table, and page
+directory has leaked permanently on exit since Phase 4/5 - noted as a
+known limitation in multiple earlier phase writeups but never
+addressed until this release-hardening pass.
+
+### What was built
+
+`process_exit_current()` now frees, for every exiting process: its
+kernel stack (always private, `kfree()`), and - for ring-3 processes
+specifically - the physical frames backing its private user stack, the
+one page table that mapped them, and the process's own page directory.
+The shared kernel range (identity-mapped 0-64MB, copied into every
+process's directory since Phase 5) is never touched - only found and
+freed by walking the single, always-known page-directory index
+`USER_STACK_VIRT_BASE` falls into, which nothing else ever shares.
+
+### A subtlety worth documenting rather than glossing over
+
+`process_exit_current()` frees the *currently executing* process's own
+kernel stack before yielding away from it - meaning a handful of
+register-save pushes inside the ensuing context switch land on memory
+already marked "free" by the heap allocator. This is safe in NovaOS's
+specific design (single-core, no concurrent allocation can claim that
+memory in the narrow window before the stack is permanently abandoned)
+but is a subtlety future changes to the scheduler or allocator should
+keep in mind rather than assume away by default.
+
+### Verified behavior
+
+NovaOS already exercises process exit heavily on every single boot -
+five different ring-3 processes (`demo-a`, `demo-b`, `sandbox`,
+`unprivileged`, `spawned`) exit during the standard self-test
+sequence. Re-ran the full `make test` suite and a 25-second extended
+stability run after this change: all five processes still exit
+cleanly, every existing PASS/FAIL self-check still reports correctly,
+and zero crashes or corruption appeared - meaning this fix was
+validated against the most demanding existing test coverage in the
+project, not a new, separately-invented test.
+
+### Known limitations
+
+- **Only the user stack's specific page table/directory entry is
+  freed** - if a future phase maps *additional* private pages for a
+  process (beyond the one fixed user-stack region this release
+  supports), those would need their own cleanup logic added
+  alongside this.
+- **No cleanup of open file handles** (Phase 11's `SYS_OPEN` table) or
+  UDP listener state (Phase 14) on process exit - a process that exits
+  while holding a file handle leaves that slot marked in-use forever,
+  and Phase 19's DNS/TFTP/UDP single-listener state isn't process-
+  scoped at all, so it's not a *new* problem this phase introduces,
+  but it's not fixed either. Tracked as follow-up work.
+
+## Phase 23 and beyond
 
 Not started. Remaining candidates for future work, in no particular
-order: a real bootloader-writing installer, TCP/sockets, extending
-capability-based access control to further resource types beyond
-files/network/spawn, true lowercase font forms, and USB drivers (now
-that Phase 13's PCI enumeration plus Phase 16 and 18's two real PCI
-drivers show the full path from "detect hardware" to "use hardware"
-for more than one device class). Each would benefit from being scoped
-on its own terms rather than assumed as "next."
+order: a real from-scratch bootloader (if a unified single-disk image
+becomes a priority - GRUB's existing hybrid-image approach from Phase
+20 already solves the "installable" requirement without one), full
+TCP/sockets, extending capability-based access control to further
+resource types, true lowercase font forms, USB drivers, and cleanup of
+the remaining leak classes noted in Phase 22. Each would benefit from
+being scoped on its own terms rather than assumed as "next."
