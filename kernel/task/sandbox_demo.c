@@ -58,8 +58,27 @@ static inline int sys_spawn(void) {
     return result;
 }
 
-static inline void sys_exit(void) {
-    __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT));
+static inline int sys_exec(const char* path, const char** argv, int argc) {
+    int result = SYS_EXEC;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(path), "c"(argv), "d"(argc)
+                       : "memory", "cc");
+    return result;
+}
+
+static inline int sys_wait(int pid) {
+    int result = SYS_WAIT;
+    __asm__ volatile ("int $0x80" : "+a"(result) : "b"(pid) : "memory", "cc");
+    return result;
+}
+
+static inline void sys_exit(int exit_code) {
+    /* Phase 23: SYS_EXIT now takes an exit code in EBX (previously
+     * ignored) - explicitly passing 0 here rather than leaving EBX as
+     * whatever it happened to contain, now that the kernel actually
+     * records and can return this value via process_wait(). */
+    __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT), "b"(exit_code));
 }
 
 void sandbox_demo_task(void) {
@@ -135,7 +154,31 @@ void sandbox_demo_task(void) {
                   "capability was granted.\n");
     }
 
-    sys_exit();
+    /* Phase 23: load and run a real, independently-compiled ELF32
+     * executable (tools/elf-fixtures/hello.asm), reusing the same
+     * spawn capability. Passes two arguments and checks both that the
+     * child's own output appears (proving argv really reached it) and
+     * that SYS_WAIT returns its real exit code (42, a specific,
+     * checkable value the ELF itself chose) rather than just "did it
+     * start." */
+    const char* exec_argv[] = {"HELLO.ELF", "hello-from-novaos"};
+    int exec_pid = sys_exec("HELLO.ELF", exec_argv, 2);
+    if (exec_pid >= 0) {
+        int exit_code = sys_wait(exec_pid);
+        if (exit_code == 42) {
+            sys_write("[sandbox] PASS: SYS_EXEC loaded and ran a real ELF "
+                      "executable - SYS_WAIT returned exit code 42 as "
+                      "expected.\n");
+        } else {
+            sys_write("[sandbox] FAIL: HELLO.ELF exited with an "
+                      "unexpected code.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_EXEC(\"HELLO.ELF\") failed to "
+                  "start.\n");
+    }
+
+    sys_exit(0);
 
     /* Never reached: process_exit_current() (called by the SYS_EXIT
      * handler) marks this process TERMINATED and switches away

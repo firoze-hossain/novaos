@@ -230,6 +230,37 @@ static void handle_spawn(registers_t* regs) {
     regs->eax = (uint32_t)new_pid;
 }
 
+/* Phase 23's SYS_EXEC: reuses can_spawn (Phase 17) rather than adding
+ * a fourth capability type - the honest framing is that "may create
+ * processes" is one capability whether the new process runs the
+ * fixed greeter task or a real loaded ELF, not two different
+ * privileges. */
+static void handle_exec(registers_t* regs) {
+    process_t* p = process_current();
+
+    if (p == NULL || !p->can_spawn) {
+        kernel_log("[SECURITY] pid %d denied SYS_EXEC - spawn capability "
+                   "not granted\n", p != NULL ? p->pid : -1);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    const char* path = (const char*)regs->ebx;
+    const char** argv = (const char**)regs->ecx;
+    int argc = (int)regs->edx;
+
+    int new_pid = process_exec(path, argv, argc);
+    kernel_log("[SYSCALL] pid %d SYS_EXEC('%s') (capability granted) -> "
+               "new pid %d\n", p->pid, path, new_pid);
+    regs->eax = (uint32_t)new_pid;
+}
+
+static void handle_wait(registers_t* regs) {
+    int target_pid = (int)regs->ebx;
+    int result = process_wait(target_pid);
+    regs->eax = (uint32_t)result;
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -242,7 +273,7 @@ void syscall_handler(registers_t* regs) {
         }
 
         case SYS_EXIT:
-            process_exit_current(); /* never returns */
+            process_exit_current((int)regs->ebx); /* never returns */
             break;
 
         case SYS_YIELD:
@@ -267,6 +298,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_SPAWN:
             handle_spawn(regs);
+            break;
+
+        case SYS_EXEC:
+            handle_exec(regs);
+            break;
+
+        case SYS_WAIT:
+            handle_wait(regs);
             break;
 
         default:

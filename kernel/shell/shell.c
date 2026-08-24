@@ -84,12 +84,14 @@ static void cmd_help(void) {
     vga_puts("  whoami    - show the configured username\n");
     vga_puts("  lspci     - list detected PCI devices\n");
     vga_puts("  beep      - play a short tone through AC97 audio\n");
+    vga_puts("  run PATH [args...] - load and run a real ELF32 "
+              "executable, wait for it to exit\n");
     vga_puts("  reboot    - restart the machine\n");
 }
 
 static void cmd_about(void) {
     vga_printf("%s v%s\n", KERNEL_NAME, KERNEL_VERSION);
-    vga_puts("Phase 19: Minimal DNS Client\n");
+    vga_puts("Phase 23: ELF Loading & a Real Process Model\n");
 }
 
 static const char* state_name(process_state_t s) {
@@ -411,6 +413,54 @@ static void cmd_beep(void) {
     ac97_beep();
 }
 
+static void cmd_run(const char* arg) {
+    if (!vfs_is_mounted()) {
+        vga_puts("run: no filesystem mounted\n");
+        return;
+    }
+    if (arg[0] == '\0') {
+        vga_puts("Usage: run PATH [arg1 arg2 ...]\n");
+        return;
+    }
+
+    /* Simple space-separated tokenizing - no quoting support, matching
+     * every other command's argument parsing in this shell. argv[0]
+     * is the path itself, following Unix convention, then up to
+     * MAX_EXEC_ARGS-1 more tokens. */
+    char tokens[MAX_EXEC_ARGS][32];
+    const char* argv_ptrs[MAX_EXEC_ARGS];
+    int argc = 0;
+
+    const char* p = arg;
+    while (*p && argc < MAX_EXEC_ARGS) {
+        int i = 0;
+        while (*p && *p != ' ' && i < (int)sizeof(tokens[argc]) - 1) {
+            tokens[argc][i++] = *p++;
+        }
+        tokens[argc][i] = '\0';
+        argv_ptrs[argc] = tokens[argc];
+        argc++;
+        while (*p == ' ') {
+            p++;
+        }
+    }
+
+    /* The shell is trusted kernel (ring 0) code, so it calls
+     * process_exec()/process_wait() directly - the same functions
+     * SYS_EXEC/SYS_WAIT call on a ring-3 caller's behalf, just without
+     * a capability check, since that check exists specifically to
+     * gate what *ring-3* code may do, not kernel code acting on the
+     * user's own direct request. */
+    int pid = process_exec(tokens[0], argv_ptrs, argc);
+    if (pid < 0) {
+        vga_printf("run: failed to load '%s'\n", tokens[0]);
+        return;
+    }
+
+    int exit_code = process_wait(pid);
+    vga_printf("(pid %d exited with code %d)\n", pid, exit_code);
+}
+
 static void cmd_hostname(void) {
     vga_puts(firstrun_get_hostname());
     vga_putchar('\n');
@@ -529,6 +579,8 @@ static void dispatch(char* line) {
         cmd_lspci();
     } else if (strcmp(line, "beep") == 0) {
         cmd_beep();
+    } else if (strncmp(line, "run ", 4) == 0) {
+        cmd_run(line + 4);
     } else if (strncmp(line, "echo ", 5) == 0) {
         vga_puts(line + 5);
         vga_putchar('\n');

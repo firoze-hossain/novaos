@@ -12,7 +12,9 @@
  * which is exactly the in-memory location the entry stub's final
  * `popa` restores EAX from - no separate return-value channel needed). */
 #define SYS_WRITE 1 /* EBX = pointer to a NUL-terminated string to print */
-#define SYS_EXIT  2 /* terminates the calling process; never returns    */
+#define SYS_EXIT  2 /* EBX = exit code (Phase 23 - previously took no
+                       argument). Terminates the calling process;
+                       never returns */
 #define SYS_YIELD 3 /* voluntarily gives up the rest of this quantum    */
 
 /* Phase 11: capability-gated file access. A process can only SYS_OPEN
@@ -49,6 +51,26 @@
  * argument to select between. Returns the new process's PID, or -1 if
  * the calling process wasn't granted spawn capability. */
 #define SYS_SPAWN 8
+
+/* Phase 23: loads and runs a real ELF32 executable as a new process -
+ * see process_exec() in kernel/task/process.h for the full scope note
+ * (this is exec-style spawn-and-load, not true fork()+exec() as two
+ * steps). EBX = path (an 8.3 filename string), ECX = argv (a pointer
+ * to an array of up to MAX_EXEC_ARGS char* pointers, all still valid
+ * to dereference directly since a syscall never switches CR3 away
+ * from the calling process - see syscall.c's header comment), EDX =
+ * argc. Reuses the existing can_spawn capability from SYS_SPAWN
+ * (Phase 17), broadened to mean "may create processes" generally
+ * rather than narrowly "may run the one fixed greeter task." Returns
+ * the new process's pid, or -1 if denied or the load failed. */
+#define SYS_EXEC 9
+
+/* EBX = pid to wait for. Blocks (yielding repeatedly, the same
+ * pattern SYS_YIELD already uses from inside a syscall handler) until
+ * that process reaches PROCESS_TERMINATED, then returns its exit
+ * code. Returns -1 immediately if no such pid currently exists in the
+ * process table at all. */
+#define SYS_WAIT 10
 
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate

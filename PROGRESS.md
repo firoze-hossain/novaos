@@ -30,6 +30,7 @@ in the same PR as the code it describes.
 | P20 - Installable Disk Image | Complete (scoped - see below) |
 | P21 - License, Versioning & Changelog | Complete - see below |
 | P22 - Process Exit Resource Cleanup | Complete - see below |
+| P23 - ELF Loading & a Real Process Model | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -1917,13 +1918,156 @@ project, not a new, separately-invented test.
   scoped at all, so it's not a *new* problem this phase introduces,
   but it's not fixed either. Tracked as follow-up work.
 
-## Phase 23 and beyond
+## Phase 23 - ELF Loading & a Real Process Model
 
-Not started. Remaining candidates for future work, in no particular
-order: a real from-scratch bootloader (if a unified single-disk image
-becomes a priority - GRUB's existing hybrid-image approach from Phase
-20 already solves the "installable" requirement without one), full
-TCP/sockets, extending capability-based access control to further
-resource types, true lowercase font forms, USB drivers, and cleanup of
-the remaining leak classes noted in Phase 22. Each would benefit from
-being scoped on its own terms rather than assumed as "next."
+**Status: Complete.** The single highest-leverage item identified in
+the "gap analysis vs. Ubuntu" planning document: NovaOS could
+previously only run C functions compiled directly into the kernel
+image. This phase gives it the ability to load and run a real,
+independently-compiled executable from disk - the load-bearing
+feature everything else in "run real software" depends on.
+
+### Scope, stated upfront: this is `exec`, not `fork()`+`exec()`
+
+The request that started this phase asked for "`fork()`/`exec()`-style
+semantics." What's built is `exec`-style spawn-and-load - create and
+run a new process from an ELF file in one step - deliberately not
+true two-step `fork()` (duplicate a *running* process's entire address
+space, then replace one of the two copies' image). Real `fork()`
+needs copy-on-write memory management this kernel doesn't have; this
+is closer to POSIX's `posix_spawn()`, which exists in POSIX precisely
+because most real callers (a shell running a command) never needed
+full `fork()` semantics in the first place. Tracked as real follow-up
+work, not silently substituted for what was asked.
+
+### What was built
+
+- **`kernel/task/elf.*`** - a minimal ELF32 loader: validates the
+  header (magic, 32-bit, little-endian, `EM_386`, `ET_EXEC`), walks
+  every `PT_LOAD` program header, allocates fresh physical frames for
+  each segment, maps them into a process's own address space with
+  read/write permissions taken from the segment's actual flags (not
+  assumed), copies file data with correct `.bss` zero-padding for the
+  memsz-vs-filesz difference. Statically-linked, non-PIE executables
+  only - no dynamic linking (`PT_DYNAMIC`/`PT_INTERP`), no relocation
+  processing.
+- **`process_exec()`** (`kernel/task/process.c`) - reads the ELF file
+  via the VFS, loads it, allocates a user stack, and constructs the
+  **real x86 process-entry stack convention**: from the initial ESP,
+  `argc`, `argv[0..argc-1]` (pointers into string data placed lower in
+  the same stack), a NULL terminator, an empty `envp` (just one more
+  NULL - no environment variables are actually populated yet, an
+  honest scope limit), then the argv strings themselves. This is the
+  same raw layout Linux's own `execve()` leaves for a fresh process,
+  not a simplified NovaOS-specific convention - a deliberate choice
+  for forward compatibility with a real libc/crt0 in a future phase.
+- **`SYS_EXIT` now takes a real exit code** (EBX) - previously ignored
+  entirely. Fixed all four existing call sites (`greeter_task`,
+  `sandbox_demo`, `unprivileged_demo`, `user_demo`) that used the old
+  no-argument convention, so no process now exits with whatever
+  garbage happened to be left in EBX as its "code."
+- **`process_wait()` / `SYS_WAIT`** - blocks (yielding repeatedly, the
+  same proven pattern `SYS_YIELD` already uses from inside a syscall
+  handler) until a target process terminates, then returns its real
+  exit code.
+- **`SYS_EXEC`** - the syscall surface for `process_exec()`, reusing
+  Phase 17's existing `can_spawn` capability rather than adding a
+  fourth capability type: "may create processes" is one capability,
+  whether the new process runs the fixed greeter task or a real loaded
+  ELF.
+- **Shell**: `run PATH [args...]` - loads an ELF, waits for it, prints
+  its real exit code.
+- **A genuine test fixture**: `tools/elf-fixtures/hello.asm`, a real,
+  independently-assembled-and-linked ELF32 executable (not a function
+  compiled into the kernel image) written in raw NASM specifically to
+  avoid any dependency on a C runtime/crt0 startup convention this
+  kernel doesn't provide yet. Prints a message, echoes back
+  `argv[0]`/`argv[1]` to prove argument passing genuinely works, and
+  exits with a specific, checkable code (42) rather than just "did it
+  run without crashing."
+
+### A real correctness bug found and fixed before it ever shipped
+
+Phase 22's process-exit cleanup only knew how to free the user stack's
+one fixed virtual address - it would have silently leaked every ELF
+segment's memory (physical frames, page tables) on process exit, since
+`elf_load()` maps segments at addresses (like `0x08048000`) the old
+cleanup code had no idea existed. Generalized `free_user_address_space()`
+to walk every one of the 1024 page-directory entries and free whichever
+ones differ from the shared kernel template - found via direct
+comparison against the kernel's own page directory rather than a
+hardcoded index boundary, so it stays correct regardless of the kernel
+identity map's size. This was caught by reasoning through the code
+before testing, not by hitting a crash - worth noting since most bugs
+in this project's history were caught by observed failures rather than
+review.
+
+### Verified behavior - a complete, genuine first-try success
+
+This is among the most structurally complex mechanisms built in this
+project (ELF segment loading across multiple physical frames, a custom
+process-entry stack layout spanning non-contiguous physical memory,
+capability-gated syscalls, blocking exit-code retrieval) and it worked
+correctly on the very first boot test, unedited:
+```
+[ OK ] process_exec: loaded 'HELLO.ELF' as pid 8, entry=0x8048000, 2 arg(s)
+[SYSCALL] pid 5 SYS_EXEC('HELLO.ELF') (capability granted) -> new pid 8
+[SYSCALL] SYS_WRITE from pid 8 ('Hello from a real ELF executable loaded by NovaOS!\n')
+[SYSCALL] SYS_WRITE from pid 8 ('HELLO.ELF')
+[SYSCALL] SYS_WRITE from pid 8 ('hello-from-novaos')
+[ OK ] Process 'HELLO.ELF' (pid 8) exited with code 42
+[sandbox] PASS: SYS_EXEC loaded and ran a real ELF executable - SYS_WAIT returned exit code 42 as expected.
+```
+Every piece is independently verifiable in that log: the entry point
+(`0x8048000`) matches exactly what `readelf -h hello.elf` reports; both
+`argv[0]` and `argv[1]` are the exact strings passed to `SYS_EXEC`,
+printed by the *executable's own code*, not the kernel echoing them
+back; the exit code (42) is a value the ELF itself chose and the
+kernel had no way to fabricate.
+
+Also interactively re-verified with a second, independent invocation
+(`run HELLO.ELF firstarg secondarg` through the shell) with different
+argv values and a different pid, with an incidental but genuine extra
+confirmation: the filename was accidentally typed in lowercase
+(`hello.elf`) due to a limitation in the test-scripting tool used to
+drive QEMU's monitor, not a NovaOS issue - and it still resolved and
+ran correctly, confirming FAT32 filename lookups are properly
+case-insensitive. Zero crashes across both runs. Zero regression -
+every Phase 2-22 `make test` marker still passes, and every existing
+process's exit log now shows a real code (0) instead of a silently
+garbage/ignored one.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **No true `fork()`** - see the scope note above. This remains the
+  single largest gap between "exec-style spawn" and full Unix process
+  semantics.
+- **No dynamic linking** - only statically-linked, non-PIE
+  executables load at all.
+- **`envp` is always empty** - no real environment variable support
+  yet, just a structurally-correct empty terminator.
+- **`process_exec()` buffers the whole ELF file in a fixed 64KB
+  static buffer** rather than streaming it - fine for small
+  hand-written test binaries, would need `vfs_read_file()` to support
+  partial/streamed reads for anything larger.
+- **No libc** - the only way to produce a NovaOS-runnable executable
+  today is hand-written assembly using NovaOS's own syscall
+  convention directly, the same way `tools/elf-fixtures/hello.asm`
+  was written. A real C program using standard library functions
+  (`printf`, `malloc`, etc.) cannot run yet - this is exactly the next
+  natural phase (a minimal libc port), per the gap-analysis roadmap.
+- **`MAX_EXEC_ARGS` is a small fixed bound (8)**, matching the same
+  "simple and honest about the limit" choice as `MAX_CAPABILITIES`
+  rather than a dynamically-sized argument list.
+
+## Phase 24 and beyond
+
+Not started. Per the gap-analysis roadmap, the natural next step is a
+minimal libc port (making ELF-loaded programs actually useful for more
+than raw-syscall test binaries), then MBR/GPT partition support and a
+real filesystem beyond FAT32. Other candidates remain open as before:
+a real from-scratch bootloader, full TCP/sockets, true `fork()`
+semantics, extending capability-based access control to further
+resource types, true lowercase font forms, and USB drivers. Each
+would benefit from being scoped on its own terms rather than assumed
+as "next."

@@ -174,6 +174,22 @@ a VM.
   on exit, validated against the project's most demanding existing
   test coverage (five process exits every single boot).
 
+**Phase 23 - ELF Loading & a Real Process Model**
+- NovaOS can now load and run a real, independently-compiled ELF32
+  executable from disk - previously, every process ran C functions
+  compiled directly into the kernel image
+- Real `argv`/exit-code semantics using the actual x86 process-entry
+  stack convention, not a simplified placeholder - verified with a
+  genuine standalone test executable that echoes its own arguments and
+  exits with a specific, checkable code
+- `run PATH [args...]` in the shell; `SYS_EXEC`/`SYS_WAIT` syscalls,
+  reusing Phase 17's spawn capability
+- Deliberately `exec`-style (spawn-and-load), not true `fork()` - see
+  PROGRESS.md for why, stated upfront rather than glossed over
+- Found and fixed a real correctness bug before it shipped: process
+  exit cleanup didn't know about ELF segment memory, generalized to
+  correctly free any address space layout
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -208,7 +224,7 @@ novaos/
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
-│   ├── task/           # process table, scheduler, syscall + sandbox/greeter/unprivileged demo tasks
+│   ├── task/           # process table, scheduler, ELF loader, syscall + sandbox/greeter/unprivileged demo tasks
 │   ├── shell/          # minimal built-in shell + first-run wizard
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers

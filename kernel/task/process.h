@@ -68,6 +68,11 @@ typedef struct process {
      * pointless; a fixed yes/no is the honest scope. False by default,
      * same least-privilege pattern as the other two. */
     bool can_spawn;
+
+    /* Phase 23: the value passed to SYS_EXIT (or 0 if the process is
+     * still running / was never given one). Meaningful once
+     * process_wait() lets a caller retrieve it. */
+    int exit_code;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -104,9 +109,43 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
                                    const uint32_t* hosts, int host_count,
                                    bool can_spawn);
 
-/* Marks the current process TERMINATED and switches away from it
- * permanently. Called by the SYS_EXIT syscall handler; never returns. */
-void process_exit_current(void);
+/* Phase 23: how many argv entries process_exec() will pass through -
+ * a small, fixed bound, the same "simple and honest about the limit"
+ * choice as MAX_CAPABILITIES above rather than a dynamically-sized
+ * list. */
+#define MAX_EXEC_ARGS 8
+
+/* Loads a real ELF32 executable from the filesystem and runs it as a
+ * brand new process - NovaOS's answer to exec(), deliberately not
+ * fork()+exec() as two separate steps. A true fork() (duplicating a
+ * *running* process's entire address space) needs copy-on-write
+ * memory management this kernel doesn't have yet; process_exec() is
+ * closer to POSIX's posix_spawn() - create and load in one step -
+ * which exists in POSIX for exactly this reason: most real callers
+ * (a shell running a command) never needed true fork() semantics in
+ * the first place. See PROGRESS.md for the full scope note.
+ *
+ * `path` is read via the VFS (an 8.3 filename, e.g. "HELLO.ELF").
+ * `argv` is copied into the new process's own address space - the
+ * caller's argv strings/pointers are not referenced afterward, so
+ * they can safely live on the caller's own stack. Returns the new
+ * process's pid, or -1 on failure (bad path, invalid ELF, out of
+ * memory/process slots). */
+int process_exec(const char* path, const char** argv, int argc);
+
+/* Blocks (yielding repeatedly) until process `pid` reaches
+ * PROCESS_TERMINATED, then returns its exit code. Returns -1
+ * immediately if no process with that pid currently exists in the
+ * table at all (already reaped, or never existed) - see
+ * PROGRESS.md's honest note on why this makes "wait for a pid that
+ * already finished and was slotted over" a real, documented
+ * limitation rather than a silently-wrong answer. */
+int process_wait(int pid);
+
+/* Marks the current process TERMINATED (recording `exit_code` for a
+ * future process_wait() call) and switches away from it permanently.
+ * Called by the SYS_EXIT syscall handler; never returns. */
+void process_exit_current(int exit_code);
 
 process_t* process_current(void);
 process_t* process_table_entry(int index);

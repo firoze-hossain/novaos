@@ -12,10 +12,12 @@
  */
 #include "process.h"
 #include "scheduler.h"
+#include "elf.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/mm/heap.h"
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/mm/pmm.h"
+#include "../fs/vfs.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -80,6 +82,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->allowed_file_count = 0;
     p->allowed_host_count = 0;
     p->can_spawn = false;
+    p->exit_code = 0;
 
     scheduler_add(p);
     return p->pid;
@@ -160,6 +163,7 @@ static process_t* create_user_task_common(const char* name,
     p->allowed_file_count = 0; /* least privilege by default */
     p->allowed_host_count = 0;
     p->can_spawn = false;
+    p->exit_code = 0;
 
     return p;
 }
@@ -215,20 +219,36 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
  * into, which nothing else ever shares. This closes a real, long-
  * documented gap: every user process's stack memory, page table, and
  * page directory leaked permanently on exit since Phase 4/5. */
+/* Frees every page-table frame and physical page this process
+ * privately owns in its own address space, then the page directory
+ * itself. Originally written (Phase 22) knowing only about the one
+ * fixed user-stack location; generalized here (Phase 23) to walk
+ * every one of the 1024 page-directory entries and free whichever
+ * ones differ from the shared kernel template, since ELF segments
+ * (elf.c) can now be mapped at any address, not just the user stack's
+ * fixed one - a comparison against the actual kernel directory is
+ * used rather than hardcoding an index boundary, so this stays
+ * correct even if the kernel's own identity-mapped range ever
+ * changes size. The shared range itself (compares equal to the
+ * kernel's own template entries) is never touched - only entries this
+ * process itself added via paging_map_page() are ever freed. */
 static void free_user_address_space(uint32_t page_directory_phys) {
     uint32_t* pd = (uint32_t*)page_directory_phys;
-    uint32_t pd_index = USER_STACK_VIRT_BASE >> 22;
+    uint32_t* kernel_pd = (uint32_t*)paging_kernel_directory_phys();
 
-    if (pd[pd_index] & PAGE_PRESENT) {
-        uint32_t pt_phys = pd[pd_index] & 0xFFFFF000u;
+    for (uint32_t i = 0; i < 1024; i++) {
+        if (!(pd[i] & PAGE_PRESENT)) {
+            continue;
+        }
+        if (pd[i] == kernel_pd[i]) {
+            continue; /* shared kernel entry - not this process's to free */
+        }
+
+        uint32_t pt_phys = pd[i] & 0xFFFFF000u;
         uint32_t* pt = (uint32_t*)pt_phys;
-        uint32_t first_pt_entry = (USER_STACK_VIRT_BASE >> 12) & 0x3FFu;
-        uint32_t stack_pages = USER_STACK_SIZE / 4096;
-
-        for (uint32_t i = 0; i < stack_pages; i++) {
-            uint32_t entry = pt[first_pt_entry + i];
-            if (entry & PAGE_PRESENT) {
-                pmm_free_frame(entry & 0xFFFFF000u);
+        for (uint32_t j = 0; j < 1024; j++) {
+            if (pt[j] & PAGE_PRESENT) {
+                pmm_free_frame(pt[j] & 0xFFFFF000u);
             }
         }
         pmm_free_frame(pt_phys);
@@ -237,11 +257,13 @@ static void free_user_address_space(uint32_t page_directory_phys) {
     pmm_free_frame(page_directory_phys);
 }
 
-void process_exit_current(void) {
+void process_exit_current(int exit_code) {
     process_t* p = scheduler_current();
     if (p != NULL) {
+        p->exit_code = exit_code;
         p->state = PROCESS_TERMINATED;
-        kernel_log("[ OK ] Process '%s' (pid %d) exited\n", p->name, p->pid);
+        kernel_log("[ OK ] Process '%s' (pid %d) exited with code %d\n",
+                   p->name, p->pid, exit_code);
 
         if (p->kernel_stack_alloc != NULL) {
             kfree(p->kernel_stack_alloc);
@@ -268,4 +290,201 @@ process_t* process_table_entry(int index) {
 
 process_t* process_current(void) {
     return scheduler_current();
+}
+
+/* Writes `len` bytes into a (possibly not physically contiguous)
+ * address space at `dest_vaddr`, one physical frame at a time - the
+ * same walk-the-page-tables technique elf.c uses to copy segment
+ * data, needed here because process_exec()'s argv/argc stack area
+ * spans pages backed by independently-allocated PMM frames that
+ * aren't guaranteed physically adjacent to each other. */
+static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
+                                    const void* src, uint32_t len) {
+    const uint8_t* src_bytes = (const uint8_t*)src;
+    uint32_t remaining = len;
+    uint32_t vaddr = dest_vaddr;
+    uint32_t src_pos = 0;
+
+    while (remaining > 0) {
+        uint32_t page_base = vaddr & 0xFFFFF000u;
+        uint32_t page_offset = vaddr - page_base;
+        uint32_t pd_index = page_base >> 22;
+        uint32_t pt_index = (page_base >> 12) & 0x3FFu;
+        uint32_t* pt = (uint32_t*)(pd[pd_index] & 0xFFFFF000u);
+        uint32_t frame = pt[pt_index] & 0xFFFFF000u;
+
+        uint32_t chunk = 4096 - page_offset;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        memcpy((void*)(frame + page_offset), src_bytes + src_pos, chunk);
+
+        remaining -= chunk;
+        vaddr += chunk;
+        src_pos += chunk;
+    }
+}
+
+int process_exec(const char* path, const char** argv, int argc) {
+    if (argc > MAX_EXEC_ARGS) {
+        argc = MAX_EXEC_ARGS;
+    }
+
+    /* 64KB comfortably covers the small, statically-linked test
+     * binaries this loader targets; a much larger real-world program
+     * would need this read streamed rather than buffered whole, which
+     * vfs_read_file() doesn't support yet - see PROGRESS.md. */
+    static uint8_t elf_buffer[65536];
+    int file_size = vfs_read_file(path, elf_buffer, sizeof(elf_buffer));
+    if (file_size <= 0) {
+        kernel_log("[FAULT] process_exec: couldn't read '%s'\n", path);
+        return -1;
+    }
+    if (!elf_validate(elf_buffer, (uint32_t)file_size)) {
+        kernel_log("[FAULT] process_exec: '%s' is not a valid ELF32 "
+                   "executable this loader supports\n", path);
+        return -1;
+    }
+
+    process_t* p = allocate_slot();
+    if (p == NULL) {
+        kernel_log("[FAULT] process_exec: process table full\n");
+        return -1;
+    }
+
+    void* kstack = kmalloc(KERNEL_STACK_SIZE);
+    if (kstack == NULL) {
+        kernel_log("[FAULT] process_exec: out of memory (kstack)\n");
+        return -1;
+    }
+
+    uint32_t address_space = paging_create_address_space();
+    uint32_t* pd = (uint32_t*)address_space;
+
+    uint32_t entry_point;
+    if (!elf_load(elf_buffer, (uint32_t)file_size, address_space,
+                   &entry_point)) {
+        kernel_log("[FAULT] process_exec: failed to load '%s'\n", path);
+        kfree(kstack);
+        free_user_address_space(address_space);
+        return -1;
+    }
+
+    const int stack_pages = USER_STACK_SIZE / 4096;
+    for (int i = 0; i < stack_pages; i++) {
+        uint32_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            kernel_log("[FAULT] process_exec: out of memory (user stack "
+                       "frame %d/%d)\n", i + 1, stack_pages);
+            kfree(kstack);
+            free_user_address_space(address_space);
+            return -1;
+        }
+        uint32_t virt = USER_STACK_VIRT_BASE + (uint32_t)i * 4096u;
+        paging_map_page(pd, virt, frame,
+                         PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    }
+    uint32_t ustack_top = USER_STACK_VIRT_BASE + USER_STACK_SIZE;
+
+    /* Builds the real x86 process-entry stack convention (the same
+     * raw layout the Linux kernel's own execve() leaves for a fresh
+     * process, which a real C runtime's _start then treats argv/envp
+     * as pointers into): from the initial ESP, low to high addresses:
+     * argc, argv[0..argc-1] (each a pointer into the string data
+     * below), a NULL terminator, an empty envp (just one more NULL -
+     * no environment variables are actually populated yet, an honest
+     * scope limit - see PROGRESS.md), then the argv strings
+     * themselves. Built top-down since the string data's addresses
+     * need to be known before the pointer array referencing them can
+     * be written. */
+    uint32_t write_ptr = ustack_top;
+    uint32_t argv_addrs[MAX_EXEC_ARGS];
+
+    for (int i = 0; i < argc; i++) {
+        uint32_t len = (uint32_t)strlen(argv[i]) + 1;
+        write_ptr -= len;
+        write_to_address_space(pd, write_ptr, argv[i], len);
+        argv_addrs[i] = write_ptr;
+    }
+
+    write_ptr &= ~0x3u; /* 4-byte align before the pointer arrays */
+
+    uint32_t zero = 0;
+    write_ptr -= 4;
+    write_to_address_space(pd, write_ptr, &zero, 4); /* envp terminator */
+    write_ptr -= 4;
+    write_to_address_space(pd, write_ptr, &zero, 4); /* argv terminator */
+
+    for (int i = argc - 1; i >= 0; i--) {
+        write_ptr -= 4;
+        write_to_address_space(pd, write_ptr, &argv_addrs[i], 4);
+    }
+
+    write_ptr -= 4;
+    write_to_address_space(pd, write_ptr, &argc, 4);
+
+    uint32_t initial_esp = write_ptr;
+
+    uint32_t kstack_top = (uint32_t)kstack + KERNEL_STACK_SIZE;
+    uint32_t* sp = (uint32_t*)kstack_top;
+
+    /* Same fake IRET frame construction as create_user_task_common(),
+     * just pointing EIP at the ELF's own entry point and ESP at the
+     * constructed argv/argc stack area instead of a fixed kernel
+     * function and a bare stack top. */
+    *(--sp) = GDT_USER_DATA;
+    *(--sp) = initial_esp;
+    *(--sp) = 0x202;
+    *(--sp) = GDT_USER_CODE;
+    *(--sp) = entry_point;
+
+    *(--sp) = (uint32_t)enter_usermode;
+    *(--sp) = 0;
+    *(--sp) = 0;
+    *(--sp) = 0;
+    *(--sp) = 0;
+    *(--sp) = 0x202;
+
+    p->pid = next_pid++;
+    copy_name(p->name, path, sizeof(p->name));
+    p->state = PROCESS_READY;
+    p->is_user = true;
+    p->esp = (uint32_t)sp;
+    p->kernel_stack_top = kstack_top;
+    p->kernel_stack_alloc = kstack;
+    p->page_directory_phys = address_space;
+    p->allowed_file_count = 0;
+    p->allowed_host_count = 0;
+    p->can_spawn = false;
+    p->exit_code = 0;
+
+    kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
+               "%d arg(s)\n", path, p->pid, entry_point, argc);
+
+    scheduler_add(p);
+    return p->pid;
+}
+
+int process_wait(int pid) {
+    for (;;) {
+        process_t* target = NULL;
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            process_t* candidate = &process_table[i];
+            if (candidate->pid == pid && candidate->state != PROCESS_UNUSED) {
+                target = candidate;
+                break;
+            }
+        }
+        if (target == NULL) {
+            return -1; /* no such process - never existed, or already
+                           reaped and its slot is unused again (slots
+                           are never actually recycled today - see
+                           PROGRESS.md - but this check is the correct
+                           behavior regardless) */
+        }
+        if (target->state == PROCESS_TERMINATED) {
+            return target->exit_code;
+        }
+        scheduler_yield();
+    }
 }

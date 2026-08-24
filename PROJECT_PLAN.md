@@ -134,9 +134,12 @@ at the end. Concretely, in the order it gets built:
 | **P20** | Installable disk image (GRUB hybrid ISO, not a custom bootloader) | Complete (scoped - see PROGRESS.md) |
 | **P21** | License, versioning (1.0.0), and a changelog | Complete - see PROGRESS.md and CHANGELOG.md |
 | **P22** | Process-exit resource cleanup (real leak fix) | Complete - see PROGRESS.md |
+| **P23** | ELF loading + a real process model (argv/exit codes/SYS_EXEC/SYS_WAIT) | Complete (scoped - see PROGRESS.md; exec-style, not true fork()) |
 
 **NovaOS 1.0.0 was released after Phase 22.** See CHANGELOG.md for the
-full release summary.
+full release summary. Phase 23 (post-release) is the first item from
+the separate NovaOS-vs-Ubuntu gap-analysis roadmap: real ELF loading,
+the single highest-leverage capability identified there.
 
 **P1-P9 above were the full originally-planned roadmap; all nine
 completed it at the scoped level described in each row and in

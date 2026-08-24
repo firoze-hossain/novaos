@@ -149,13 +149,14 @@ $(ISO_FILE): $(KERNEL_BIN)
 
 # Create the FAT32 test disk image (Phase 3+). Requires `mtools`
 # (mformat/mcopy) - installed by `make setup` on every supported OS.
-$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
 	mformat -i $(DISK_IMG) -F ::
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.TXT ::HELLO.TXT
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/EDITOR.PKG ::EDITOR.PKG
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/GAME.PKG ::GAME.PKG
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/SYSTEM.CFG ::SYSTEM.CFG
+	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.ELF ::HELLO.ELF
 	@echo "✅ FAT32 test disk image created: $(DISK_IMG)"
 
 # Run in QEMU (interactive, graphical window)
@@ -203,6 +204,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "sandbox. PASS: SYS_SPAWN succeeded" $(TEST_LOG) && \
 	    grep -q "unprivileged. PASS: SYS_SPAWN correctly denied" $(TEST_LOG) && \
 	    grep -q "greeter. Hello" $(TEST_LOG) && \
+	    grep -q "Hello from a real ELF executable" $(TEST_LOG) && \
+	    grep -q "HELLO.ELF. .pid .*. exited with code 42" $(TEST_LOG) && \
+	    grep -q "sandbox. PASS: SYS_EXEC loaded and ran" $(TEST_LOG) && \
 	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
 	    grep -q "AC97 beep: playing" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \

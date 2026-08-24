@@ -331,3 +331,16 @@ For a persistent VM (VirtualBox, VMware, QEMU, etc.), attach
 attach `disk.img` as a second hard disk for persistent data (packages,
 `SYSTEM.CFG`, etc.). These are still two separate images rather than
 one unified disk - see PROGRESS.md's Phase 20 entry for why.
+
+## Running real programs (Phase 23+)
+
+`run PATH [args...]` loads and runs a real ELF32 executable and waits
+for it to exit, printing its real exit code. Try `run HELLO.ELF one
+two` - the pre-built test executable at `tools/fixtures/HELLO.ELF`
+prints a message plus whatever `argv[0]`/`argv[1]` it was given, then
+exits with code 42.
+
+To build your own test executable, see `tools/elf-fixtures/hello.asm`
+and `tools/elf-fixtures/build.sh` - NovaOS has no libc yet, so any
+program has to be written using its own syscall convention directly
+(see `kernel/arch/x86/cpu/syscall.h`), the same way that file is.
