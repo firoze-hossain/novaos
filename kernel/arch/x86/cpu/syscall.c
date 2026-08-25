@@ -261,6 +261,12 @@ static void handle_wait(registers_t* regs) {
     regs->eax = (uint32_t)result;
 }
 
+static void handle_sbrk(registers_t* regs) {
+    process_t* p = process_current();
+    int increment = (int)regs->ebx;
+    regs->eax = process_sbrk(p, increment);
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -306,6 +312,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_WAIT:
             handle_wait(regs);
+            break;
+
+        case SYS_SBRK:
+            handle_sbrk(regs);
             break;
 
         default:

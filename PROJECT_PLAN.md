@@ -135,6 +135,12 @@ at the end. Concretely, in the order it gets built:
 | **P21** | License, versioning (1.0.0), and a changelog | Complete - see PROGRESS.md and CHANGELOG.md |
 | **P22** | Process-exit resource cleanup (real leak fix) | Complete - see PROGRESS.md |
 | **P23** | ELF loading + a real process model (argv/exit codes/SYS_EXEC/SYS_WAIT) | Complete (scoped - see PROGRESS.md; exec-style, not true fork()) |
+| **P24** | Minimal libc port (crt0, printf, malloc via new SYS_SBRK, string functions) | Complete (scoped - see PROGRESS.md) |
+
+Phase 24 (post-release) is the second item from the gap-analysis
+roadmap - makes ELF-loaded programs (P23) actually useful by giving
+them a real C standard library instead of requiring hand-written
+assembly for every program.
 
 **NovaOS 1.0.0 was released after Phase 22.** See CHANGELOG.md for the
 full release summary. Phase 23 (post-release) is the first item from

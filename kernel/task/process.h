@@ -17,6 +17,15 @@
  * shared 0-64MB kernel range so it can never collide with it. */
 #define USER_STACK_VIRT_BASE 0x40000000u
 
+/* Phase 24: where a process's heap (grown via SYS_SBRK) starts. Well
+ * clear of typical ELF load addresses (elf.c's test fixtures load
+ * around 0x08048000) and well below the user stack (0x40000000
+ * above), with hundreds of megabytes of headroom on each side for a
+ * program's own segments to grow without colliding - generous given
+ * this kernel has no mechanism yet to detect or prevent two regions
+ * growing into each other, an honest gap tracked in PROGRESS.md. */
+#define HEAP_VIRT_BASE 0x20000000u
+
 /* Phase 11: how many distinct filenames a sandboxed process can be
  * granted access to at creation time. Small and fixed - a real
  * capability system would want a dynamic, revocable grant mechanism;
@@ -73,6 +82,17 @@ typedef struct process {
      * still running / was never given one). Meaningful once
      * process_wait() lets a caller retrieve it. */
     int exit_code;
+
+    /* Phase 24: SYS_SBRK bookkeeping. heap_current is the logical
+     * break (may sit mid-page); heap_mapped_end is how far pages have
+     * actually been mapped so far (always page-aligned) - tracked
+     * separately so process_sbrk() only maps the new pages an
+     * increment actually needs, not the whole heap on every call.
+     * Both start equal to HEAP_VIRT_BASE (an empty heap, nothing
+     * mapped yet - the same "break exists but has size zero until
+     * moved" convention real brk()/sbrk() use). */
+    uint32_t heap_current;
+    uint32_t heap_mapped_end;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -141,6 +161,18 @@ int process_exec(const char* path, const char** argv, int argc);
  * already finished and was slotted over" a real, documented
  * limitation rather than a silently-wrong answer. */
 int process_wait(int pid);
+
+/* Phase 24: grows (never shrinks - see below) the calling process's
+ * heap by `increment` bytes, mapping fresh physical frames as needed,
+ * and returns the *previous* break address - the same semantics
+ * Unix's sbrk() has, so a userspace malloc() can use this exactly the
+ * way a real one would. `increment` must be >= 0; shrinking the heap
+ * back is not supported (freed memory is only reused within the
+ * process's own malloc()/free(), never actually returned to the
+ * kernel) - a real, documented limitation, not an oversight. Returns
+ * (uint32_t)-1 on failure (negative increment, or out of physical
+ * memory). */
+uint32_t process_sbrk(process_t* p, int increment);
 
 /* Marks the current process TERMINATED (recording `exit_code` for a
  * future process_wait() call) and switches away from it permanently.

@@ -190,6 +190,20 @@ a VM.
   exit cleanup didn't know about ELF segment memory, generalized to
   correctly free any address space layout
 
+**Phase 24 - Minimal Libc Port**
+- A real (if intentionally small) C standard library:
+  `printf`/`puts`/`putchar`, string functions, and a `malloc`/`free`
+  backed by a new `SYS_SBRK` syscall - user processes previously had
+  no heap at all
+- `crt0.asm` bridges NovaOS's process-entry stack convention into a
+  proper `int main(int argc, char** argv, char** envp)` call
+- Verified end-to-end with a real C test program chaining `malloc` ->
+  `strcpy` -> `strcat` -> `printf("%s")` together - the exact string
+  produced would not come out intact if any piece had a bug
+- Worked correctly on the first boot test - genuinely the highest-risk
+  phase for a subtle mistake so far (crt0/`printf`/`malloc` are
+  classic sources of hard-to-spot bugs), and it didn't have one
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -229,7 +243,8 @@ novaos/
 │   ├── lib/            # freestanding string/stdio subset
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing
-├── tools/              # linker script, grub.cfg, FAT32 test fixtures
+├── userland/           # Phase 24: minimal libc (crt0, syscalls, string/stdio/stdlib) + example C programs
+├── tools/              # linker script, grub.cfg, FAT32 test fixtures, ELF test fixture sources
 ├── scripts/            # per-OS setup scripts
 ├── .github/workflows/  # CI (build + make test on every push)
 ├── Dockerfile          # reproducible cross-platform build environment

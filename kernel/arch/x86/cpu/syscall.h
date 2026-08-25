@@ -72,6 +72,14 @@
  * process table at all. */
 #define SYS_WAIT 10
 
+/* Phase 24: EBX = increment (bytes, must be >= 0). Grows the calling
+ * process's heap and returns the *previous* break address, or
+ * (uint32_t)-1 on failure - see process_sbrk() in
+ * kernel/task/process.h for the full semantics. No capability check:
+ * this only ever manages the calling process's own memory, the same
+ * "no gate needed" reasoning SYS_WRITE and SYS_YIELD already use. */
+#define SYS_SBRK 11
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

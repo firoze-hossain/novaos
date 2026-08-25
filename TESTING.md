@@ -340,7 +340,22 @@ two` - the pre-built test executable at `tools/fixtures/HELLO.ELF`
 prints a message plus whatever `argv[0]`/`argv[1]` it was given, then
 exits with code 42.
 
-To build your own test executable, see `tools/elf-fixtures/hello.asm`
-and `tools/elf-fixtures/build.sh` - NovaOS has no libc yet, so any
-program has to be written using its own syscall convention directly
-(see `kernel/arch/x86/cpu/syscall.h`), the same way that file is.
+That executable is written in raw assembly using NovaOS's own syscall
+convention directly - see `tools/elf-fixtures/hello.asm` and
+`tools/elf-fixtures/build.sh`. As of Phase 24, NovaOS also has a
+minimal C library (`userland/libc/`), so you don't have to write raw
+assembly for a real program anymore. Try `run HELLOC.ELF one two` -
+`tools/fixtures/HELLOC.ELF` is a real C program (`userland/examples/
+hello.c`) using `printf`, `argv`, and `malloc`/`strcpy`/`strcat`/
+`free`, exiting with code 7.
+
+To build your own C program against the libc:
+```bash
+cd userland/examples
+cp hello.c myprogram.c   # edit myprogram.c, or add it to build.sh
+./build.sh
+```
+See `userland/libc/include/` for what's available (`stdio.h`,
+`stdlib.h`, `string.h`) - it's intentionally small (PROGRESS.md's
+Phase 24 entry has the full list of what's not yet supported, like
+`realloc` or file-stream I/O).

@@ -178,6 +178,30 @@ void sandbox_demo_task(void) {
                   "start.\n");
     }
 
+    /* Phase 24: the same check, but for a real C program
+     * (userland/examples/hello.c) linked against the minimal libc
+     * port instead of hand-written assembly - proving printf(),
+     * argv access, and malloc()/strcpy()/strcat()/free() all
+     * genuinely work, not just raw syscalls. A distinct exit code (7,
+     * vs. HELLO.ELF's 42) makes it possible to tell which test
+     * produced which result in the boot log. */
+    const char* exec_argv_c[] = {"HELLOC.ELF", "libc-test"};
+    int exec_pid_c = sys_exec("HELLOC.ELF", exec_argv_c, 2);
+    if (exec_pid_c >= 0) {
+        int exit_code_c = sys_wait(exec_pid_c);
+        if (exit_code_c == 7) {
+            sys_write("[sandbox] PASS: SYS_EXEC loaded and ran a real C "
+                      "program against the minimal libc - SYS_WAIT "
+                      "returned exit code 7 as expected.\n");
+        } else {
+            sys_write("[sandbox] FAIL: HELLOC.ELF exited with an "
+                      "unexpected code.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_EXEC(\"HELLOC.ELF\") failed to "
+                  "start.\n");
+    }
+
     sys_exit(0);
 
     /* Never reached: process_exit_current() (called by the SYS_EXIT

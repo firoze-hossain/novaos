@@ -149,7 +149,7 @@ $(ISO_FILE): $(KERNEL_BIN)
 
 # Create the FAT32 test disk image (Phase 3+). Requires `mtools`
 # (mformat/mcopy) - installed by `make setup` on every supported OS.
-$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
 	mformat -i $(DISK_IMG) -F ::
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.TXT ::HELLO.TXT
@@ -157,6 +157,7 @@ $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DI
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/GAME.PKG ::GAME.PKG
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/SYSTEM.CFG ::SYSTEM.CFG
 	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.ELF ::HELLO.ELF
+	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLOC.ELF ::HELLOC.ELF
 	@echo "✅ FAT32 test disk image created: $(DISK_IMG)"
 
 # Run in QEMU (interactive, graphical window)
@@ -206,6 +207,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "greeter. Hello" $(TEST_LOG) && \
 	    grep -q "Hello from a real ELF executable" $(TEST_LOG) && \
 	    grep -q "HELLO.ELF. .pid .*. exited with code 42" $(TEST_LOG) && \
+	    grep -q "malloc.d string: it works!" $(TEST_LOG) && \
+	    grep -q "HELLOC.ELF. .pid .*. exited with code 7" $(TEST_LOG) && \
+	    grep -q "SYS_EXEC loaded and ran a real C program" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_EXEC loaded and ran" $(TEST_LOG) && \
 	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
 	    grep -q "AC97 beep: playing" $(TEST_LOG) && \

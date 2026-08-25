@@ -31,6 +31,7 @@ in the same PR as the code it describes.
 | P21 - License, Versioning & Changelog | Complete - see below |
 | P22 - Process Exit Resource Cleanup | Complete - see below |
 | P23 - ELF Loading & a Real Process Model | Complete (scoped - see below) |
+| P24 - Minimal Libc Port | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2060,14 +2061,123 @@ garbage/ignored one.
   "simple and honest about the limit" choice as `MAX_CAPABILITIES`
   rather than a dynamically-sized argument list.
 
-## Phase 24 and beyond
+## Phase 24 - Minimal Libc Port
 
-Not started. Per the gap-analysis roadmap, the natural next step is a
-minimal libc port (making ELF-loaded programs actually useful for more
-than raw-syscall test binaries), then MBR/GPT partition support and a
-real filesystem beyond FAT32. Other candidates remain open as before:
-a real from-scratch bootloader, full TCP/sockets, true `fork()`
-semantics, extending capability-based access control to further
-resource types, true lowercase font forms, and USB drivers. Each
-would benefit from being scoped on its own terms rather than assumed
-as "next."
+**Status: Complete.** The natural next step identified at the end of
+Phase 23: ELF loading alone only lets NovaOS run hand-written
+assembly test binaries using its own syscall convention directly. This
+phase makes ELF-loaded programs actually useful by giving them a real
+(if small) C standard library to link against - `printf`, `malloc`,
+string functions - the same category of thing every real C program
+expects to be available.
+
+### What was built
+
+- **`SYS_SBRK`** (`kernel/arch/x86/cpu/syscall.h`/`.c`,
+  `process_sbrk()` in `kernel/task/process.c`) - the foundation
+  `malloc` needs. User processes had no heap at all before this.
+  Grows a process's heap by mapping fresh physical frames as needed
+  and returns the *previous* break address, the same semantics real
+  Unix `sbrk()` has. A new fixed virtual address, `HEAP_VIRT_BASE`,
+  positioned clear of both typical ELF load addresses and the user
+  stack. Deliberately ungated by capability - it only ever manages the
+  calling process's own memory, the same reasoning `SYS_WRITE` and
+  `SYS_YIELD` already use.
+- **`userland/libc/`** - a real, if intentionally small, C library,
+  written fresh rather than porting an existing one (musl/newlib
+  assume Linux-shaped syscalls or need a substantial shim layer;
+  writing directly against NovaOS's own syscall convention was more
+  tractable given the scope):
+  - `crt0.asm` - bridges NovaOS's raw process-entry stack convention
+    (the exact layout `process_exec()` builds - `argc`, `argv[]`,
+    `envp[]`) into a proper cdecl call to `int main(int argc, char**
+    argv, char** envp)`, then calls `exit()` with its return value -
+    exactly what a real C runtime's `_start` always does.
+  - `syscall.c`/`novasys.h` - clean wrappers for every NovaOS syscall.
+  - `string.c` - `strlen`, `strcpy`, `strncpy`, `strcat`, `strcmp`,
+    `strncmp`, `strchr`, `memcpy`, `memmove`, `memset`, `memcmp`.
+    Written fresh rather than reusing `kernel/lib/string.c` - that
+    file is compiled into and only reachable from the kernel image;
+    userland programs are entirely separate binaries.
+  - `stdio.c` - a real `printf` (`%d`/`%u`/`%x`/`%s`/`%c`/`%%` only -
+    no field width/precision, no floating point - builds the whole
+    formatted string into a fixed 512-byte buffer before one
+    `sys_write()` call rather than streaming), plus `putchar`/`puts`.
+  - `stdlib.c` - a first-fit `malloc`/`free` allocator over
+    `SYS_SBRK` (the same overall design as the kernel's own
+    `heap.c`, written fresh since userland can't call kernel code
+    directly), plus `atoi`/`exit`.
+- **`userland/examples/hello.c`** - a genuine test program using
+  `printf`, real `argv` iteration, and `malloc`/`strcpy`/`strcat`/
+  `free` chained together, not just raw syscalls.
+- **`userland/examples/build.sh`** - compiles the test program against
+  the libc into a real ELF32 executable (`tools/fixtures/HELLOC.ELF`),
+  the same way a user would build their own NovaOS program.
+
+### Verified behavior - complete, on the first attempt, for the most fragile mechanism in this project so far
+
+`crt0`'s stack-to-`main()` bridge, `printf`'s `va_arg` handling, and
+`malloc`'s `sbrk`-growth logic are all classic sources of subtle bugs
+even when each piece looks correct in isolation - genuinely the
+highest-risk phase yet for a silent, hard-to-spot mistake. It worked
+correctly on the first boot test, unedited:
+```
+[SYSCALL] SYS_WRITE from pid 9 ('Hello from a REAL C program on NovaOS!\n')
+[SYSCALL] SYS_WRITE from pid 9 ('argc = 2\n')
+[SYSCALL] SYS_WRITE from pid 9 ('argv[0] = HELLOC.ELF\n')
+[SYSCALL] SYS_WRITE from pid 9 ('argv[1] = libc-test\n')
+[SYSCALL] SYS_WRITE from pid 9 ('malloc'd string: it works!\n')
+[ OK ] Process 'HELLOC.ELF' (pid 9) exited with code 7
+```
+Every line is a genuine, independent proof point: `argc = 2` and both
+`argv[]` values match exactly what `SYS_EXEC` was given, printed via
+`printf`'s `%d` and `%s` handling, not the kernel echoing anything
+back; `malloc'd string: it works!` is the actual result of
+`malloc(64)` -> `strcpy` -> `strcat` -> `printf("%s")` chained
+together - if `sbrk`-backed `malloc` had failed, or `strcpy`/`strcat`
+had a boundary bug, this exact string would not have come out intact;
+the exit code (7) is a value only this program's own `return`
+statement could produce.
+
+Re-verified via a second, fully independent invocation through the
+shell's `run` command (a different pid, produced the identical correct
+`malloc`'d string output) - and, same as Phase 23's interactive check,
+an accidental lowercase filename typo (a limitation of the test
+tooling driving QEMU's monitor, not NovaOS) still resolved and ran
+correctly, another incidental reconfirmation of FAT32's
+case-insensitive lookups. Zero crashes across all runs. Zero
+regression - every Phase 2-23 `make test` marker still passes.
+`make test` now also asserts the malloc/exit-code/PASS lines appear.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **`malloc`/`free` never coalesce adjacent free blocks** - a
+  long-running program with a varied allocation pattern will
+  fragment its heap over time. A standard first-malloc
+  simplification, not an oversight.
+- **The heap only ever grows** - freed memory is reused within a
+  process's own free list but never actually returned to the kernel
+  via a negative `sbrk`. `process_sbrk()` explicitly rejects negative
+  increments for this reason.
+- **`printf` has a hard 512-byte output limit per call** and no field
+  width/precision/floating-point support - enough for real, useful
+  programs, not a general-purpose implementation.
+- **No dynamic memory beyond the heap** - no `realloc`, no
+  file-stream I/O (`fopen`/`fread`/etc., only the raw `sys_open`/
+  `sys_read`/`sys_close` syscalls directly), no `errno`.
+- **No standard library archive** - `userland/examples/build.sh`
+  compiles and links every libc source file directly into each
+  program rather than building a reusable `.a` static archive first,
+  keeping the build simple at the cost of recompiling the libc for
+  every program built this way.
+
+## Phase 25 and beyond
+
+Not started. Per the gap-analysis roadmap, the natural next steps are
+MBR/GPT partition support and a real filesystem beyond FAT32 - the
+next items after a working libc. Other candidates remain open as
+before: a real from-scratch bootloader, full TCP/sockets, true
+`fork()` semantics, extending capability-based access control to
+further resource types, true lowercase font forms, and USB drivers.
+Each would benefit from being scoped on its own terms rather than
+assumed as "next."

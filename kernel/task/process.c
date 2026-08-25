@@ -83,6 +83,8 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->allowed_host_count = 0;
     p->can_spawn = false;
     p->exit_code = 0;
+    p->heap_current = HEAP_VIRT_BASE;
+    p->heap_mapped_end = HEAP_VIRT_BASE;
 
     scheduler_add(p);
     return p->pid;
@@ -164,6 +166,8 @@ static process_t* create_user_task_common(const char* name,
     p->allowed_host_count = 0;
     p->can_spawn = false;
     p->exit_code = 0;
+    p->heap_current = HEAP_VIRT_BASE;
+    p->heap_mapped_end = HEAP_VIRT_BASE;
 
     return p;
 }
@@ -457,6 +461,8 @@ int process_exec(const char* path, const char** argv, int argc) {
     p->allowed_host_count = 0;
     p->can_spawn = false;
     p->exit_code = 0;
+    p->heap_current = HEAP_VIRT_BASE;
+    p->heap_mapped_end = HEAP_VIRT_BASE;
 
     kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
                "%d arg(s)\n", path, p->pid, entry_point, argc);
@@ -487,4 +493,30 @@ int process_wait(int pid) {
         }
         scheduler_yield();
     }
+}
+
+uint32_t process_sbrk(process_t* p, int increment) {
+    if (p == NULL || increment < 0) {
+        return (uint32_t)-1;
+    }
+
+    uint32_t old_break = p->heap_current;
+    uint32_t new_break = old_break + (uint32_t)increment;
+    uint32_t* pd = (uint32_t*)p->page_directory_phys;
+
+    while (p->heap_mapped_end < new_break) {
+        uint32_t frame = pmm_alloc_frame();
+        if (frame == 0) {
+            return (uint32_t)-1; /* out of physical memory - the heap
+                                     stays at whatever it grew to
+                                     before this call, matching real
+                                     sbrk()'s all-or-nothing failure */
+        }
+        paging_map_page(pd, p->heap_mapped_end, frame,
+                         PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+        p->heap_mapped_end += 4096;
+    }
+
+    p->heap_current = new_break;
+    return old_break;
 }
