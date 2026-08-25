@@ -169,6 +169,34 @@ void kernel_late_init(void) {
         } else {
             kernel_log("[WARN] ext2 mounted but EXT2TEST.TXT not found\n");
         }
+
+        /* Self-test (Phase 26): write a brand new file to the ext2
+         * partition, then read it straight back through the same
+         * vfs_read_file() path used above - proving the full write
+         * chain (block/inode allocation, directory-entry insertion)
+         * actually produces a file the read path can find and
+         * retrieve correctly, not just that ext2_write_file()
+         * returned true. */
+        const char* write_content = "Written to ext2 by NovaOS itself!";
+        if (ext2_write_file("EXT2WROT.TXT", write_content,
+                             (uint32_t)strlen(write_content))) {
+            char readback_buf[256];
+            int rn = vfs_read_file("EXT2WROT.TXT", readback_buf,
+                                    sizeof(readback_buf) - 1);
+            if (rn >= 0) {
+                readback_buf[rn] = '\0';
+                bool matches =
+                    (strcmp(readback_buf, write_content) == 0);
+                kernel_log("[ OK ] EXT2 WRITE+READBACK %s: EXT2WROT.TXT "
+                           "(%d bytes): %s\n",
+                           matches ? "OK" : "MISMATCH", rn, readback_buf);
+            } else {
+                kernel_log("[WARN] ext2_write_file succeeded but the new "
+                           "file wasn't found on readback\n");
+            }
+        } else {
+            kernel_log("[WARN] ext2_write_file failed\n");
+        }
     }
 
     /* Self-test: if a NIC is attached, ping the gateway (QEMU user-

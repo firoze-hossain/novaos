@@ -348,6 +348,17 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
+## ext2 writes and fork() (Phase 26-27)
+
+Watch the boot log for `EXT2 WRITE+READBACK OK: EXT2WROT.TXT` (Phase
+26 - ext2 can now write files, not just read) and `process_fork: pid
+... forked` plus `fork() + copy-on-write correctly isolated parent and
+child` (Phase 27 - real `fork()`, not the `exec`-style spawn `run`
+uses). Neither has a dedicated shell command - both are exercised via
+the same boot self-test process (`sandbox`) that proves every other
+syscall-level feature in this project, the same way `SYS_SBRK`/
+`SYS_WAIT` don't have shell commands either.
+
 ## Running real programs (Phase 23+)
 
 `run PATH [args...]` loads and runs a real ELF32 executable and waits

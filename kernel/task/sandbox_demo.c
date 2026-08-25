@@ -73,6 +73,12 @@ static inline int sys_wait(int pid) {
     return result;
 }
 
+static inline int sys_fork(void) {
+    int result = SYS_FORK;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
 static inline void sys_exit(int exit_code) {
     /* Phase 23: SYS_EXIT now takes an exit code in EBX (previously
      * ignored) - explicitly passing 0 here rather than leaving EBX as
@@ -200,6 +206,42 @@ void sandbox_demo_task(void) {
     } else {
         sys_write("[sandbox] FAIL: SYS_EXEC(\"HELLOC.ELF\") failed to "
                   "start.\n");
+    }
+
+    /* Phase 27: prove fork() genuinely duplicates this process and
+     * that copy-on-write correctly isolates the two copies - not just
+     * that fork() runs without crashing, but that the actual process-
+     * isolation contract holds: a write in the child must not be
+     * visible to the parent's own copy of the same memory. Using a
+     * plain stack local (not static/heap) deliberately exercises
+     * COW on the exact stack this function is currently running on -
+     * the most direct test of the mechanism, since fork() itself is
+     * called from partway through it. */
+    volatile int shared_value = 100;
+    int fork_result = sys_fork();
+
+    if (fork_result == 0) {
+        /* Child: modify our own copy, then exit with a distinct,
+         * checkable code the parent can verify via SYS_WAIT. */
+        shared_value = 999;
+        sys_write("[sandbox-child] I am the child - shared_value is "
+                  "now 999 in my own copy.\n");
+        sys_exit(55);
+    } else if (fork_result > 0) {
+        /* Parent: wait for the child, then check that OUR OWN copy of
+         * shared_value is untouched - the actual COW correctness
+         * test, not just "did fork() return a plausible pid." */
+        int child_exit = sys_wait(fork_result);
+        if (shared_value == 100 && child_exit == 55) {
+            sys_write("[sandbox] PASS: fork() + copy-on-write correctly "
+                      "isolated parent and child - my copy of "
+                      "shared_value is still 100, child exited with "
+                      "code 55 as expected.\n");
+        } else {
+            sys_write("[sandbox] FAIL: fork()/COW isolation broken.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_FORK failed.\n");
     }
 
     sys_exit(0);

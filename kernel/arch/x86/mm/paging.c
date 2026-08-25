@@ -34,6 +34,62 @@ static inline uint32_t read_cr2(void) {
     return val;
 }
 
+/* Phase 27: resolves a write fault to a copy-on-write page (see
+ * PAGE_COW's comment in paging.h) by giving the faulting process its
+ * own private copy, instead of it being a real error. Reads CR3
+ * directly rather than going through process_current() specifically
+ * to avoid paging.c taking on a new dependency on process.h for
+ * something this self-contained - the currently-loaded page directory
+ * is exactly the faulting process's own, since a page fault (like any
+ * exception) doesn't switch CR3 the same way a syscall doesn't (see
+ * Phase 11's PROGRESS.md note on that same property). Returns false
+ * for anything that isn't actually a resolvable COW fault, so the
+ * caller falls through to the ordinary page-fault panic. */
+static bool try_resolve_cow_fault(uint32_t faulting_address) {
+    uint32_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    uint32_t* pd = (uint32_t*)cr3;
+
+    uint32_t pd_index = faulting_address >> 22;
+    uint32_t pt_index = (faulting_address >> 12) & 0x3FFu;
+
+    if (!(pd[pd_index] & PAGE_PRESENT)) {
+        return false;
+    }
+    uint32_t* pt = (uint32_t*)(pd[pd_index] & 0xFFFFF000u);
+    uint32_t entry = pt[pt_index];
+
+    if (!(entry & PAGE_PRESENT) || !(entry & PAGE_COW)) {
+        return false; /* not present at all, or present but not a COW
+                          page - a genuine protection violation either
+                          way, not this function's job to resolve */
+    }
+
+    uint32_t old_frame = entry & 0xFFFFF000u;
+    uint32_t new_frame = pmm_alloc_frame();
+    if (new_frame == 0) {
+        return false; /* out of memory - let the panic below report it */
+    }
+
+    /* Both frames are reachable directly through this kernel's
+     * identity-mapped low memory (virtual address == physical address
+     * there) - the same reasoning every DMA buffer and ELF loader
+     * segment in this tree already relies on. */
+    memcpy((void*)new_frame, (void*)old_frame, 4096);
+
+    pt[pt_index] = new_frame | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    __asm__ volatile ("invlpg (%0)" : : "r"(faulting_address) : "memory");
+
+    /* Known limitation, documented rather than engineered around: the
+     * old shared frame is never freed here, even once every COW
+     * reference to it has resolved into private copies elsewhere - no
+     * reference counting exists (this kernel's PMM tracks free/used
+     * per frame, nothing more). A bounded leak (exactly one frame per
+     * page a fork()'d process ever writes to), not an unbounded one,
+     * but a real one. See PROGRESS.md. */
+    return true;
+}
+
 static void page_fault_handler(registers_t* regs) {
     uint32_t faulting_address = read_cr2();
 
@@ -42,6 +98,11 @@ static void page_fault_handler(registers_t* regs) {
     bool write    = regs->err_code & 0x2;
     bool user     = regs->err_code & 0x4;
     bool reserved = regs->err_code & 0x8;
+
+    if (present && write && try_resolve_cow_fault(faulting_address)) {
+        return; /* resolved - the faulting instruction will be
+                    re-executed automatically and succeed this time */
+    }
 
     kernel_log("[FAULT] Page fault at 0x%x (eip=0x%x): %s, %s, %s%s\n",
                (int)faulting_address, (int)regs->eip,

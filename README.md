@@ -222,6 +222,26 @@ a VM.
   passing byte-exact despite every disk access now going through a
   partition offset it didn't have before
 
+**Phases 26-27 - ext2 Write Support & True `fork()` (delivered together)**
+- Phase 26: ext2 can now write files, not just read them - block/inode
+  allocation and directory-entry insertion, verified by inspecting the
+  result with real, independent `debugfs` tooling (not this project's
+  own code) after a boot self-test wrote a new file
+- Phase 27: genuine `fork()` semantics via copy-on-write - not the
+  `exec`-style spawn Phase 23 deliberately used instead. A forked
+  child resumes execution at the *exact point* the parent called
+  `fork()` from, sharing memory with the parent until either side
+  writes to it
+- The fork() test proves actual process isolation, not just that it
+  runs: a child modifies its own copy of a stack variable and exits
+  with a distinct code; the parent then confirms its *own* copy is
+  untouched - real proof copy-on-write correctly separated the two
+  processes' memory
+- Worked correctly on the first boot test - remarkable given this is
+  among the most structurally delicate mechanisms possible in a
+  kernel (hand-constructed interrupt return frames, copy-on-write
+  with correct TLB management), stated plainly rather than downplayed
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 

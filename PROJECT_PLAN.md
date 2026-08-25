@@ -137,6 +137,14 @@ at the end. Concretely, in the order it gets built:
 | **P23** | ELF loading + a real process model (argv/exit codes/SYS_EXEC/SYS_WAIT) | Complete (scoped - see PROGRESS.md; exec-style, not true fork()) |
 | **P24** | Minimal libc port (crt0, printf, malloc via new SYS_SBRK, string functions) | Complete (scoped - see PROGRESS.md) |
 | **P25** | MBR/GPT partition support + a real second filesystem (ext2, read-only) | Complete (scoped - see PROGRESS.md) |
+| **P26** | ext2 write support | Complete (scoped - see PROGRESS.md) |
+| **P27** | True fork() via copy-on-write | Complete (scoped - see PROGRESS.md) |
+
+Phases 26-27 (post-release) were delivered together, deliberately
+chosen over the era's other open candidates (a real bootloader, USB
+drivers) for a much lower risk/effort profile - both build on proven
+patterns and existing infrastructure (FAT32's own write support;
+Phase 3's paging/page-fault handler) rather than a new domain.
 
 Phase 25 (post-release) is the third and final item from the
 gap-analysis roadmap - disk.img is now genuinely partitioned rather

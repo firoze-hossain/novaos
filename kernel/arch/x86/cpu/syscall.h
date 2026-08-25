@@ -80,6 +80,14 @@
  * "no gate needed" reasoning SYS_WRITE and SYS_YIELD already use. */
 #define SYS_SBRK 11
 
+/* Phase 27: true fork() - no arguments. Returns the child's pid to
+ * the parent, or 0 to the child (the standard Unix fork() contract) -
+ * see process_fork() in kernel/task/process.h for the full mechanism.
+ * No capability check: forking duplicates only the calling process's
+ * own resources, the same "no gate needed" reasoning SYS_SBRK already
+ * uses. */
+#define SYS_FORK 12
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

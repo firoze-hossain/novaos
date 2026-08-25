@@ -189,6 +189,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "Partition table found (MBR): 2 partition" $(TEST_LOG) && \
 	    grep -q "ext2 mounted: block_size=4096" $(TEST_LOG) && \
 	    grep -q "EXT2 FILE READ OK: EXT2TEST.TXT" $(TEST_LOG) && \
+	    grep -q "EXT2 WRITE.READBACK OK: EXT2WROT.TXT" $(TEST_LOG) && \
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
 	    grep -q "PING OK" $(TEST_LOG) && \
@@ -209,6 +210,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "malloc.d string: it works!" $(TEST_LOG) && \
 	    grep -q "HELLOC.ELF. .pid .*. exited with code 7" $(TEST_LOG) && \
 	    grep -q "SYS_EXEC loaded and ran a real C program" $(TEST_LOG) && \
+	    grep -q "process_fork: pid .* forked" $(TEST_LOG) && \
+	    grep -q "sandbox-child. I am the child" $(TEST_LOG) && \
+	    grep -q "fork.. . copy-on-write correctly isolated" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_EXEC loaded and ran" $(TEST_LOG) && \
 	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
 	    grep -q "AC97 beep: playing" $(TEST_LOG) && \

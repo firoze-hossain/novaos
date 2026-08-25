@@ -14,6 +14,7 @@
 #include "scheduler.h"
 #include "elf.h"
 #include "../arch/x86/cpu/gdt.h"
+#include "../arch/x86/cpu/isr.h"
 #include "../arch/x86/mm/heap.h"
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/mm/pmm.h"
@@ -22,6 +23,12 @@
 #include "../include/kernel.h"
 
 extern void enter_usermode(void);
+/* Phase 27: see syscall_stub.asm - the exact tail of ordinary syscall
+ * return handling, which a fork()'d child's fake context-switch frame
+ * points at as its "return address" so being scheduled in for the
+ * first time resumes exactly like returning from the parent's fork()
+ * call, with the child's own copy of every register. */
+extern void syscall_return_point(void);
 
 static process_t process_table[MAX_PROCESSES];
 static int next_pid = 1;
@@ -259,6 +266,79 @@ static void free_user_address_space(uint32_t page_directory_phys) {
     }
 
     pmm_free_frame(page_directory_phys);
+}
+
+/* Phase 27: walks the parent's address space the same way
+ * free_user_address_space() does (skipping the shared kernel range
+ * via direct comparison against the kernel template, not a hardcoded
+ * boundary), but instead of freeing anything, gives the child its own
+ * page tables that point at the *same* physical data frames as the
+ * parent - real copy-on-write sharing, not an eager copy. Both the
+ * parent's and the child's page table entries for every shared frame
+ * are marked PAGE_COW and have PAGE_WRITE cleared; whichever process
+ * writes to a shared page first gets its own private copy via
+ * paging.c's page fault handler, the other keeps sharing the original
+ * until (if ever) it also writes to it. Returns false on allocation
+ * failure, leaving the child's address space partially built - the
+ * caller treats that as a fork() failure and doesn't schedule the
+ * child, but see PROGRESS.md for the leaked-partial-state caveat that
+ * implies. */
+static bool cow_share_address_space(uint32_t parent_pd_phys,
+                                     uint32_t child_pd_phys) {
+    uint32_t* parent_pd = (uint32_t*)parent_pd_phys;
+    uint32_t* child_pd = (uint32_t*)child_pd_phys;
+    uint32_t* kernel_pd = (uint32_t*)paging_kernel_directory_phys();
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        if (!(parent_pd[i] & PAGE_PRESENT)) {
+            continue;
+        }
+        if (parent_pd[i] == kernel_pd[i]) {
+            continue; /* shared kernel entry - paging_create_address_
+                          space() already gave the child this same
+                          entry; nothing to do */
+        }
+
+        uint32_t* parent_pt = (uint32_t*)(parent_pd[i] & 0xFFFFF000u);
+
+        uint32_t child_pt_frame = pmm_alloc_frame();
+        if (child_pt_frame == 0) {
+            return false;
+        }
+        uint32_t* child_pt = (uint32_t*)child_pt_frame;
+        memset(child_pt, 0, 4096);
+
+        for (uint32_t j = 0; j < 1024; j++) {
+            if (!(parent_pt[j] & PAGE_PRESENT)) {
+                continue;
+            }
+
+            uint32_t frame = parent_pt[j] & 0xFFFFF000u;
+            uint32_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_COW;
+
+            parent_pt[j] = frame | cow_flags; /* the parent's own
+                                                   mapping becomes
+                                                   read-only+COW too -
+                                                   both sides must
+                                                   fault to get a
+                                                   private copy */
+            child_pt[j] = frame | cow_flags;
+        }
+
+        child_pd[i] = child_pt_frame | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    }
+
+    /* The parent's own currently-loaded page directory just had some
+     * of its entries changed from writable to read-only - without
+     * this, the CPU's TLB could still have stale "writable" entries
+     * cached for pages the parent had recently touched, letting it
+     * keep writing without ever faulting into the COW handler.
+     * Reloading CR3 with its own value flushes all non-global TLB
+     * entries without actually switching address spaces. */
+    uint32_t cr3 = parent_pd_phys;
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(cr3) : "memory");
+
+    return true;
 }
 
 void process_exit_current(int exit_code) {
@@ -519,4 +599,102 @@ uint32_t process_sbrk(process_t* p, int increment) {
 
     p->heap_current = new_break;
     return old_break;
+}
+
+int process_fork(registers_t* parent_regs) {
+    process_t* parent = scheduler_current();
+    if (parent == NULL) {
+        return -1;
+    }
+
+    process_t* child = allocate_slot();
+    if (child == NULL) {
+        return -1;
+    }
+
+    void* child_kstack = kmalloc(KERNEL_STACK_SIZE);
+    if (child_kstack == NULL) {
+        return -1;
+    }
+
+    uint32_t child_pd_phys = paging_create_address_space();
+    if (!cow_share_address_space(parent->page_directory_phys,
+                                  child_pd_phys)) {
+        kfree(child_kstack);
+        free_user_address_space(child_pd_phys);
+        return -1;
+    }
+
+    /* Build the child's kernel stack: a full copy of the parent's
+     * saved register state (registers_t - see kernel/arch/x86/cpu/
+     * isr.h) at the moment of this syscall, with eax overwritten to 0
+     * (fork()'s child-side return value), followed by the fake
+     * switch_context() frame that makes scheduling this process in
+     * for the first time land at syscall_return_point instead of
+     * enter_usermode - see that label's comment in syscall_stub.asm
+     * for the full picture, and create_user_task_common() above for
+     * the same "push in reverse field order, starting from the top of
+     * a fresh kernel stack" technique this reuses. */
+    uint32_t kstack_top = (uint32_t)child_kstack + KERNEL_STACK_SIZE;
+    uint32_t* sp = (uint32_t*)kstack_top;
+
+    *(--sp) = parent_regs->ss;
+    *(--sp) = parent_regs->useresp;
+    *(--sp) = parent_regs->eflags;
+    *(--sp) = parent_regs->cs;
+    *(--sp) = parent_regs->eip;
+    *(--sp) = parent_regs->err_code;
+    *(--sp) = parent_regs->int_no;
+    *(--sp) = 0; /* eax: the child's fork() return value is always 0 */
+    *(--sp) = parent_regs->ecx;
+    *(--sp) = parent_regs->edx;
+    *(--sp) = parent_regs->ebx;
+    *(--sp) = parent_regs->esp_dummy; /* POPA discards this slot rather
+                                          than actually loading ESP
+                                          from it - the value here is
+                                          never used, copied only for
+                                          structural completeness */
+    *(--sp) = parent_regs->ebp;
+    *(--sp) = parent_regs->esi;
+    *(--sp) = parent_regs->edi;
+    *(--sp) = parent_regs->ds;
+
+    *(--sp) = (uint32_t)syscall_return_point;
+    *(--sp) = 0; /* ebp */
+    *(--sp) = 0; /* ebx */
+    *(--sp) = 0; /* esi */
+    *(--sp) = 0; /* edi */
+    *(--sp) = 0x202; /* eflags */
+
+    child->pid = next_pid++;
+    copy_name(child->name, parent->name, sizeof(child->name));
+    child->state = PROCESS_READY;
+    child->is_user = true;
+    child->esp = (uint32_t)sp;
+    child->kernel_stack_top = kstack_top;
+    child->kernel_stack_alloc = child_kstack;
+    child->page_directory_phys = child_pd_phys;
+    child->exit_code = 0;
+
+    /* Real fork() semantics: the child inherits the parent's
+     * capabilities and heap state (the heap's actual memory is itself
+     * now COW-shared, so both processes see identical contents until
+     * either one writes to it) - unlike process_exec() (Phase 23),
+     * which deliberately starts a new process with none of the
+     * caller's privileges. */
+    child->allowed_file_count = parent->allowed_file_count;
+    memcpy(child->allowed_files, parent->allowed_files,
+           sizeof(parent->allowed_files));
+    child->allowed_host_count = parent->allowed_host_count;
+    memcpy(child->allowed_hosts, parent->allowed_hosts,
+           sizeof(parent->allowed_hosts));
+    child->can_spawn = parent->can_spawn;
+    child->heap_current = parent->heap_current;
+    child->heap_mapped_end = parent->heap_mapped_end;
+
+    kernel_log("[ OK ] process_fork: pid %d forked -> new pid %d\n",
+               parent->pid, child->pid);
+
+    scheduler_add(child);
+    return child->pid;
 }

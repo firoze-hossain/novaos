@@ -6,6 +6,13 @@
 #define PAGE_PRESENT 0x1
 #define PAGE_WRITE   0x2
 #define PAGE_USER    0x4
+/* Phase 27: bits 9-11 of a page table entry are explicitly ignored by
+ * the CPU and reserved for OS use - this marks a page shared between
+ * a fork()'d parent and child, read-only in both until whichever one
+ * writes to it first triggers a copy (see paging.c's page fault
+ * handler). Not a real hardware feature; purely this kernel's own
+ * bookkeeping. */
+#define PAGE_COW     0x200
 
 /* Identity-maps physical (== virtual) addresses 0-64MB with static,
  * boot-time page tables and enables paging (CR0.PG). Also registers

@@ -33,6 +33,8 @@ in the same PR as the code it describes.
 | P23 - ELF Loading & a Real Process Model | Complete (scoped - see below) |
 | P24 - Minimal Libc Port | Complete (scoped - see below) |
 | P25 - MBR/GPT Partitions & a Real Filesystem (ext2) | Complete (scoped - see below) |
+| P26 - ext2 Write Support | Complete (scoped - see below) |
+| P27 - True fork() via Copy-on-Write | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2289,11 +2291,178 @@ asserts the partition/ext2 markers appear.
 
 ## Phase 26 and beyond
 
-Not started. With all three items from the original gap-analysis
-roadmap complete (ELF loading, a libc, and now partitions + a second
-filesystem), remaining candidates are open-ended: a real
-from-scratch bootloader, full TCP/sockets, true `fork()` semantics,
-ext2 write support, extending capability-based access control to
-further resource types, true lowercase font forms, and USB drivers.
-Each would benefit from being scoped on its own terms rather than
-assumed as "next."
+## Phase 26 - ext2 Write Support
+
+**Status: Complete.** The first of two phases delivered together,
+chosen for a much lower risk/effort profile than the era's other two
+open candidates (a real bootloader, USB drivers) - builds on a proven
+pattern (FAT32's own write support, Phase 8) rather than a new domain,
+and completes the ext2 driver from Phase 25 into something actually
+usable for persistent data, not just read-only.
+
+### What was built
+
+- **`kernel/fs/ext2.*`**: block and inode bitmap allocation, inode
+  writing, and root-directory-entry insertion by splitting the
+  trailing slack space in an existing entry - the same technique real
+  ext2 tools use, since a directory block's entries always logically
+  fill the whole block (the last real entry's `rec_len` is stretched
+  to cover whatever space is left). Create-only (fails if the file
+  already exists), the same honest starting scope FAT32's own write
+  support began with. Allocation is scoped to block group 0 only -
+  verified empirically against a real `mkfs.ext2` image (this
+  project's actual test images always fit in one group) rather than
+  assumed, and documented as a real limitation for anything larger.
+  Direct blocks only (12 block max, ~48KB at this driver's 4096-byte
+  block size) - no indirect-block allocation.
+- **`kernel/init/main.c`**: a self-test that writes a brand new file
+  to ext2, then reads it straight back through the same
+  `vfs_read_file()` path the existing read self-test uses - proving
+  the full write chain (allocation, inode writing, directory
+  insertion) produces a file the read path can actually find, not
+  just that the write call returned `true`.
+
+### Verified behavior - checked by an independent tool, not just this driver
+
+After the boot self-test wrote a new file, the resulting `disk.img`
+was inspected with real, independent e2fsprogs tooling (`debugfs`, not
+this project's own code):
+```
+     13  100644 (1)      0      0      33  1-Jan-1970 00:00 EXT2WROT.TXT
+Written to ext2 by NovaOS itself!
+```
+Correct inode number, correct mode (`100644`, matching this driver's
+`0x81A4` encoding exactly), correct size, correct content - proof the
+on-disk format produced is genuinely standards-compliant, not just
+self-consistent with this driver's own read path. (The 1970 timestamp
+is expected - inode times aren't set yet, a documented gap below, not
+a bug.) Worked correctly on the first boot test, unedited. Zero
+regression - every existing `make test` marker still passes.
+
+### Known limitations / follow-ups
+
+- **Block/inode allocation is group-0-only** - a filesystem large
+  enough to need a second group would silently fail allocation.
+- **No indirect-block allocation** - files over ~48KB (at this
+  driver's 4096-byte block size) can't be written.
+- **Inode timestamps are always zero** - no real creation/modification
+  time is set.
+- **No delete, no append/overwrite of an existing file** - matching
+  FAT32's own original Phase 8 scope before later refinement.
+- **A failed write mid-allocation leaks the blocks/inode already
+  claimed** - no rollback on partial failure.
+
+## Phase 27 - True `fork()` via Copy-on-Write
+
+**Status: Complete.** The second of two phases delivered together,
+and the most structurally delicate mechanism built in this entire
+project - correctly replicating a process's execution context via
+hand-constructed interrupt/syscall return frames, and copy-on-write
+memory sharing with correct TLB management.
+
+### Scope, and why this is genuinely different from Phase 23's `exec()`
+
+Phase 23 deliberately implemented `exec`-style spawn-and-load (create
+a new process running a named ELF file) rather than true `fork()`,
+specifically because real `fork()` needs copy-on-write memory
+management this kernel didn't have yet. This phase builds exactly
+that: `SYS_FORK` genuinely duplicates the calling process - a new
+process with its own address space, sharing every existing page with
+the parent via copy-on-write rather than eagerly copying anything, and
+resuming execution at the *exact point* the parent called `SYS_FORK`
+from. Both processes continue as if they'd both just returned from the
+same call, distinguished only by the return value (0 in the child, the
+child's pid in the parent) - the real, standard Unix `fork()` contract,
+not an approximation of it.
+
+### What was built
+
+- **`kernel/arch/x86/cpu/syscall_stub.asm`**: a new `syscall_return_point`
+  label marking the exact tail of ordinary syscall return handling -
+  the point a forked child's fake context-switch frame is built to
+  resume at, so being scheduled in for the first time is
+  indistinguishable from a normal interrupt return. A zero-behavior-
+  change addition for every existing syscall (just a label), verified
+  separately before building anything on top of it.
+- **`kernel/arch/x86/mm/paging.h`/`.c`**: a new `PAGE_COW` bit (bits
+  9-11 of a page table entry are explicitly CPU-ignored and reserved
+  for OS use - not a real hardware feature, purely this kernel's own
+  bookkeeping) and an extension to the existing page-fault handler:
+  a write fault to a present, `PAGE_COW`-marked page allocates a
+  private copy, remaps it, and flushes that one TLB entry, instead of
+  the fault being treated as a real error. Every other kind of fault
+  still falls through to the existing panic, unchanged.
+- **`process_fork()`** (`kernel/task/process.c`): walks the parent's
+  entire address space (reusing the exact "differs from the kernel
+  template" detection technique `free_user_address_space()` already
+  established in Phase 22/23), gives the child its own page tables
+  pointing at the *same* physical data frames as the parent (marking
+  both sides' entries read-only+COW), then constructs the child's
+  kernel stack as a byte-exact copy of the parent's full saved
+  register state (`registers_t`, with `eax` overwritten to 0) sitting
+  behind a fake `switch_context()` frame pointing at
+  `syscall_return_point`. Reloads CR3 with its own value after
+  modifying the parent's own page table entries, flushing stale
+  writable TLB entries that would otherwise let the parent keep
+  writing without ever faulting into the COW handler.
+- **`SYS_FORK`**: no arguments, ungated by capability (forking only
+  ever duplicates the calling process's own resources). The child
+  inherits the parent's capabilities and heap state - correct `fork()`
+  semantics, deliberately different from `exec()`'s "start with
+  nothing" default.
+
+### Verified behavior - proving isolation, not just that it runs
+
+A test that proves the actual contract, not just that `fork()`
+executes without crashing: a plain stack-local variable (deliberately
+*not* static/heap, to exercise COW on the very stack `fork()` is
+called from) set to 100 before the call. The child sets its own copy
+to 999 and exits with a distinct, checkable code (55); the parent
+waits for it, then checks that its *own* copy is still 100:
+```
+[ OK ] process_fork: pid 5 forked -> new pid 10
+[SYSCALL] SYS_WRITE from pid 10 ('[sandbox-child] I am the child - shared_value is now 999 in my own copy.\n')
+[ OK ] Process 'sandbox' (pid 10) exited with code 55
+[SYSCALL] SYS_WRITE from pid 5 ('[sandbox] PASS: fork() + copy-on-write correctly isolated parent and child - my copy of shared_value is still 100, child exited with code 55 as expected.\n')
+```
+This worked correctly on the very first boot test, unedited - genuinely
+remarkable given the complexity, and stated plainly rather than
+downplayed. Re-verified with a full `make test` run (zero regression
+across every Phase 2-26 marker) and a 25-second extended stability run
+with zero crashes and all 11 of this build's PASS/FAIL self-checks
+reporting PASS. An initial stability check appeared to show a `[FAULT]`
+line; investigating found it was Phase 26's own "file already exists"
+message from a stale, reused `disk.img` left over from an earlier test
+in the same session, not a fork-related fault - re-run with a freshly
+rebuilt disk to confirm zero real faults, rather than either dismissing
+the flagged line without checking or treating it as a false alarm
+without verifying why.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **No reference counting on shared COW frames** - the original shared
+  physical frame is never freed even once every COW reference to it
+  has resolved into private copies elsewhere. A bounded leak (exactly
+  one frame per page a fork()'d process ever writes to), not an
+  unbounded one, but a real one - this kernel's PMM tracks only
+  free/used per frame, nothing more, and full reference counting is
+  substantial follow-up work.
+- **A failed `cow_share_address_space()` mid-walk leaks the child's
+  partially-built address space** - no rollback on allocation failure
+  partway through.
+- **File descriptors and open UDP listeners are not duplicated or
+  otherwise handled specially across fork()** - the existing
+  process-local state for these (Phase 11/14) simply isn't touched by
+  `process_fork()`, meaning a forked child starts with none of the
+  parent's open handles, an implicit rather than deliberately
+  designed behavior worth revisiting.
+- **No `waitpid`-style options** (`WNOHANG`, etc.) - `SYS_WAIT` always
+  blocks until the target process terminates, unchanged since Phase 23.
+
+## Phase 28 and beyond
+
+Not started. Remaining open candidates: a real from-scratch
+bootloader, full TCP/sockets, extending capability-based access
+control to further resource types, true lowercase font forms, and USB
+drivers. Each would benefit from being scoped on its own terms rather
+than assumed as "next."

@@ -32,4 +32,18 @@ bool ext2_is_mounted(void);
  * found or the filesystem isn't mounted. */
 int ext2_read_file(const char* filename, void* buf, uint32_t buf_size);
 
+/* Phase 26: create-only (fails if `filename` already exists, the same
+ * honest starting scope FAT32's own write support began with in
+ * Phase 8) - allocates a fresh inode and enough direct data blocks
+ * (12 blocks max - no indirect-block allocation yet, so files are
+ * capped at 12 * block_size, e.g. 48KB at this driver's 4096-byte
+ * block size) to hold `data`, writes it, and inserts a new directory
+ * entry into the root directory by splitting whatever trailing slack
+ * space the last existing entry has (the same technique real ext2
+ * tools use - directory blocks are always "full" of entries, with the
+ * final one's rec_len stretched to cover unused space at the end).
+ * Block/inode allocation is scoped to block group 0 only - see
+ * PROGRESS.md for the full limitation. Returns true on success. */
+bool ext2_write_file(const char* filename, const void* data, uint32_t size);
+
 #endif

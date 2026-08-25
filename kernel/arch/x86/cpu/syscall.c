@@ -267,6 +267,15 @@ static void handle_sbrk(registers_t* regs) {
     regs->eax = process_sbrk(p, increment);
 }
 
+static void handle_fork(registers_t* regs) {
+    int child_pid = process_fork(regs);
+    /* The parent's own return value (the child's pid, or -1 on
+     * failure) - the child's return value (0) was already baked into
+     * its own copy of these same registers by process_fork() itself,
+     * on the child's own kernel stack, not this line. */
+    regs->eax = (uint32_t)child_pid;
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -316,6 +325,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_SBRK:
             handle_sbrk(regs);
+            break;
+
+        case SYS_FORK:
+            handle_fork(regs);
             break;
 
         default:

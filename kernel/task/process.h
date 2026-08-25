@@ -2,6 +2,7 @@
 #define TASK_PROCESS_H
 
 #include "../include/types.h"
+#include "../arch/x86/cpu/isr.h"
 
 #define MAX_PROCESSES 16
 #define KERNEL_STACK_SIZE (8 * 1024)
@@ -161,6 +162,22 @@ int process_exec(const char* path, const char** argv, int argc);
  * already finished and was slotted over" a real, documented
  * limitation rather than a silently-wrong answer. */
 int process_wait(int pid);
+
+/* Phase 27: true fork() semantics - unlike process_exec() (Phase 23,
+ * deliberately exec-style, not this), this genuinely duplicates the
+ * calling process: a new process with its own address space, sharing
+ * every existing page with the parent via copy-on-write (see
+ * PAGE_COW in kernel/arch/x86/mm/paging.h) rather than eagerly
+ * copying anything, and resuming execution at the exact point the
+ * parent called SYS_FORK from - both processes continue as if they'd
+ * both just returned from the same call, distinguished only by the
+ * return value (0 in the child, the child's pid in the parent - the
+ * real, standard Unix fork() contract). `parent_regs` is the
+ * *calling* process's full saved register state at the moment of the
+ * syscall (handed in directly from the syscall handler) - what makes
+ * "resume where the parent was" possible at all. Returns the child's
+ * pid, or -1 on failure (no free process slot, out of memory). */
+int process_fork(registers_t* parent_regs);
 
 /* Phase 24: grows (never shrinks - see below) the calling process's
  * heap by `increment` bytes, mapping fresh physical frames as needed,
