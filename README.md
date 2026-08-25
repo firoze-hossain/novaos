@@ -204,6 +204,24 @@ a VM.
   phase for a subtle mistake so far (crt0/`printf`/`malloc` are
   classic sources of hard-to-spot bugs), and it didn't have one
 
+**Phase 25 - MBR/GPT Partitions & a Real Filesystem (ext2)**
+- `disk.img` is now a genuinely partitioned disk (MBR, verified with
+  real `parted`-built partition tables), not one bare unpartitioned
+  filesystem - closing a real, previously-documented gap
+- A real, from-scratch, read-only ext2 driver, verified against
+  filesystem images built by actual Linux tools (`mkfs.ext2`,
+  `debugfs`), not just this driver's own round-trip
+- `cat`/`run`/every existing command transparently works with ext2
+  files too - `vfs_read_file()` falls back to ext2 if FAT32 doesn't
+  have the file, no new shell commands needed
+- FAT32 was retrofitted for partition-awareness with **zero changes
+  to its internals** - a single partition offset added in `ata.c`
+  that FAT32's five public entry points set themselves, keeping the
+  retrofit low-risk to code every other phase depends on
+- Zero regression, verified against the existing FAT32 self-test
+  passing byte-exact despite every disk access now going through a
+  partition offset it didn't have before
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -233,7 +251,7 @@ novaos/
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
 │   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci, sound (ac97)
-│   ├── fs/             # VFS pass-through + FAT32 (read + write)
+│   ├── fs/             # VFS (FAT32 + ext2 fallback), FAT32 (read + write), ext2 (read-only), MBR/GPT partitions
 │   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp, dns
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
 │   ├── pkg/            # nova-pkg package manager

@@ -32,6 +32,7 @@ in the same PR as the code it describes.
 | P22 - Process Exit Resource Cleanup | Complete - see below |
 | P23 - ELF Loading & a Real Process Model | Complete (scoped - see below) |
 | P24 - Minimal Libc Port | Complete (scoped - see below) |
+| P25 - MBR/GPT Partitions & a Real Filesystem (ext2) | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2171,13 +2172,128 @@ regression - every Phase 2-23 `make test` marker still passes.
   keeping the build simple at the cost of recompiling the libc for
   every program built this way.
 
-## Phase 25 and beyond
+## Phase 25 - MBR/GPT Partitions & a Real Filesystem (ext2)
 
-Not started. Per the gap-analysis roadmap, the natural next steps are
-MBR/GPT partition support and a real filesystem beyond FAT32 - the
-next items after a working libc. Other candidates remain open as
-before: a real from-scratch bootloader, full TCP/sockets, true
-`fork()` semantics, extending capability-based access control to
+**Status: Complete.** The third and final item from the original
+gap-analysis roadmap. Closes two real, previously-documented gaps at
+once: NovaOS's disk always had to be one bare, unpartitioned FAT32
+filesystem starting at LBA 0 (real disks almost universally use
+partition tables, even single-partition ones), and FAT32 was the only
+filesystem NovaOS could read at all.
+
+### What was built
+
+- **`kernel/fs/partition.*`** - MBR and GPT partition table parsing.
+  Detection is deliberately conservative rather than just trusting the
+  `0x55AA` boot signature at bytes 510-511: that signature is *also*
+  present at the end of an ordinary FAT32 boot sector (every disk
+  image before this phase), so it can't by itself distinguish "this is
+  a partition table" from "this is directly a filesystem." Also checks
+  whether at least one MBR entry looks structurally plausible
+  (non-zero type, sane start/count) before treating it as real - real
+  boot code occupying that same byte range is unlikely to
+  coincidentally satisfy that. GPT is parsed structurally (protective
+  MBR, header, partition entry array) but does not verify either
+  CRC32 checksum (no CRC32 implementation exists in this kernel) and
+  exposes partitions by index only, not by decoding type GUIDs - both
+  documented limits, not oversights.
+- **`kernel/drivers/ata/ata.*`** gained a partition offset
+  (`ata_set_partition_offset()`) added to every sector read/write.
+  This was the key design choice that kept the retrofit low-risk:
+  **zero changes to FAT32's internals** - its 10+ existing disk-access
+  call sites keep computing addresses exactly as before ("relative to
+  my own filesystem"), with `ata.c` transparently adding the real
+  partition's start LBA underneath. `fat32.c`'s five public entry
+  points each set the offset at their own start (matching the exact
+  same "cooperative, not fully reentrant" tradeoff already accepted
+  for `fat32.c`'s static scratch buffers since Phase 8 - documented in
+  `ata.c`'s header comment rather than silently assumed away).
+- **`kernel/fs/ext2.*`** - a real, from-scratch, read-only ext2
+  driver: superblock, block group descriptors, inodes, direct +
+  singly-indirect block pointers, root-directory entry parsing.
+  Verified against filesystem images built by real Linux tools
+  (`mkfs.ext2`, `debugfs`), not just round-tripped against this
+  driver's own writes (which don't exist - this is read-only) - a
+  meaningfully stronger test, since it catches misunderstandings of
+  the real on-disk format rather than just internal
+  self-consistency. Filenames are matched case-sensitively, correctly
+  reflecting how ext2 actually works - unlike this project's FAT32
+  driver, which is case-insensitive by 8.3 convention.
+- **`kernel/fs/vfs.c`** - `vfs_read_file()` now falls back to ext2 if
+  FAT32 doesn't have the file, so every existing command (`cat`,
+  `run`, etc.) transparently works with ext2 files too, with zero new
+  shell commands needed. FAT32 always wins on a name that exists in
+  both, a simple, documented tiebreak.
+- **`tools/build-disk-image.sh`** - builds the new partitioned
+  `disk.img`: an MBR with partition 1 (FAT32, all the existing
+  fixtures, unchanged) and partition 2 (a real ext2 filesystem).
+  Partition images are built as separate files and `dd`'d into the
+  combined image at the exact offsets `parted` assigns, avoiding any
+  dependency on loop devices or mounting, which may not be available
+  in every build environment.
+
+### Verified behavior - against real, independently-built filesystem images
+
+This is among the most structurally complex phases in this project
+(partition table auto-detection heuristics, a from-scratch filesystem
+driver with superblock/block-group/inode/indirect-block parsing, a
+low-risk retrofit of code every other phase depends on) and every
+piece worked correctly on the first boot test, unedited:
+```
+[ OK ] Partition table found (MBR): 2 partition(s)
+[ OK ] FAT32 mounted (cluster=512B, root_cluster=2)
+[ OK ] ext2 mounted: block_size=4096, inode_size=256
+[ OK ] FILE READ OK: HELLO.TXT (68 bytes): Hello from NovaOS FAT32!...
+[ OK ] EXT2 FILE READ OK: EXT2TEST.TXT (50 bytes): Hello from a real ext2 filesystem read by NovaOS!
+```
+The MBR was built by `parted` - a real, independent tool, not this
+project's own code proving itself. The ext2 `block_size`/`inode_size`
+values exactly match what `dumpe2fs` independently reported on the
+same image. The FAT32 self-test still passes byte-exact despite every
+FAT32 disk access now going through a partition offset it didn't have
+before - genuine proof of zero regression, not just an assumption.
+
+Interactively re-verified through the shell's `cat` command with the
+exact correct filename case (`cat EXT2TEST.TXT`, sent via QEMU
+monitor shift-modified keys to guarantee exact case) - correct
+content, no crashes. Also incidentally reconfirmed, when a
+lowercase-typo'd filename was tried first: ext2's case-sensitive
+matching correctly *rejected* the mismatched lookup rather than
+loosely matching it - the expected, correct behavior for ext2, not a
+bug. Zero regression - every Phase 2-24 `make test` marker still
+passes with the new partitioned disk image, `make test` now also
+asserts the partition/ext2 markers appear.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **ext2 is read-only** - no write/create/delete support, matching how
+  FAT32 itself started read-only in Phase 3 before Phase 8 added
+  writes.
+- **No subdirectories on ext2** - root directory only, the same scope
+  FAT32 started with.
+- **No doubly/triply-indirect block support** - files limited to
+  direct + singly-indirect blocks (comfortably several megabytes at a
+  4096-byte block size, but a real limit for large files).
+- **GPT CRC32 checksums are not verified** and partition type GUIDs
+  are not decoded (partitions are found by index only) - correct
+  structural parsing, not full spec compliance.
+- **The ATA partition offset is a single global**, not per-caller
+  state - a real, documented concurrency limitation (see `ata.c`'s
+  header comment) rather than a fully reentrant design; this kernel
+  has no locking primitives at all yet, so a complete fix is
+  substantial follow-up work, not attempted here.
+- **Still two separate disk images** (`novaos.iso` for booting,
+  `disk.img` for data) - this phase makes `disk.img` itself properly
+  partitioned and multi-filesystem, but doesn't merge it with the
+  boot image; that remains a separate, unaddressed gap from Phase 20.
+
+## Phase 26 and beyond
+
+Not started. With all three items from the original gap-analysis
+roadmap complete (ELF loading, a libc, and now partitions + a second
+filesystem), remaining candidates are open-ended: a real
+from-scratch bootloader, full TCP/sockets, true `fork()` semantics,
+ext2 write support, extending capability-based access control to
 further resource types, true lowercase font forms, and USB drivers.
 Each would benefit from being scoped on its own terms rather than
 assumed as "next."

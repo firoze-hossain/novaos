@@ -13,6 +13,7 @@
 #include "../arch/x86/mm/paging.h"
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
+#include "../fs/ext2.h"
 #include "../pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
 #include "../drivers/sound/ac97.h"
@@ -147,6 +148,26 @@ void kernel_late_init(void) {
                        file_buf);
         } else {
             kernel_log("[WARN] FAT32 mounted but HELLO.TXT not found\n");
+        }
+    }
+
+    /* Self-test: if the ext2 partition (Phase 25) mounted, read a
+     * real file from it - not just confirming the superblock parsed,
+     * but that inode lookup, root-directory-entry matching, and block
+     * data reading (the parts most likely to have a subtle bug) all
+     * genuinely work together. vfs_read_file() is used here rather
+     * than calling ext2_read_file() directly, so this also proves the
+     * FAT32-then-ext2 fallback in vfs.c works, not just the ext2
+     * driver in isolation. */
+    if (ext2_is_mounted()) {
+        char ext2_buf[256];
+        int n = vfs_read_file("EXT2TEST.TXT", ext2_buf, sizeof(ext2_buf) - 1);
+        if (n >= 0) {
+            ext2_buf[n] = '\0';
+            kernel_log("[ OK ] EXT2 FILE READ OK: EXT2TEST.TXT (%d bytes): "
+                       "%s\n", n, ext2_buf);
+        } else {
+            kernel_log("[WARN] ext2 mounted but EXT2TEST.TXT not found\n");
         }
     }
 

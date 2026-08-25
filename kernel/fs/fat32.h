@@ -14,6 +14,18 @@
  * Returns true if mounted successfully. */
 bool fat32_init(void);
 
+/* Phase 25: sets the LBA this driver treats as its own "sector 0" -
+ * call once before fat32_init() if FAT32 lives in a disk partition
+ * rather than starting at the very first sector of the disk. Every
+ * one of this file's public functions re-applies this offset via
+ * ata_set_partition_offset() at its own start, so interleaving calls
+ * to this driver with a different filesystem (see ext2.h) that also
+ * uses the disk stays correct as long as each individual call
+ * completes without another filesystem's call landing in the middle -
+ * see ata.h's fuller comment on that limitation. Defaults to 0 (whole
+ * disk), unchanged from every phase before this one. */
+void fat32_set_partition_offset(uint32_t offset_lba);
+
 bool fat32_is_mounted(void);
 
 typedef void (*fat32_list_callback_t)(const char* name_8_3, uint32_t size,

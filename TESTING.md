@@ -332,6 +332,22 @@ attach `disk.img` as a second hard disk for persistent data (packages,
 `SYSTEM.CFG`, etc.). These are still two separate images rather than
 one unified disk - see PROGRESS.md's Phase 20 entry for why.
 
+## Partitions and a second filesystem (Phase 25+)
+
+`disk.img` is now a real partitioned disk - an MBR with partition 1
+(FAT32, all the usual fixtures) and partition 2 (a real ext2
+filesystem with `EXT2TEST.TXT`). `cat EXT2TEST.TXT` (or `run` reading
+it, or anything else that goes through `vfs_read_file()`) works
+exactly like a FAT32 file - the fallback to ext2 is transparent. Note
+that ext2, unlike this project's FAT32 driver, matches filenames
+**case-sensitively** (correctly reflecting how ext2 actually works) -
+`cat ext2test.txt` (lowercase) will correctly report "not found," not
+a bug.
+
+See `tools/build-disk-image.sh` for exactly how the partitioned image
+is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
+read-only, root-directory-only, direct+singly-indirect blocks only).
+
 ## Running real programs (Phase 23+)
 
 `run PATH [args...]` loads and runs a real ELF32 executable and waits

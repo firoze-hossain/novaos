@@ -147,18 +147,14 @@ $(ISO_FILE): $(KERNEL_BIN)
 	$(GRUB_MKRESCUE) -o $(ISO_FILE) $(ISO_DIR)
 	@echo "✅ NovaOS ISO created: $(ISO_FILE)"
 
-# Create the FAT32 test disk image (Phase 3+). Requires `mtools`
-# (mformat/mcopy) - installed by `make setup` on every supported OS.
-$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF
-	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
-	mformat -i $(DISK_IMG) -F ::
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.TXT ::HELLO.TXT
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/EDITOR.PKG ::EDITOR.PKG
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/GAME.PKG ::GAME.PKG
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/SYSTEM.CFG ::SYSTEM.CFG
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLO.ELF ::HELLO.ELF
-	mcopy -i $(DISK_IMG) $(DISK_FIXTURES_DIR)/HELLOC.ELF ::HELLOC.ELF
-	@echo "✅ FAT32 test disk image created: $(DISK_IMG)"
+# Create the test disk image (Phase 3+; genuinely partitioned as of
+# Phase 25 - see tools/build-disk-image.sh for the full build process
+# and PROGRESS.md for why). Requires `parted`, `mtools` (mformat/
+# mcopy), and `e2fsprogs` (mkfs.ext2, debugfs) - installed by `make
+# setup` on every supported OS.
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF $(DISK_FIXTURES_DIR)/ext2root/EXT2TEST.TXT tools/build-disk-image.sh
+	./tools/build-disk-image.sh $(DISK_IMG)
+	@echo "✅ Partitioned test disk image created: $(DISK_IMG)"
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
@@ -190,6 +186,9 @@ test: $(ISO_FILE) $(DISK_IMG)
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
 	    grep -q "FAT32 mounted" $(TEST_LOG) && \
 	    grep -q "FILE READ OK: HELLO.TXT" $(TEST_LOG) && \
+	    grep -q "Partition table found (MBR): 2 partition" $(TEST_LOG) && \
+	    grep -q "ext2 mounted: block_size=4096" $(TEST_LOG) && \
+	    grep -q "EXT2 FILE READ OK: EXT2TEST.TXT" $(TEST_LOG) && \
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
 	    grep -q "PING OK" $(TEST_LOG) && \

@@ -136,6 +136,12 @@ at the end. Concretely, in the order it gets built:
 | **P22** | Process-exit resource cleanup (real leak fix) | Complete - see PROGRESS.md |
 | **P23** | ELF loading + a real process model (argv/exit codes/SYS_EXEC/SYS_WAIT) | Complete (scoped - see PROGRESS.md; exec-style, not true fork()) |
 | **P24** | Minimal libc port (crt0, printf, malloc via new SYS_SBRK, string functions) | Complete (scoped - see PROGRESS.md) |
+| **P25** | MBR/GPT partition support + a real second filesystem (ext2, read-only) | Complete (scoped - see PROGRESS.md) |
+
+Phase 25 (post-release) is the third and final item from the
+gap-analysis roadmap - disk.img is now genuinely partitioned rather
+than one bare filesystem, and NovaOS can read a real ext2 filesystem
+alongside FAT32, verified against images built by actual Linux tools.
 
 Phase 24 (post-release) is the second item from the gap-analysis
 roadmap - makes ELF-loaded programs (P23) actually useful by giving

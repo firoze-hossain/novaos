@@ -1,0 +1,1 @@
+Hello from a real ext2 filesystem read by NovaOS!

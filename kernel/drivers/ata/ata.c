@@ -106,10 +106,35 @@ bool ata_is_present(void) {
     return drive_present;
 }
 
+/* Phase 25: an LBA offset added to every read/write below, letting
+ * every existing caller (fat32.c's 10+ call sites, none of which
+ * needed to change) keep computing sector addresses relative to "the
+ * start of my own filesystem" - exactly like before partitioning
+ * existed - while actually landing on the correct partition on disk.
+ * Defaults to 0 (whole-disk access), preserving old behavior for any
+ * disk image with no partition table at all.
+ *
+ * Known limitation, documented rather than engineered around: this is
+ * a single global, not per-caller state, so a filesystem driver must
+ * set it correctly at the start of each of its own public entry
+ * points (see fat32.c/ext2.c) rather than assuming it stays put
+ * across an arbitrary sequence of calls - the same "cooperative,
+ * not fully reentrant" tradeoff already accepted for fat32.c's static
+ * scratch buffers since Phase 8. This kernel has no locking
+ * primitives at all yet; a fully concurrency-safe redesign (per-call
+ * explicit offsets threaded through every function, or real locks)
+ * is real follow-up work, not attempted here. */
+static uint32_t partition_offset = 0;
+
+void ata_set_partition_offset(uint32_t offset_lba) {
+    partition_offset = offset_lba;
+}
+
 bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
     if (!drive_present || sector_count == 0) {
         return false;
     }
+    lba += partition_offset;
 
     uint16_t* buf16 = (uint16_t*)buffer;
 
@@ -140,6 +165,7 @@ bool ata_write_sectors(uint32_t lba, uint8_t sector_count, const void* buffer) {
     if (!drive_present || sector_count == 0) {
         return false;
     }
+    lba += partition_offset;
 
     const uint16_t* buf16 = (const uint16_t*)buffer;
 

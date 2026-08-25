@@ -18,6 +18,14 @@
 void ata_init(void);
 bool ata_is_present(void);
 
+/* Phase 25: every subsequent ata_read_sectors()/ata_write_sectors()
+ * call adds `offset_lba` to whatever LBA it's given, until this is
+ * called again - see the fuller comment on the matching static
+ * variable in ata.c for the exact scope/limitations of this
+ * mechanism. Defaults to 0 (no offset, i.e. whole-disk access,
+ * unchanged from every phase before this one). */
+void ata_set_partition_offset(uint32_t offset_lba);
+
 /* Reads `sector_count` consecutive 512-byte sectors starting at LBA
  * `lba` into `buffer` (must be at least sector_count*512 bytes).
  * Returns true on success. */

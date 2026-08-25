@@ -61,6 +61,11 @@ typedef struct {
 } __attribute__((packed)) fat_dirent_t;
 
 static bool mounted = false;
+static uint32_t partition_offset = 0;
+
+void fat32_set_partition_offset(uint32_t offset_lba) {
+    partition_offset = offset_lba;
+}
 static uint16_t bytes_per_sector;
 static uint8_t sectors_per_cluster;
 static uint32_t fat_start_lba;
@@ -226,6 +231,7 @@ static void from_fat_8_3(const uint8_t raw[11], char* out) {
 }
 
 bool fat32_init(void) {
+    ata_set_partition_offset(partition_offset);
     mounted = false;
 
     if (!ata_is_present()) {
@@ -336,6 +342,7 @@ static bool walk_root(const uint8_t want_name[11],
 }
 
 void fat32_list_root(fat32_list_callback_t callback) {
+    ata_set_partition_offset(partition_offset);
     if (!mounted) {
         return;
     }
@@ -343,6 +350,7 @@ void fat32_list_root(fat32_list_callback_t callback) {
 }
 
 int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
+    ata_set_partition_offset(partition_offset);
     if (!mounted) {
         return -1;
     }
@@ -483,6 +491,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
 }
 
 bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
+    ata_set_partition_offset(partition_offset);
     if (!mounted) {
         return false;
     }
@@ -567,6 +576,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
 }
 
 bool fat32_delete_file(const char* filename) {
+    ata_set_partition_offset(partition_offset);
     if (!mounted) {
         return false;
     }
