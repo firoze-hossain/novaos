@@ -104,6 +104,14 @@ NET_FLAGS = -netdev user,id=net0,tftp=tools/fixtures/tftproot -device rtl8139,ne
 # coreaudio,id=snd0` on macOS. See TESTING.md.
 AUDIO_FLAGS = -audiodev none,id=noaudio -device AC97,audiodev=noaudio
 
+# Phase 28b: a UHCI USB 1.1 controller with an emulated keyboard
+# attached, so USB enumeration is exercised on every boot the same
+# way the NIC and sound card are - this is a locally-emulated device
+# with no external-connectivity dependency (unlike the DNS/TCP self-
+# tests), so it's held to the same "always attached, hard assertion"
+# standard as every other piece of hardware in this list.
+USB_FLAGS = -device piix3-usb-uhci -device usb-kbd
+
 # Directories
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -158,11 +166,11 @@ $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DI
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
@@ -180,7 +188,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	@mkdir -p $(BUILD_DIR)
 	@rm -f $(TEST_LOG)
 	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
-	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(QEMU_FLAGS) \
+	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) \
 	    -display none -serial file:$(TEST_LOG) || true
 	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
 	@grep -q "Interrupts enabled" $(TEST_LOG) && \
@@ -216,6 +224,8 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "sandbox. PASS: SYS_EXEC loaded and ran" $(TEST_LOG) && \
 	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
 	    grep -q "AC97 beep: playing" $(TEST_LOG) && \
+	    grep -q "UHCI controller at PCI" $(TEST_LOG) && \
+	    grep -q "USB device on port .*vendor=0x627" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_NET_SEND" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \
@@ -266,4 +276,12 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 	@echo "   (packages, SYSTEM.CFG, etc.) - see TESTING.md for why these"
 	@echo "   are still two separate images rather than one, for now."
 
-.PHONY: all run debug test clean setup help install-image
+# Phase 28c: boot-tests the real, from-scratch bootloader
+# (tools/custom-boot/) end-to-end - stage1/stage2 real-mode boot code
+# loading the actual kernel binary, instead of GRUB. Purely additive:
+# does not touch novaos.iso, disk.img's normal build, or any existing
+# target. See PROGRESS.md for the full scope note.
+test-custom-boot:
+	./tools/custom-boot/test-custom-boot.sh
+
+.PHONY: all run debug test clean setup help install-image test-custom-boot

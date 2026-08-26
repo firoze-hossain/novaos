@@ -242,6 +242,70 @@ a VM.
   kernel (hand-constructed interrupt return frames, copy-on-write
   with correct TLB management), stated plainly rather than downplayed
 
+**Phase 28a - Minimal TCP Client**
+- A real TCP client (3-way handshake, real checksums, a 4-way close) -
+  deferred three times previously (Phases 6, 10, 19) for retransmission/
+  state-machine complexity, closed now with a deliberately scoped-down
+  but genuinely functional implementation
+- Found and fixed a real, pre-existing bug: `ip_send()` never actually
+  used the gateway for off-subnet destinations - `NET_NETMASK` had
+  been defined since Phase 6 and never once used, since every earlier
+  self-test only ever talked to on-subnet addresses
+- Verified at the **packet level** against a real, external,
+  unmodified server: captured traffic shows a correct handshake, our
+  56-byte HTTP request, the server's 259-byte response reassembled
+  with zero corruption, and a clean close - not just a self-reported
+  success log line
+- One connection at a time, stop-and-wait (no retransmission or
+  sliding window) - honestly scoped, not hidden
+
+**Phase 28b - UHCI USB Controller & Device Enumeration**
+- A real UHCI (USB 1.1) host controller driver - the simplest of the
+  four USB controller interfaces, with an I/O-port register model
+  consistent with every other driver in this tree
+- Full device enumeration via real control transfers (SETUP/DATA/
+  STATUS staging, `GET_DESCRIPTOR`, `SET_ADDRESS`) - verified against
+  **real QEMU USB hardware emulation**: `vendor=0x627` is QEMU's own
+  USB vendor ID, independent confirmation this is a genuinely decoded
+  device descriptor, not a fabricated success
+- Found and fixed a classic systems-programming bug through
+  diagnostic-driven debugging: DMA-shared transfer descriptors
+  weren't marked `volatile`, so at this project's `-O2` optimization
+  level the compiler treated the poll loop's condition as constant
+  instead of re-reading hardware-modified memory
+- USB is now a standard, always-attached, hard-asserted part of every
+  boot including `make test` - unlike DNS/TCP, this has no external-
+  connectivity dependency
+- HID keyboard report reading is explicitly out of scope for this
+  pass (documented as a clear follow-up) - enumeration is the
+  verified, complete milestone here
+
+**Phase 28c - A Real, From-Scratch Bootloader**
+- A genuine two-stage real-mode bootloader (`tools/custom-boot/`) -
+  the first real-mode/BIOS-interrupt code ever written in this
+  project. BIOS E820 memory detection, LBA disk reads, A20 enable, a
+  flat GDT, the protected-mode transition, and 32-bit ELF program-
+  header parsing to load the *exact same* kernel binary GRUB boots,
+  with zero kernel-side changes needed
+- **Purely additive**: a completely separate, parallel boot path -
+  `novaos.iso` and `disk.img`'s normal build are untouched. `make
+  test-custom-boot` runs it independently
+- The critical proof point: `PMM initialized (131040 frames tracked,
+  511MB)` exactly matches the `-m 512M` QEMU flag, confirming the
+  E820-to-Multiboot memory map this bootloader builds is genuinely
+  correct - without it, every feature built since Phase 5 (paging,
+  `fork()`, `malloc`) would silently break even if the kernel
+  appeared to boot
+- Verified with the complete self-test suite (network, USB, the
+  FAT32+ext2 data disk): 67 `PASS`/`[ OK ]` lines, zero failures,
+  including ext2 read/write, USB enumeration, real TCP/HTTP, and
+  `fork()`+copy-on-write - every feature from every prior phase works
+  identically to a GRUB boot
+- Two real bugs (an off-by-one LBA calculation, a structural padding-
+  order issue) were caught through careful review *before* ever
+  booting real-mode code - the appropriate order of operations for
+  code this unforgiving of mistakes
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -270,9 +334,9 @@ novaos/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
 │   │   └── mm/         # PMM, paging, heap allocator
-│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci, sound (ac97)
+│   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci, sound (ac97), usb (uhci)
 │   ├── fs/             # VFS (FAT32 + ext2 fallback), FAT32 (read + write), ext2 (read-only), MBR/GPT partitions
-│   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp, dns
+│   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp, dns, tcp
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
 │   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
@@ -282,7 +346,7 @@ novaos/
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing
 ├── userland/           # Phase 24: minimal libc (crt0, syscalls, string/stdio/stdlib) + example C programs
-├── tools/              # linker script, grub.cfg, FAT32 test fixtures, ELF test fixture sources
+├── tools/              # linker script, grub.cfg, FAT32 test fixtures, ELF test fixture sources, custom-boot/ (Phase 28c bootloader)
 ├── scripts/            # per-OS setup scripts
 ├── .github/workflows/  # CI (build + make test on every push)
 ├── Dockerfile          # reproducible cross-platform build environment

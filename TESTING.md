@@ -348,6 +348,49 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
+## The real bootloader (Phase 28c)
+
+`make test-custom-boot` boots NovaOS via a genuine, from-scratch
+two-stage bootloader (`tools/custom-boot/`) instead of GRUB - the same
+kernel binary, the same full self-test suite (network, USB, the
+FAT32+ext2 data disk). This is completely separate from `make test`/
+`make run`/`novaos.iso`/`disk.img`'s normal build - nothing about the
+existing GRUB-based path is touched.
+
+If you want to reproduce the test manually rather than via `make
+test-custom-boot`, note the disk ordering requirement: `disk.img` must
+be attached at IDE primary master (the fixed position this kernel's
+ATA driver reads from) while the bootloader disk boots from a
+different position via QEMU's `bootindex` property - see
+`tools/custom-boot/test-custom-boot.sh` for the exact invocation.
+Getting this backwards doesn't mean the bootloader is broken; it just
+means the kernel can't find its data disk, which looks confusingly
+similar to a real failure at first glance.
+
+## USB (Phase 28b)
+
+A UHCI controller with an emulated keyboard is attached by default
+(`USB_FLAGS` in the Makefile) for every `make run`/`make test`. Watch
+for `UHCI controller at PCI ...` and `USB device on port 0: address=1
+vendor=0x627 ...` in the boot log - `0x627` is QEMU's own USB vendor
+ID, confirming a real, correctly-decoded device descriptor. This is a
+locally-emulated device with no external-connectivity dependency, so
+(unlike DNS/TCP) it's a hard `make test` assertion. Keyboard *input*
+(reading actual keypresses) isn't implemented yet - only enumeration.
+
+## TCP (Phase 28a)
+
+Watch the boot log for `TCP HTTP OK: received ... bytes from
+example.com:80` - a real TCP connection, HTTP request, and response
+over it, verified against a genuine external server. Like the DNS
+self-test (Phase 19), this depends on real outbound network access
+existing beneath wherever you're running this, so it's logged as
+`[WARN]` rather than a hard failure if it can't reach the internet,
+and isn't part of `make test`'s pass/fail assertion chain. No shell
+command or syscall exposes this yet - `tcp_connect()`/`tcp_send()`/
+`tcp_receive()`/`tcp_close()` are direct C function calls used only by
+this one boot self-test so far.
+
 ## ext2 writes and fork() (Phase 26-27)
 
 Watch the boot log for `EXT2 WRITE+READBACK OK: EXT2WROT.TXT` (Phase

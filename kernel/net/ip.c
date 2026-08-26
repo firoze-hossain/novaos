@@ -6,6 +6,7 @@
 #include "arp.h"
 #include "icmp.h"
 #include "udp.h"
+#include "tcp.h"
 #include "net.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
@@ -30,9 +31,32 @@ static uint32_t be32(uint32_t x) {
 
 bool ip_send(uint32_t dest_ip, uint8_t protocol, const void* payload,
              uint16_t payload_len) {
+    /* Phase 28 fix: route via the gateway for anything off our local
+     * subnet, rather than always ARP-resolving dest_ip directly. ARP
+     * only ever works for a peer actually on the local network - a
+     * genuinely remote address (like a real internet host) will never
+     * answer an ARP broadcast, so ip_send() silently failed for any
+     * such destination before this fix. NET_NETMASK has existed since
+     * Phase 6 but was never actually used until now: every earlier
+     * phase's self-tests only ever talked to on-subnet SLIRP-provided
+     * addresses (the gateway itself, its DNS proxy), so this gap
+     * never had a chance to matter until TCP's HTTP self-test became
+     * the first thing in this stack to ever address a genuinely
+     * external IP. The fix is the standard one: ARP-resolve the
+     * gateway's MAC as the actual next hop on the wire, while the IP
+     * header's own destination address stays the true final
+     * destination unchanged - exactly what every real IP router/host
+     * does. */
+    bool same_subnet = (dest_ip & NET_NETMASK) == (NET_OUR_IP & NET_NETMASK);
+    uint32_t next_hop_ip = same_subnet ? dest_ip : NET_GATEWAY_IP;
+
     uint8_t dest_mac[6];
-    if (!arp_resolve(dest_ip, dest_mac)) {
-        kernel_log("[WARN] ip_send: ARP resolve failed for %d.%d.%d.%d\n",
+    if (!arp_resolve(next_hop_ip, dest_mac)) {
+        kernel_log("[WARN] ip_send: ARP resolve failed for next hop "
+                   "%d.%d.%d.%d (destination %d.%d.%d.%d)\n",
+                   (int)(next_hop_ip >> 24) & 0xFF,
+                   (int)(next_hop_ip >> 16) & 0xFF,
+                   (int)(next_hop_ip >> 8) & 0xFF, (int)next_hop_ip & 0xFF,
                    (int)(dest_ip >> 24) & 0xFF, (int)(dest_ip >> 16) & 0xFF,
                    (int)(dest_ip >> 8) & 0xFF, (int)dest_ip & 0xFF);
         return false;
@@ -99,8 +123,11 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
         case IP_PROTO_UDP:
             udp_handle_packet(src_ip, transport, transport_len);
             break;
+        case IP_PROTO_TCP:
+            tcp_handle_packet(src_ip, transport, transport_len);
+            break;
         default:
-            break; /* TCP not implemented - see PROGRESS.md */
+            break; /* neither ICMP, UDP, nor TCP - nothing to dispatch to */
     }
     (void)src_mac;
 }

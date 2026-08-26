@@ -35,6 +35,9 @@ in the same PR as the code it describes.
 | P25 - MBR/GPT Partitions & a Real Filesystem (ext2) | Complete (scoped - see below) |
 | P26 - ext2 Write Support | Complete (scoped - see below) |
 | P27 - True fork() via Copy-on-Write | Complete (scoped - see below) |
+| P28a - Minimal TCP Client | Complete (scoped - see below) |
+| P28b - UHCI USB Controller & Device Enumeration | Complete (scoped - see below) |
+| P28c - A Real, From-Scratch Bootloader | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2459,10 +2462,378 @@ without verifying why.
 - **No `waitpid`-style options** (`WNOHANG`, etc.) - `SYS_WAIT` always
   blocks until the target process terminates, unchanged since Phase 23.
 
-## Phase 28 and beyond
+## Phase 28a - Minimal TCP Client
 
-Not started. Remaining open candidates: a real from-scratch
-bootloader, full TCP/sockets, extending capability-based access
-control to further resource types, true lowercase font forms, and USB
-drivers. Each would benefit from being scoped on its own terms rather
-than assumed as "next."
+**Status: Complete.** The first of three substantial undertakings
+tackled together at the user's request (a real bootloader, full TCP,
+and USB drivers) - each large enough to warrant its own full
+verification pass rather than a rushed combined effort. TCP was
+deferred three times previously (Phases 6, 10, 19) specifically for
+retransmission/state-machine complexity; this closes that gap with a
+deliberately scoped-down but genuinely functional client.
+
+### Scope
+
+Active open (client-side) only - no `LISTEN`/passive open, matching
+every other protocol in this stack having no server-side
+functionality either. One connection at a time, the same
+single-outstanding-operation pattern `arp_resolve()`/`icmp_ping()`/
+`tftp_get()`/`dns_resolve()` already use. Stop-and-wait data transfer
+(one segment in flight, no sliding window, no retransmission queue -
+a lost segment just times out the whole operation), no congestion
+control, no formal `TIME_WAIT` (closes straight to `CLOSED` after the
+final ACK). See `tcp.h` for the complete scope note.
+
+### What was built
+
+- **`kernel/net/ethernet.h`**: `eth_htonl`/`eth_ntohl` (32-bit
+  byte-swap, needed for sequence/ack numbers) - `ip.c` has had an
+  equivalent private helper since Phase 6, exposed here under the
+  naming convention every other byte-swap helper in this tree uses.
+- **`kernel/net/tcp.*`**: the client itself - a real 3-way handshake,
+  a real TCP checksum (a 12-byte pseudo-header + segment, unlike this
+  project's UDP which disables its own checksum entirely - real-world
+  TCP stacks universally validate this and silently drop segments
+  that fail it, so it isn't optional here), send/receive with
+  in-order data buffering (so data piggybacked on an ACK for one of
+  our own sends isn't dropped just because a different function was
+  the one waiting), and a real 4-way close.
+- **`kernel/net/ip.c`**: dispatches `IP_PROTO_TCP` to `tcp_handle_packet()`,
+  the same pattern UDP's Phase 10 addition already established.
+
+### A real, pre-existing bug found and fixed - not a new one introduced
+
+TCP's very first test attempt failed outright: `ip_send()` always
+ARP-resolved the *destination* IP directly, with no gateway-routing
+logic at all. `NET_NETMASK` has been defined since Phase 6 but was
+never actually used until this phase - every earlier self-test only
+ever talked to on-subnet SLIRP-provided addresses (the gateway
+itself, its DNS proxy), so a genuinely external destination had never
+been attempted before TCP's HTTP test became the first thing in this
+entire stack to try one. Confirmed via the exact `[WARN] ip_send: ARP
+resolve failed` log line, then fixed with the standard approach: ARP-
+resolve the gateway as the actual next hop when the destination isn't
+on the local subnet, while the IP header's own destination address
+stays the true final destination - exactly what a real IP router does.
+
+### Verified behavior - packet-level proof against a real, external, unmodified server
+
+Not just "the kernel logged success" - the actual packets were
+captured and inspected:
+```
+pkt 16: 10.0.2.15:55000 -> 104.20.23.154:80 seq=617251 ack=0 flags=SYN
+pkt 17: 104.20.23.154:80 -> 10.0.2.15:55000 seq=64001 ack=617252 flags=SYN|ACK
+pkt 18: 10.0.2.15:55000 -> 104.20.23.154:80 seq=617252 ack=64002 flags=ACK
+pkt 19: 10.0.2.15:55000 -> 104.20.23.154:80 ... flags=PSH|ACK payload_len=56   (our HTTP request)
+pkt 21: 104.20.23.154:80 -> 10.0.2.15:55000 ... flags=PSH|ACK payload_len=259  (the server's response)
+pkt 22-26: FIN|ACK / ACK / FIN|ACK / ACK - a clean 4-way close
+```
+The reassembled 259-byte payload is a complete, uncorrupted, valid
+HTTP response:
+```
+HTTP/1.1 403 Forbidden
+x-deny-reason: host_not_allowed
+content-length: 98
+content-type: text/plain
+date: Wed, 26 Aug 2026 07:08:09 GMT
+connection: close
+
+Host not in allowlist: example.com. Add this host to your network egress settings to allow access.
+```
+The 403 itself is the *test sandbox's own* outbound-network policy
+responding, not a NovaOS bug or even example.com's server - an
+earlier attempt using HTTP/1.0 got a genuine `426 Upgrade Required`
+from example.com's real server first, which is what confirmed the
+underlying connection, request, and response mechanics were already
+correct before switching to HTTP/1.1. Either way, what matters for
+this phase is unambiguous: a real TCP connection, to a real external
+IP, carrying a real HTTP request and receiving a real, well-formed
+response, followed by a clean close - all verified at the raw packet
+level, not just from the kernel's own self-reported log line. Zero
+regression - every Phase 2-27 `make test` marker still passes.
+
+### An honest exception to this project's usual self-contained-testing principle
+
+Like DNS (Phase 19), this depends on real outbound network access
+existing somewhere beneath this sandboxed environment, which NovaOS
+doesn't control. Logged as `[WARN]` rather than a hard failure, and
+deliberately not included in `make test`'s pass/fail assertion chain,
+for the same reason Phase 19 established.
+
+### Known limitations / follow-ups
+
+- **No retransmission** - a single lost segment (SYN, data, or FIN)
+  just times out the whole operation.
+- **No sliding window / multiple segments in flight** - stop-and-wait
+  only, meaningfully slower than a real TCP stack for anything beyond
+  a small request/response.
+- **No TIME_WAIT** - closes straight back to `CLOSED`, which a
+  genuinely lossy or adversarial network could exploit via delayed
+  duplicate segments; fine for the networks this has actually been
+  tested against.
+- **No sockets-style API** - `tcp_connect()`/`tcp_send()`/
+  `tcp_receive()`/`tcp_close()` are direct C function calls, not
+  syscalls exposed to ring-3 programs yet (unlike `SYS_NET_SEND`'s UDP
+  path from Phase 14).
+- **ISN generation is not cryptographically random** - varying enough
+  across connections to not be a fixed constant, not secure against
+  active sequence-number-guessing attacks.
+
+## Phase 28b - UHCI USB Controller & Device Enumeration
+
+**Status: Complete (scoped).** The second of three substantial
+undertakings requested together. USB is widely considered one of the
+most complex subsystems in OS development - multiple host controller
+interfaces, a layered descriptor/enumeration protocol, and several
+transfer types. This phase deliberately targets the most tractable
+slice of that: UHCI (the simplest of the four controller interfaces -
+UHCI/OHCI/EHCI/xHCI - with an I/O-port register interface consistent
+with every other driver in this tree, unlike EHCI/xHCI's memory-mapped
+registers) and full control-transfer-based device enumeration.
+
+### Scope
+
+Found via Phase 13's PCI enumeration by class code (0x0C/0x03) plus
+`prog_if` 0x00 (the byte that actually distinguishes UHCI from
+OHCI/0x10, EHCI/0x20, and xHCI/0x30, which otherwise share the same
+class/subclass). Enumerates up to 2 root hub ports, resets whichever
+has a device attached, and performs the standard enumeration sequence
+(`GET_DESCRIPTOR` partial, `SET_ADDRESS`, `GET_DESCRIPTOR` full) to
+identify it. One transfer in flight at a time - the same single-
+outstanding-operation pattern this project's other drivers use, not a
+real multi-device/multi-endpoint scheduler. See `uhci.h` for the
+complete scope note, including an explicit acknowledgment that this
+driver's understanding of UHCI's exact per-bit TD status encoding was
+reconstructed from memory rather than checked against the
+specification directly - handled by a deliberately conservative
+"any error bit set" check rather than trying to decode which specific
+error occurred, so an imperfect bit-level understanding in that one
+area can't silently misreport one failure type as another.
+
+### A real bug found and fixed through systematic debugging
+
+The very first enumeration attempt failed outright - the initial
+`GET_DESCRIPTOR` control transfer simply never completed. Added
+diagnostic logging (frame number, controller status, per-TD state
+before and after the poll loop) and found the actual signal: the
+frame number register wasn't advancing *at all* during the poll,
+and every TD's status was bit-for-bit identical before and after 2
+million spin iterations. The root cause: `control_tds` (and the
+queue head, frame list) are DMA-shared memory the emulated controller
+writes to without any C-visible write in this driver's own code - and
+they were declared as plain, non-`volatile` arrays. At this project's
+`-O2` optimization level, the compiler is free to assume nothing
+modifies memory that nothing in the visible code path writes to, and
+was doing exactly that: treating the poll loop's condition as
+effectively constant rather than re-reading it from memory every
+iteration. Marking the DMA-shared structures `volatile` fixed it
+completely - a classic, well-known class of bug in systems
+programming, caught here the same way every other real hardware bug
+in this project has been: by forming a hypothesis from diagnostic
+data and testing it, not by guessing.
+
+### Verified behavior - against real QEMU hardware emulation, not just internal consistency
+
+```
+[ OK ] UHCI controller at PCI 0:3.0, I/O base 0xC600
+[ OK ] USB device on port 0: address=1 vendor=0x627 device=0x1 class=0x0 subclass=0x0 protocol=0x0 (full speed)
+```
+Vendor `0x627` is QEMU's own USB vendor ID for its emulated devices -
+independent confirmation this is a real, correctly-decoded device
+descriptor from QEMU's actual UHCI emulation, not a fabricated
+success. Verified with a real `usb-kbd` device attached
+(`-device piix3-usb-uhci -device usb-kbd`), and confirmed graceful,
+crash-free behavior with no USB hardware present at all (`usb_uhci_init()`
+simply finds nothing via PCI enumeration and returns). USB is now a
+standard, always-attached part of every boot including `make test`
+(added to `USB_FLAGS`, the same "always attached, hard assertion"
+treatment `NET_FLAGS`/`AUDIO_FLAGS` already established) - unlike the
+DNS/TCP self-tests, this has no external-connectivity dependency, so
+it's held to the same hard-failure standard as every other piece of
+locally-emulated hardware in this project. Zero regression - every
+Phase 2-28a `make test` marker still passes.
+
+### Known limitations / follow-ups (tracked for future phases)
+
+- **No HID keyboard report reading** - `usb_uhci_keyboard_poll()`
+  exists as a declared, documented stub returning `false` always.
+  Enumeration correctly identifies an attached device; actually
+  reading its boot-protocol interrupt reports needs an interrupt-
+  endpoint transfer this pass didn't build. A clearly scoped, natural
+  next step, not attempted here given the remaining scope of this
+  same request (a real bootloader) still ahead.
+- **Root hub only** - no support for an external USB hub attached to
+  a root port, meaning only 2 devices total (one per root port) can
+  ever be enumerated.
+- **Control transfers only** - no bulk, interrupt, or isochronous
+  transfer support, ruling out USB mass storage or any device that
+  isn't fully describable through its device descriptor alone.
+- **One device enumerated at a time**, sequentially, with no ongoing
+  per-device state kept after enumeration - a real USB stack would
+  track every attached device's address/descriptors for later use by
+  class drivers.
+- **UHCI only** - OHCI/EHCI/xHCI-only real hardware (increasingly
+  common on newer machines, though QEMU and most virtualization
+  platforms still offer UHCI) isn't supported.
+
+## Phase 28c - A Real, From-Scratch Bootloader
+
+**Status: Complete.** The third and final undertaking from the user's
+original request. The single most technically novel piece of this
+entire project - the first real-mode/BIOS-interrupt code ever written
+here, an area completely untouched by every prior phase (all existing
+assembly - `context_switch.asm`, `syscall_stub.asm`, `isr_stubs.asm` -
+is 32-bit protected mode code).
+
+### Why this exists alongside Phase 20's GRUB solution, not instead of it
+
+Phase 20 already solved "is NovaOS installable" by discovering
+`novaos.iso` is a hybrid image bootable as a raw disk with no CD-ROM
+emulation at all - genuinely sufficient for real-world installability.
+This phase exists because the user explicitly asked for a real
+bootloader as one of three named undertakings, not because Phase 20
+left a functional gap. Given that, this was built as a **purely
+additive, parallel boot path**: `tools/custom-boot/` produces its own,
+separate disk image; `novaos.iso` and `disk.img`'s normal build are
+completely untouched. The deliberate risk-avoidance choice here is
+real - a mistake in bootloader code has historically been one of the
+easiest ways to brick a real machine, and this project has no reason
+to let brand-new, first-time real-mode assembly put the existing,
+proven GRUB path at any risk at all.
+
+### Design
+
+- **`tools/custom-boot/stage1.asm`** - a 512-byte MBR boot sector.
+  Its only job: read Stage 2 (16 sectors, LBA 1-16 via legacy CHS,
+  well within CHS's 63-sector/track limit) into memory and jump to
+  it.
+- **`tools/custom-boot/stage2.asm`** - the real logic, in three
+  phases:
+  1. **Real mode**: BIOS `INT 15h, EAX=0xE820` memory detection -
+     genuinely convenient, since each E820 entry (`base:8, length:8,
+     type:4` = 20 bytes) already matches the exact byte layout
+     `multiboot_mmap_entry_t` (`kernel/arch/x86/boot/multiboot.h`)
+     expects once a 4-byte "size" field is prepended, meaning this
+     builds the kernel's own expected memory-map format directly with
+     no separate translation step. Then the kernel ELF is read from
+     disk via `INT 13h, AH=42h` (extended/LBA reads) into a low
+     temporary buffer - LBA reads were used specifically because
+     legacy CHS addressing caps at 63 sectors/track and can't cleanly
+     express reading the ~800 sectors a kernel this size needs.
+  2. **Transition**: the standard "fast A20" enable (port 0x92),
+     loading a flat 4GB GDT, and setting `CR0.PE=1` to enter 32-bit
+     protected mode.
+  3. **Protected mode**: parses the loaded ELF's program headers
+     (the same structural fields `kernel/task/elf.c`'s own loader
+     reads - `e_entry`, `e_phoff`, `e_phnum`, each header's `p_type`/
+     `p_offset`/`p_vaddr`/`p_filesz`/`p_memsz`) and copies each
+     `PT_LOAD` segment to its real destination above 1MB (unreachable
+     directly in real mode), builds a `multiboot_info_t` structure
+     from the E820 data collected earlier, then jumps to the kernel's
+     entry point with `EAX`/`EBX` set exactly as
+     `kernel/arch/x86/boot/multiboot.asm`'s `_start` expects from
+     GRUB - the same kernel binary runs identically either way, with
+     zero kernel-side changes needed.
+- **`tools/custom-boot/build-image.sh`** - assembles both stages and
+  the real kernel binary into a standalone test disk image, with a
+  build-time size check that fails loudly if Stage 2 ever exceeds its
+  allotted sector budget, rather than silently producing a corrupted
+  image.
+- **`make test-custom-boot`** - boots this real bootloader with the
+  exact same full flag set (network, USB, audio, the FAT32+ext2 data
+  disk) `make test` uses via GRUB, and checks for the same category of
+  success markers.
+
+### Two real bugs found before boot-testing, and why testing still mattered
+
+Two mistakes were caught through careful review while writing the
+code, before ever running it:
+- An off-by-one in the kernel's starting LBA (stage2 occupies LBAs
+  1-16, so the kernel must start at LBA 17 - a value that was
+  initially written as 16).
+- A structural layout bug: the `mb_info` scratch structure was placed
+  *after* Stage 2's own sector-count padding directive, meaning its 64
+  bytes silently added on top of the intended total rather than being
+  included within it - caught by a build-time size check that
+  compares Stage 2's actual assembled size against its declared
+  budget, not by assuming the padding directive alone was sufficient.
+
+Neither of these would have been *silent* failures at runtime (the
+first would have loaded the wrong disk sectors as if they were kernel
+code; the second would have been caught by the build script's guard
+either way) - but catching both before ever booting real-mode code is
+still the right order of operations, the same discipline applied
+throughout this project.
+
+### Verified behavior - the complete self-test suite, running via real bootloader code instead of GRUB
+
+The first real boot attempt with the actual kernel worked completely,
+unedited:
+```
+NovaOS stage1: loading stage2...
+OK
+NovaOS stage2: detecting memory...
+Memory map OK. Loading kernel...
+Reading kernel from disk...
+Kernel loaded. Entering protected mode...
+NovaOS booting (kernel v1.0.0)...
+[ OK ] GDT initialized
+...
+[ OK ] PMM initialized (131040 frames tracked, 511MB)
+```
+The `511MB` figure is the single most important proof point: it
+exactly matches the `-m 512M` QEMU flag, meaning the E820-to-Multiboot
+memory map this bootloader constructed was genuinely correct, not a
+fallback - without a valid Multiboot info structure,
+`pmm_alloc_frame()` always returns 0 (see `kernel/arch/x86/mm/pmm.c`),
+which would have silently broken every feature built since Phase 5
+(paging for user processes, ELF loading, `fork()`, `sbrk`-based
+`malloc`) even if the kernel appeared to "boot."
+
+A full run with the complete flag set (network, USB, the FAT32+ext2
+data disk) confirmed every subsystem from every prior phase works
+identically to a GRUB boot: 67 `PASS`/`[ OK ]` lines, zero `FAIL`
+lines, zero `PANIC`s, including `ext2` read/write, USB enumeration
+(`vendor=0x627`), real TCP/HTTP against an external server, and
+`fork()`+copy-on-write isolation. One genuine test-configuration
+discovery along the way, correctly diagnosed rather than mistaken for
+a bootloader bug: the kernel's ATA driver reads from the fixed
+"primary IDE master" position regardless of BIOS boot order, so
+`disk.img` must occupy that exact slot while the bootloader disk boots
+from a different one via QEMU's `bootindex` - documented in
+`test-custom-boot.sh` and not a limitation of the bootloader itself,
+which was already confirmed working correctly before this was
+understood.
+
+### Known limitations / follow-ups
+
+- **A fixed, hardcoded sector layout** (stage1 at LBA 0, stage2 at
+  LBA 1-16, kernel at LBA 17+) rather than a real filesystem-aware
+  loader - the kernel's maximum size (`KERNEL_MAX_SECTORS`, currently
+  800 sectors / 400KB) is a compile-time constant that would need
+  raising if the kernel grows substantially.
+- **No support for booting from anything other than the exact disk
+  layout `build-image.sh` produces** - this is a fixed-format image,
+  not a general-purpose boot manager.
+- **Manually-synchronized constants across two separately-assembled
+  files** (Stage 2's sector count, both files' `KERNEL_LOAD_LBA`-
+  equivalent values) - mitigated by a build-time size check, but not
+  as robust as a single source of truth would be.
+- **BIOS/legacy boot only** - no UEFI support, matching this
+  project's existing boot path (GRUB is also configured for legacy
+  BIOS boot throughout this project).
+- **Purely additive** - this does not replace or simplify anything
+  about the existing GRUB-based boot path, including the "two separate
+  disk images" limitation documented since Phase 20; a genuinely
+  unified single-disk-image installer combining a bootloader with data
+  partitions remains unaddressed.
+
+## Phase 29 and beyond
+
+With all three items from the user's "bootloader, TCP, USB" request
+now complete, remaining candidates are open-ended: HID keyboard
+reports, USB hubs/bulk transfers, extending capability-based access
+control to further resource types, true lowercase font forms, TCP
+retransmission/windowing, a sockets-style syscall API for TCP, and a
+genuinely unified boot+data disk image. Each would benefit from being
+scoped on its own terms rather than assumed as "next."

@@ -16,9 +16,11 @@
 #include "../fs/ext2.h"
 #include "../pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
+#include "../drivers/usb/uhci.h"
 #include "../drivers/sound/ac97.h"
 #include "../net/net.h"
 #include "../net/dns.h"
+#include "../net/tcp.h"
 #include "../net/icmp.h"
 #include "../net/tftp.h"
 #include "../task/process.h"
@@ -282,6 +284,16 @@ void kernel_late_init(void) {
     kernel_log("[ OK ] PCI ENUMERATION OK: %d device(s) found\n",
                pci_device_count);
 
+    /* Self-test (Phase 28b): if a UHCI USB controller is present,
+     * initialize it and enumerate its root hub ports - a real, if
+     * scoped-down, USB stack. Verification here means watching for a
+     * genuine device descriptor (vendor/product/class IDs) to appear
+     * in the log for whatever's attached via QEMU's -device usb-kbd
+     * or similar, the same "does the log show a real, specific result"
+     * standard every other driver in this project is held to. See
+     * PROGRESS.md for the full scope. */
+    usb_uhci_init();
+
     /* Self-test: if an AC97 audio device is present, initialize it and
      * play a short beep. Unlike every earlier self-test, there's no
      * way to check "did this actually work" from headless kernel code
@@ -336,6 +348,78 @@ void kernel_late_init(void) {
         } else {
             kernel_log("[WARN] DNS resolve of example.com failed (no "
                        "upstream network access from the DNS proxy?)\n");
+        }
+
+        /* Self-test (Phase 28): a genuine end-to-end TCP test against
+         * a real, unmodified public HTTP server - the same "depends
+         * on real upstream connectivity, logged as WARN not a hard
+         * failure" honesty as the DNS self-test just above, extended
+         * one layer further (DNS resolution, then an actual TCP
+         * connection, HTTP request, and response over it). Uses
+         * HTTP/1.1 with an explicit Connection: close specifically so
+         * the server closes the connection after one response
+         * (HTTP/1.1 defaults to keep-alive) - this also lets
+         * tcp_receive()'s "0 means clean close" return value end the
+         * read loop naturally instead of needing to already know the
+         * response length in advance. An initial version of this test
+         * used HTTP/1.0, which the real server rejected with "426
+         * Upgrade Required" - a genuine finding from testing against
+         * a real, unmodified server, not a TCP bug: switched to
+         * HTTP/1.1 once it was clear the underlying connection,
+         * request, and response were all working correctly. This
+         * same test also caught a real, separate pre-existing bug:
+         * ip_send() never actually used NET_NETMASK to route through
+         * the gateway for an off-subnet destination (defined since
+         * Phase 6, never wired up) - every earlier phase's self-tests
+         * only ever talked to on-subnet SLIRP addresses, so the gap
+         * had no way to surface until this was the first thing to
+         * ever address a genuinely external IP. Fixed in ip.c. */
+        if (dns_resolve("example.com", NET_DNS_SERVER_IP, &resolved_ip) &&
+            tcp_connect(resolved_ip, 80)) {
+            const char* request =
+                "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: "
+                "close\r\n\r\n";
+            if (tcp_send(request, (uint16_t)strlen(request))) {
+                static char response_buf[2048];
+                int total = 0;
+                for (;;) {
+                    int n = tcp_receive(response_buf + total,
+                                        (uint16_t)(sizeof(response_buf) -
+                                                    (uint32_t)total - 1),
+                                        300);
+                    if (n <= 0) {
+                        break; /* 0 = clean close, -1 = timeout/error */
+                    }
+                    total += n;
+                    if (total >= (int)sizeof(response_buf) - 1) {
+                        break;
+                    }
+                }
+                response_buf[total] = '\0';
+
+                if (total > 0) {
+                    char preview[64];
+                    int preview_len =
+                        (total < (int)sizeof(preview) - 1)
+                            ? total
+                            : (int)sizeof(preview) - 1;
+                    memcpy(preview, response_buf, (uint32_t)preview_len);
+                    preview[preview_len] = '\0';
+                    kernel_log("[ OK ] TCP HTTP OK: received %d bytes "
+                               "from example.com:80, starting with: "
+                               "%s\n", total, preview);
+                } else {
+                    kernel_log("[WARN] TCP HTTP: connected and sent a "
+                               "request but received no data back\n");
+                }
+            } else {
+                kernel_log("[WARN] TCP HTTP: send failed after "
+                           "connecting\n");
+            }
+            tcp_close();
+        } else {
+            kernel_log("[WARN] TCP HTTP: could not connect to "
+                       "example.com:80 (no upstream network access?)\n");
         }
     }
 }

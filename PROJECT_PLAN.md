@@ -139,6 +139,22 @@ at the end. Concretely, in the order it gets built:
 | **P25** | MBR/GPT partition support + a real second filesystem (ext2, read-only) | Complete (scoped - see PROGRESS.md) |
 | **P26** | ext2 write support | Complete (scoped - see PROGRESS.md) |
 | **P27** | True fork() via copy-on-write | Complete (scoped - see PROGRESS.md) |
+| **P28a** | Minimal TCP client | Complete (scoped - see PROGRESS.md; also fixed a real pre-existing gateway-routing bug in ip_send()) |
+| **P28b** | UHCI USB controller + device enumeration | Complete (scoped - see PROGRESS.md; also fixed a real missing-volatile bug in the DMA transfer descriptors) |
+| **P28c** | A real, from-scratch bootloader | Complete (scoped - see PROGRESS.md; purely additive, parallel to the existing GRUB boot path) |
+
+**All three items from the "bootloader, TCP, USB" request are now
+complete** (P28a-c). Each was tackled sequentially with full
+verification rigor - real diagnostic-driven debugging found and fixed
+a genuine bug in every single one (TCP: a dead gateway-routing check
+since Phase 6; USB: a missing volatile qualifier on DMA memory;
+bootloader: an off-by-one LBA and a structural padding-order issue).
+
+Phases 28b (USB drivers) and 28c (a real from-scratch bootloader) were
+requested together with TCP as a trio of substantial undertakings the
+project had deliberately deferred. Each is being tackled sequentially
+with full verification rigor rather than as a rushed combined effort -
+see PROGRESS.md for current status.
 
 Phases 26-27 (post-release) were delivered together, deliberately
 chosen over the era's other open candidates (a real bootloader, USB

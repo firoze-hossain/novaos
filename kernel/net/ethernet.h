@@ -23,6 +23,20 @@ static inline uint16_t eth_htons(uint16_t host_value) {
 }
 #define eth_ntohs eth_htons /* the swap is its own inverse */
 
+/* Same idea, 32-bit - added in Phase 28 for TCP's sequence/ack
+ * numbers (ip.c has had an equivalent private helper, be32(), since
+ * Phase 6, but it's static to that file; this is the same operation
+ * exposed under the naming convention every other byte-swap helper in
+ * this tree already uses, rather than reaching into ip.c's internals
+ * or duplicating it unnamed). */
+static inline uint32_t eth_htonl(uint32_t host_value) {
+    return ((host_value & 0x000000FFu) << 24) |
+           ((host_value & 0x0000FF00u) << 8) |
+           ((host_value & 0x00FF0000u) >> 8) |
+           ((host_value & 0xFF000000u) >> 24);
+}
+#define eth_ntohl eth_htonl /* the swap is its own inverse */
+
 /* Builds an Ethernet header and hands the whole frame to the NIC
  * driver. `payload` is copied immediately after the header. */
 bool eth_send(const uint8_t dest_mac[6], uint16_t ethertype,
