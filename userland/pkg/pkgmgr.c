@@ -11,9 +11,9 @@
  * nesting them.
  */
 #include "pkgmgr.h"
-#include "../fs/vfs.h"
-#include "../lib/string.h"
-#include "../include/kernel.h"
+#include "../../kernel/fs/vfs.h"
+#include "../../kernel/lib/string.h"
+#include "../../kernel/include/kernel.h"
 
 #define MAX_PACKAGE_FILE_SIZE 4096
 #define MAX_CANDIDATE_PACKAGES 16

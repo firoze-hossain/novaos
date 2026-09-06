@@ -3,14 +3,14 @@
  */
 #include "store.h"
 #include "canvas.h"
-#include "../drivers/video/vga_graphics.h"
-#include "../drivers/keyboard/keyboard.h"
-#include "../drivers/mouse/ps2mouse.h"
-#include "../drivers/timer/timer.h"
-#include "../drivers/vga/vga.h"
+#include "../../kernel/drivers/video/vga_graphics.h"
+#include "../../kernel/drivers/keyboard/keyboard.h"
+#include "../../kernel/drivers/mouse/ps2mouse.h"
+#include "../../kernel/drivers/timer/timer.h"
+#include "../../kernel/drivers/vga/vga.h"
 #include "../pkg/pkgmgr.h"
-#include "../fs/vfs.h"
-#include "../lib/string.h"
+#include "../../kernel/fs/vfs.h"
+#include "../../kernel/lib/string.h"
 
 #define MAX_STORE_ROWS 8
 #define ROW_HEIGHT 32

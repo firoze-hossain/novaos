@@ -409,7 +409,9 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
     }
 }
 
-int process_exec(const char* path, const char** argv, int argc) {
+static int process_exec_internal(const char* path, const char** argv,
+                                  int argc, const char** filenames,
+                                  int file_count) {
     if (argc > MAX_EXEC_ARGS) {
         argc = MAX_EXEC_ARGS;
     }
@@ -538,6 +540,16 @@ int process_exec(const char* path, const char** argv, int argc) {
     p->kernel_stack_alloc = kstack;
     p->page_directory_phys = address_space;
     p->allowed_file_count = 0;
+    if (filenames != NULL && file_count > 0) {
+        if (file_count > MAX_CAPABILITIES) {
+            file_count = MAX_CAPABILITIES;
+        }
+        for (int i = 0; i < file_count; i++) {
+            copy_name(p->allowed_files[i], filenames[i],
+                      sizeof(p->allowed_files[i]));
+        }
+        p->allowed_file_count = file_count;
+    }
     p->allowed_host_count = 0;
     p->can_spawn = false;
     p->exit_code = 0;
@@ -549,6 +561,30 @@ int process_exec(const char* path, const char** argv, int argc) {
 
     scheduler_add(p);
     return p->pid;
+}
+
+int process_exec(const char* path, const char** argv, int argc) {
+    return process_exec_internal(path, argv, argc, NULL, 0);
+}
+
+/* Phase 29: for trusted (ring-0) callers only - lets a caller grant
+ * specific file capabilities to the process being created, the same
+ * least-privilege pattern process_create_sandboxed_task() (Phase 11)
+ * already established, applied to exec'd processes rather than only
+ * kernel-compiled demo tasks. The ordinary ring-3 SYS_EXEC syscall
+ * still only ever reaches plain process_exec() above (granting
+ * nothing) - this exists so a future, more capable shell (or, for
+ * now, a boot self-test proving a real ring-3 coreutils program
+ * works correctly once actually given the access it needs) can
+ * deliberately choose what a program it launches may open, rather
+ * than either the shell needing its own privilege to grant arbitrary
+ * access at runtime (a much bigger, separate design question) or
+ * every exec'd program needing blanket file access by default (which
+ * would quietly weaken Phase 11's least-privilege model instead of
+ * extending it). */
+int process_exec_with_files(const char* path, const char** argv, int argc,
+                             const char** filenames, int file_count) {
+    return process_exec_internal(path, argv, argc, filenames, file_count);
 }
 
 int process_wait(int pid) {

@@ -1,7 +1,7 @@
 #ifndef PKG_PKGMGR_H
 #define PKG_PKGMGR_H
 
-#include "../include/types.h"
+#include "../../kernel/include/types.h"
 
 /* nova-pkg: a minimal package manager, CLI only.
  *

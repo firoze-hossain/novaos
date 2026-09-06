@@ -348,6 +348,17 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
+## Kernel/userland separation & ring-3 coreutils (Phase 29)
+
+`shell`/`gui`/`pkg` moved from `kernel/` to `userland/` for
+architectural clarity (see PROGRESS.md for the honest note that this
+alone is organizational - they still run in ring 0). The real proof
+this project's architecture supports genuine userland separation is
+`userland/coreutils/cat.c` - watch the boot log for `SYS_OPEN('HELLO.TXT')
+-> handle 0 (capability granted)` and `Ring-3 coreutils: CAT.ELF ...
+exited with code 0`. To build it yourself: `./userland/coreutils/build.sh`
+(same pattern as `userland/examples/build.sh`).
+
 ## The real bootloader (Phase 28c)
 
 `make test-custom-boot` boots NovaOS via a genuine, from-scratch

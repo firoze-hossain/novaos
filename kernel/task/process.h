@@ -154,6 +154,14 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
  * memory/process slots). */
 int process_exec(const char* path, const char** argv, int argc);
 
+/* Phase 29: like process_exec(), but grants the new process access to
+ * `filenames` (up to MAX_CAPABILITIES) before it ever runs - for
+ * trusted, ring-0 callers only (the ordinary SYS_EXEC syscall never
+ * reaches this). See process.c's comment on the function for the
+ * full reasoning. */
+int process_exec_with_files(const char* path, const char** argv, int argc,
+                             const char** filenames, int file_count);
+
 /* Blocks (yielding repeatedly) until process `pid` reaches
  * PROCESS_TERMINATED, then returns its exit code. Returns -1
  * immediately if no process with that pid currently exists in the

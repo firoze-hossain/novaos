@@ -1,7 +1,7 @@
 #ifndef GUI_FONT5X7_H
 #define GUI_FONT5X7_H
 
-#include "../include/types.h"
+#include "../../kernel/include/types.h"
 
 /* Digits only (0-9), 5 columns x 7 rows, one byte per row using bits
  * 4..0 (bit4 = leftmost column). Deliberately small and hand-built

@@ -4,8 +4,8 @@
  */
 #include "compositor.h"
 #include "font5x7.h"
-#include "../drivers/video/vga_graphics.h"
-#include "../lib/string.h"
+#include "../../kernel/drivers/video/vga_graphics.h"
+#include "../../kernel/lib/string.h"
 
 #define TITLEBAR_HEIGHT 10
 #define CURSOR_SIZE 7

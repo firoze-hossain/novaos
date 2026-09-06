@@ -1,7 +1,7 @@
 #ifndef GUI_CANVAS_H
 #define GUI_CANVAS_H
 
-#include "../include/types.h"
+#include "../../kernel/include/types.h"
 
 /* Generic pixel-buffer drawing primitives, parameterized by buffer/
  * dimensions rather than assuming a single global screen the way

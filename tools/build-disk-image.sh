@@ -25,7 +25,7 @@ PART2_MB=32   # ext2
 # --- Partition 1: FAT32, exactly the same fixtures as before ---
 dd if=/dev/zero of="$TMP/part1.img" bs=1M count=$PART1_MB status=none
 mformat -i "$TMP/part1.img" -F ::
-for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG HELLO.ELF HELLOC.ELF; do
+for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG HELLO.ELF HELLOC.ELF CAT.ELF; do
     mcopy -i "$TMP/part1.img" "$FIXTURES/$f" "::$f"
 done
 

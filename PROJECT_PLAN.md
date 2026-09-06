@@ -142,6 +142,7 @@ at the end. Concretely, in the order it gets built:
 | **P28a** | Minimal TCP client | Complete (scoped - see PROGRESS.md; also fixed a real pre-existing gateway-routing bug in ip_send()) |
 | **P28b** | UHCI USB controller + device enumeration | Complete (scoped - see PROGRESS.md; also fixed a real missing-volatile bug in the DMA transfer descriptors) |
 | **P28c** | A real, from-scratch bootloader | Complete (scoped - see PROGRESS.md; purely additive, parallel to the existing GRUB boot path) |
+| **P29** | Kernel/userland architectural separation + first genuine ring-3 coreutils program | Complete (scoped - see PROGRESS.md; shell/gui/pkg reorganized but still ring-0, cat is genuinely ring-3) |
 
 **All three items from the "bootloader, TCP, USB" request are now
 complete** (P28a-c). Each was tackled sequentially with full
