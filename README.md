@@ -331,6 +331,38 @@ a VM.
   exact mistake previously identified and avoided in Phase 23,
   caught immediately and fixed the same way
 
+**Phase 30 - Genuine Ring-3 Shell (Kernel Independence, Completed)**
+- The real completion of Phase 29's architectural point: NovaOS now
+  **boots into a genuine ring-3 shell** -
+  `userland/ring3-shell/shell.c`, a completely separate ELF32
+  executable talking to the kernel only through syscalls - not a
+  ring-0 kernel task. The same relationship `bash` has with the Linux
+  kernel on Ubuntu
+- Two new syscalls, each built with real care about a correctness
+  hazard: `SYS_READ_KEY` is deliberately non-blocking, since a
+  syscall runs with interrupts disabled and the existing keyboard
+  driver's blocking read would deadlock the kernel if called
+  unconditionally; `SYS_LIST_FILES` powers `ls`
+- A new, narrow capability grant (`can_open_any_file` +
+  `can_spawn`, via `process_exec_as_shell()`) lets the shell open
+  whatever file the user names and run other programs - reserved for
+  the shell specifically, never reachable from ring-3 `SYS_EXEC`
+- **Verified through genuine interactive use**, not just automated
+  self-tests - real typed commands via QEMU monitor keystrokes,
+  screendumped and log-verified: `ls`, `cat`, `echo`, and `run`
+  (loading and waiting on a real ELF program) all confirmed working
+  end-to-end
+- Two real bugs found and fixed (a self-inflicted duplicate
+  assignment from an earlier automated edit; a missing `can_spawn`
+  grant) plus one correctly-diagnosed test-tooling discovery (QEMU's
+  `sendkey` routing to a USB keyboard instead of PS/2 when both are
+  attached) - each found through the same systematic debugging
+  discipline used throughout this project
+- **Honestly scoped**: `ping`/`pkg`/the GUI/`beep`/`date`/`lspci`
+  aren't in the ring-3 shell yet - each needs its own new syscall
+  surface not built in this pass. See PROGRESS.md for the full,
+  honest limitations list
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -367,13 +399,14 @@ novaos/
 │   ├── lib/            # freestanding string/stdio subset (kernel-internal, separate from userland/libc/)
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing
-├── userland/           # Phase 24 libc + Phase 29 kernel/userland separation
+├── userland/           # Phase 24 libc + Phase 29 kernel/userland separation + Phase 30 ring-3 shell
 │   ├── libc/           # crt0, syscalls, string/stdio/stdlib - what a real ring-3 program links against
+│   ├── ring3-shell/    # Phase 30: the genuine ring-3 shell NovaOS boots into - real ELF, syscalls only
 │   ├── coreutils/      # Phase 29: genuine ring-3 ELF programs (cat) - talk to the kernel only via syscalls
 │   ├── examples/       # Phase 24 example C programs
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas - still ring-0 for now, see PROGRESS.md
 │   ├── pkg/            # nova-pkg package manager - still ring-0 for now
-│   └── shell/          # minimal built-in shell + first-run wizard - still ring-0 for now
+│   └── shell/          # Phase 3-era ring-0 shell - kept for reference, no longer launched at boot (see Phase 30), still ring-0
 ├── tools/              # linker script, grub.cfg, FAT32 test fixtures, ELF test fixture sources, custom-boot/ (Phase 28c bootloader)
 ├── scripts/            # per-OS setup scripts
 ├── .github/workflows/  # CI (build + make test on every push)

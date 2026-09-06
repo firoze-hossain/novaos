@@ -348,6 +348,31 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
+## The genuine ring-3 shell (Phase 30)
+
+NovaOS now boots directly into `userland/ring3-shell/shell.c` - a
+real, separately-compiled ELF32 program, not a kernel task. Try `help`,
+`ls`, `cat HELLO.TXT`, `echo hello`, `run HELLO.ELF one two`.
+
+**Not yet available in this shell** (need their own new syscalls, not
+built yet): `ping`, `nslookup`, `tftp`, `pkg`, `store`, `beep`, `date`,
+`lspci`. These commands still exist in `userland/shell/shell.c` (the
+original, Phase 3-era ring-0 shell, kept in the tree but no longer
+launched at boot) as a reference for what a future syscall surface
+would need to cover.
+
+**A real gotcha when testing interactively**: if you attach a USB
+keyboard (`-device usb-kbd`) *and* rely on QEMU's monitor `sendkey`
+command for automated testing, your keystrokes may silently go to the
+USB device instead of PS/2 - which this kernel doesn't read HID
+reports from yet (see Phase 28b's known limitations). If typed input
+seems to do nothing, try without `-device usb-kbd` first before
+assuming the shell itself is broken.
+
+To rebuild the shell yourself: `./userland/ring3-shell/build.sh`
+(same pattern as `userland/coreutils/build.sh` and
+`userland/examples/build.sh`).
+
 ## Kernel/userland separation & ring-3 coreutils (Phase 29)
 
 `shell`/`gui`/`pkg` moved from `kernel/` to `userland/` for

@@ -88,6 +88,29 @@
  * uses. */
 #define SYS_FORK 12
 
+/* Phase 30: non-blocking keyboard read - no arguments. Returns the
+ * next decoded ASCII character if one is waiting, or -1 immediately
+ * if not. Deliberately non-blocking: a syscall handler runs with
+ * interrupts disabled (see syscall_stub.asm), so a genuinely blocking
+ * read here - waiting on the same IRQ1 interrupt that can never fire
+ * while interrupts are off - would deadlock the entire kernel, not
+ * just the calling process. A ring-3 caller wanting to actually wait
+ * for a key is expected to loop this with SYS_YIELD in between, the
+ * same pattern every other blocking wait in this kernel already uses
+ * one level up (process_wait(), tcp_receive(), etc.). */
+#define SYS_READ_KEY 13
+
+/* Phase 30: EBX = buffer, ECX = buffer size. Fills the buffer with a
+ * newline-separated directory listing ("NAME SIZE\n" per entry,
+ * SIZE in bytes) of the mounted FAT32 root directory, and returns the
+ * number of bytes written, or -1 if the buffer was too small or no
+ * filesystem is mounted. No capability check: listing what files
+ * exist isn't itself a read of any file's contents, the same
+ * reasoning `ls` needing no special permission on a real Unix system
+ * reflects (though opening any *specific* file still goes through
+ * SYS_OPEN's existing capability check, unaffected by this). */
+#define SYS_LIST_FILES 14
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

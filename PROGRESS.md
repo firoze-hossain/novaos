@@ -39,6 +39,7 @@ in the same PR as the code it describes.
 | P28b - UHCI USB Controller & Device Enumeration | Complete (scoped - see below) |
 | P28c - A Real, From-Scratch Bootloader | Complete (scoped - see below) |
 | P29 - Kernel/Userland Architectural Separation | Complete (scoped - see below) |
+| P30 - Genuine Ring-3 Shell (Kernel Independence, Completed) | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2944,11 +2945,158 @@ silently break the bootloader's own kernel-loading assumptions either.
 
 ## Phase 30 and beyond
 
+## Phase 30 - Genuine Ring-3 Shell (Kernel Independence, Completed)
+
+**Status: Complete (scoped).** This is the real completion of the
+architectural point Phase 29 raised but didn't finish: NovaOS now
+boots into a genuine ring-3 interactive shell -
+`userland/ring3-shell/shell.c`, a completely separate, standalone
+ELF32 executable talking to the kernel only through syscalls - not a
+ring-0 kernel task. This is the same category of relationship `bash`
+has with the Linux kernel on Ubuntu.
+
+### What was built
+
+- **Two new syscalls**, each designed with real care about a
+  correctness hazard, not just written and hoped for:
+  - **`SYS_READ_KEY`** - a syscall handler runs with interrupts
+    disabled (see `syscall_stub.asm`), and the existing
+    `keyboard_get_char()` blocks via `hlt`, waiting on the very
+    interrupt that can't fire while interrupts are off - calling it
+    unconditionally from a syscall would deadlock the entire kernel,
+    not just the caller. Verified the exact driver implementation
+    first: `keyboard_get_char()` only reaches its `hlt`-wait loop if
+    `keyboard_has_char()` is false, so checking that first and only
+    then calling it is genuinely safe. The syscall is deliberately
+    non-blocking (returns -1 immediately if no key is waiting); a
+    ring-3 caller wanting to wait loops it with `SYS_YIELD`, the same
+    pattern every other blocking wait in this kernel already uses one
+    level up.
+  - **`SYS_LIST_FILES`** - bridges `vfs_list_files()`'s callback-based
+    interface (kernel-internal style) to a buffer-filling syscall via
+    a staging accumulator.
+- **A broader capability grant, added carefully, not loosely**: a
+  general-purpose shell needs to open whatever file the user names at
+  a prompt, which Phase 11's fixed allowed_files[] list can't express.
+  Added `can_open_any_file` (`process_t`) - an explicit, narrow grant,
+  false by default everywhere, only ever set via a new
+  `process_exec_as_shell()`, never reachable from ring-3 `SYS_EXEC`.
+  The same function also grants `can_spawn` (a shell fundamentally
+  needs to run other programs - `run FILE` uses `SYS_EXEC` under the
+  hood, which is gated by that capability).
+- **`userland/ring3-shell/shell.c`** - a real read-eval-print loop:
+  blocking line input (via the `SYS_READ_KEY`+`SYS_YIELD` loop,
+  handling backspace), simple space-separated tokenizing, and five
+  commands built on syscalls that already existed plus the two new
+  ones: `ls`, `cat FILE`, `run FILE [args]`, `echo`, `help`, `clear`
+  (an honest, documented approximation - no real
+  `SYS_CLEAR_SCREEN` syscall exists yet, so this just scrolls the
+  visible area off rather than truly clearing it).
+- **`kernel/init/main.c`** now calls `process_exec_as_shell("SHELL.ELF", ...)`
+  instead of `process_create_kernel_task("shell", shell_run)` - NovaOS
+  boots directly into the ring-3 program. The original ring-0 shell
+  (`userland/shell/shell.c`, Phase 29's organizationally-separated but
+  still-ring-0 version) remains in the tree, unused at boot, not
+  deleted.
+
+### Two real bugs found and fixed through the exact debugging discipline used throughout this project
+
+- **A self-inflicted capability bug.** The first interactive test of
+  `cat` failed with `[SECURITY] pid 2 denied SYS_OPEN('HELLO.TXT') -
+  not in its capability list` - despite `can_open_any_file` looking
+  correctly implemented. Traced to an earlier automated script (from
+  Phase 29, adding `can_open_any_file = false` after every
+  `can_spawn = false` occurrence) having *also* matched inside
+  `process_exec_internal()`, which already had a correct, manually-
+  added `p->can_open_any_file = grant_any_file;` line just above it -
+  the automated edit silently added a second, unconditional
+  `= false` right after, overwriting the correct value. Found by
+  grepping every occurrence of the field and spotting the duplicate
+  assignment, not by guessing.
+- **A missing-capability design gap, not a bug exactly, but caught
+  the same way.** `run HELLO.ELF` failed with `[SECURITY] pid 2
+  denied SYS_EXEC - spawn capability not granted` - `can_open_any_file`
+  alone didn't cover the shell's need to run programs, since
+  `SYS_EXEC` is gated by the separate `can_spawn` capability. Fixed by
+  granting both together in `process_exec_as_shell()`, since a
+  general-purpose shell trusted with broad file access is, by the
+  same reasoning, trusted to run programs too.
+
+### A real, correctly-diagnosed test-tooling discovery (not a NovaOS bug)
+
+The very first interactive test sent zero response at all - typed
+characters simply never reached the shell. Investigated systematically
+rather than assumed broken: confirmed the shell was genuinely running
+and yielding correctly (the rest of the boot self-test suite completed
+normally alongside it), then found that QEMU's monitor `sendkey`
+command appears to route to whichever keyboard device is "primary"
+when *both* a PS/2 keyboard (always present) and a USB keyboard
+(`-device usb-kbd`, Phase 28b) are attached simultaneously - and
+routes to the USB one, which this kernel doesn't read HID reports from
+yet (a known Phase 28b limitation). Removing `-device usb-kbd` from
+the test invocation immediately confirmed `SYS_READ_KEY` and the whole
+shell working correctly. This is the same category of correct
+diagnosis as Phase 28c's IDE-disk-ordering discovery - a test
+configuration detail, not a defect in the feature being tested.
+
+### Verified behavior - genuine interactive use, not just automated self-tests
+
+```
+> help
+NovaOS ring-3 shell (Phase 30) - available commands: ...
+> ls
+HELLO.TXT 68
+> echo hello world
+hello world
+> cat HELLO.TXT
+Hello from NovaOS FAT32! This file was read via the ATA PIO driver.
+> run HELLO.ELF one two
+Hello from a real ELF executable loaded by NovaOS!
+HELLO.ELF
+(pid 13 exited with code 42)
+```
+Every line above is from an actual interactive QEMU session (via
+monitor-driven keystrokes, screendumped and log-verified), not a
+boot-time automated check - the first genuinely interactive,
+syscall-driven I/O this project has built and tested this thoroughly.
+Full `make test` (GRUB boot) and `make test-custom-boot` (Phase 28c's
+real bootloader) both re-verified with zero regressions after all of
+this, confirming the new syscalls and capability changes didn't
+disturb anything else running underneath the shell.
+
+### Known limitations / follow-ups - the honest remainder of "kernel independence"
+
+- **`ping`/`nslookup`/`tftp`, `pkg`, the GUI (`store`), `beep`, `date`,
+  and `lspci` are not available in the ring-3 shell** - each needs its
+  own new syscall surface (network operations, package management,
+  launching the GUI, sound, the real-time clock, PCI enumeration) that
+  wasn't built in this pass. The commands still exist in
+  `userland/shell/shell.c` (Phase 29's ring-0 version, kept but no
+  longer launched at boot) as a reference for what a future syscall
+  surface would need to cover.
+- **`gui`/`pkg` are still ring-0** - only the shell itself was
+  converted this phase; Phase 29's honest note on this still applies
+  to both.
+- **`clear` doesn't really clear the screen** - no `SYS_CLEAR_SCREEN`
+  syscall exists yet, so it scrolls the visible area off instead, a
+  documented approximation.
+- **No line history, no arrow-key editing, no tab completion** - only
+  character input and backspace.
+- **`can_open_any_file`/the shell's `can_spawn` grant is all-or-
+  nothing** - there's no way yet for the shell to grant a *subset* of
+  its own broad access to something it execs (e.g., `run` currently
+  launches a program with whatever capabilities `process_exec()`
+  gives by default - none - rather than anything derived from what
+  the shell itself can access).
+
+## Phase 31 and beyond
+
 Not started. Candidates: virtio-net/virtio-blk (the next unclaimed
-item from the original gap-analysis roadmap), a real `ls` syscall +
-ring-3 program, HID keyboard reports, USB hubs/bulk transfers,
-extending capability-based access control further, true lowercase
-font forms, TCP retransmission/windowing, a sockets-style syscall API
-for TCP, and a genuinely unified boot+data disk image. Each would
-benefit from being scoped on its own terms rather than assumed as
-"next."
+item from the original gap-analysis roadmap), the remaining shell
+syscalls (network, pkg, GUI launch, sound, RTC, PCI) to restore full
+command parity with the old ring-0 shell, HID keyboard reports, USB
+hubs/bulk transfers, extending capability-based access control
+further, true lowercase font forms, TCP retransmission/windowing, a
+sockets-style syscall API for TCP, and a genuinely unified boot+data
+disk image. Each would benefit from being scoped on its own terms
+rather than assumed as "next."

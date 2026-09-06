@@ -79,6 +79,19 @@ typedef struct process {
      * same least-privilege pattern as the other two. */
     bool can_spawn;
 
+    /* Phase 30: a broader, explicit "may open any file" grant -
+     * distinct from allowed_files[] (a small, fixed list for a
+     * sandboxed process that only ever needs 1-2 specific files
+     * known in advance). A general-purpose shell needs to open
+     * whatever file the user names at runtime, which the fixed-list
+     * model can't express - this is the honest, explicit extension
+     * for that specific, narrow case rather than silently loosening
+     * allowed_files[] itself. False by default, the same least-
+     * privilege pattern as every other capability here; only granted
+     * to the shell process itself, not to arbitrary exec'd programs
+     * (see process_exec_with_any_file_access() in process.h). */
+    bool can_open_any_file;
+
     /* Phase 23: the value passed to SYS_EXIT (or 0 if the process is
      * still running / was never given one). Meaningful once
      * process_wait() lets a caller retrieve it. */
@@ -161,6 +174,15 @@ int process_exec(const char* path, const char** argv, int argc);
  * full reasoning. */
 int process_exec_with_files(const char* path, const char** argv, int argc,
                              const char** filenames, int file_count);
+
+/* Phase 30: exec's a process with can_open_any_file granted (see that
+ * field's comment above) AND can_spawn granted - a shell fundamentally
+ * needs both broad file access and the ability to run other programs,
+ * so both are covered by this one trust decision. Reserved for the
+ * interactive shell itself, the one genuinely trusted, general-
+ * purpose program that needs them. Kernel-boot-sequence use only;
+ * never reachable from ring-3 SYS_EXEC. */
+int process_exec_as_shell(const char* path, const char** argv, int argc);
 
 /* Blocks (yielding repeatedly) until process `pid` reaches
  * PROCESS_TERMINATED, then returns its exit code. Returns -1
