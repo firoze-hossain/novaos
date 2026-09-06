@@ -1,8 +1,8 @@
 #ifndef GUI_COMPOSITOR_H
 #define GUI_COMPOSITOR_H
 
-#include "../include/types.h"
-#include "../drivers/mouse/ps2mouse.h"
+#include "../../kernel/include/types.h"
+#include "../../kernel/drivers/mouse/ps2mouse.h"
 
 #define COMPOSITOR_MAX_WINDOWS 3
 

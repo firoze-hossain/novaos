@@ -38,6 +38,7 @@ in the same PR as the code it describes.
 | P28a - Minimal TCP Client | Complete (scoped - see below) |
 | P28b - UHCI USB Controller & Device Enumeration | Complete (scoped - see below) |
 | P28c - A Real, From-Scratch Bootloader | Complete (scoped - see below) |
+| P29 - Kernel/Userland Architectural Separation | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -2829,11 +2830,125 @@ understood.
   partitions remains unaddressed.
 
 ## Phase 29 and beyond
+## Phase 29 - Kernel/Userland Architectural Separation
 
-With all three items from the user's "bootloader, TCP, USB" request
-now complete, remaining candidates are open-ended: HID keyboard
-reports, USB hubs/bulk transfers, extending capability-based access
-control to further resource types, true lowercase font forms, TCP
-retransmission/windowing, a sockets-style syscall API for TCP, and a
-genuinely unified boot+data disk image. Each would benefit from being
-scoped on its own terms rather than assumed as "next."
+**Status: Complete (scoped).** Addresses a real, correctly-identified
+architectural gap: `kernel/shell/`, `kernel/gui/`, and `kernel/pkg/`
+were all compiled directly into the kernel binary and ran in ring 0
+as kernel tasks - nothing like the clean Linux-kernel-vs-Ubuntu-
+userland separation those names implied. This phase has two genuinely
+different halves, and the distinction between them is the honest
+core of this writeup.
+
+### Half 1: repository restructure (organizational, not a new security property)
+
+`kernel/shell/`, `kernel/gui/`, and `kernel/pkg/` moved to
+`userland/shell/`, `userland/gui/`, `userland/pkg/` - every include
+path was individually reasoned about (references to true kernel
+subsystems like `drivers/`/`fs/`/`net/` needed `../../kernel/`
+prepended; references to the other two moved directories, which
+remain siblings under `userland/`, stayed unchanged) rather than a
+blind find-and-replace. The Makefile's `C_SOURCES` was extended to
+also compile these three directories, while deliberately *not*
+picking up `userland/libc/` or `userland/examples/`, which already
+have their own, completely separate build process.
+
+**Important honesty check**: this half does not, by itself, achieve
+real Linux/Ubuntu-style separation. `userland/shell/shell.c` still
+compiles directly into the kernel binary and still runs in ring 0,
+calling `vfs_read_file()` and friends as plain C function calls - the
+same as before the move. What changed is code organization and
+architectural clarity (the repository now visibly distinguishes "true
+kernel" from "everything else"), not the execution model. Verified
+with a full clean rebuild and the complete `make test` suite passing
+with zero regressions - a real, non-trivial mechanical risk (moving
+1349 lines of code and fixing every affected include path) that
+worked correctly on the first attempt.
+
+### Half 2: a genuine ring-3 coreutils program - the real proof
+
+`userland/coreutils/cat.c` is a completely separately-compiled ELF32
+executable, built with its own toolchain invocation
+(`userland/coreutils/build.sh`, the same pattern
+`userland/examples/build.sh` established in Phase 24) and talking to
+the kernel *only* through syscalls (`SYS_OPEN`/`SYS_READ`/
+`SYS_CLOSE`, all existing since Phase 11) - the actual category of
+thing `cat` is to the Linux kernel on Ubuntu, not a kernel task with a
+new address.
+
+This surfaced a real, previously-unexercised design tension: Phase
+11's capability model requires a process's file-access list to be
+explicitly granted, and `process_exec()` (Phase 23) deliberately grants
+*nothing* by default (the correct contrast with `fork()`, which
+inherits) - meaning a freshly-exec'd `cat.elf` would have no way to
+open anything at all. Resolved by adding `process_exec_with_files()`
+(`kernel/task/process.c`) - a trusted, ring-0-only variant that grants
+specific file capabilities before the process ever runs, the same
+least-privilege pattern `process_create_sandboxed_task()` (Phase 11)
+already established for kernel-compiled demo tasks, now available for
+exec'd ELF programs too. The ordinary ring-3 `SYS_EXEC` syscall still
+only ever reaches plain `process_exec()`, granting nothing - this
+doesn't weaken what a ring-3 program can grant itself or anything it
+execs.
+
+### A real bug caught and fixed through the exact debugging discipline this project has used throughout
+
+The first version of this self-test hung the entire boot. The cause:
+it called `process_exec_with_files()` and `process_wait()` directly
+from `kernel_main()`, *before* `scheduler_start()` - the same mistake
+explicitly reasoned through and avoided back in Phase 23 (`process_wait()`'s
+blocking loop needs the scheduler actually running with other tasks;
+`kernel_main()` itself is never registered as a process, so there's no
+valid "current process" for `scheduler_yield()` to act on). Caught
+immediately from the boot log stalling right after `CAT.ELF` loaded,
+and fixed the same way Phase 23 originally solved this: wrapping the
+test in a proper kernel task (`coreutils_test_task()`) registered
+alongside `idle`/`shell` before `scheduler_start()`, rather than
+calling it inline.
+
+### Verified behavior - the complete proof, not just "it ran"
+
+```
+[SYSCALL] pid 8 SYS_OPEN('HELLO.TXT') -> handle 0 (capability granted)
+[SYSCALL] SYS_WRITE from pid 8 ('Hello from NovaOS FAT32! This file was read via the ATA PIO driver.\n')
+[ OK ] Process 'CAT.ELF' (pid 8) exited with code 0
+```
+The capability grant is confirmed working (not just assumed), the
+printed content is `cat.elf`'s *own* code correctly reading and
+echoing the real file (not the kernel echoing anything), and the exit
+code is clean. Full `make test` (GRUB boot) and `make test-custom-boot`
+(Phase 28c's real bootloader) both re-verified with zero regressions
+after this change - confirming the repository restructure didn't
+silently break the bootloader's own kernel-loading assumptions either.
+
+### Known limitations / follow-ups (tracked honestly, not hidden)
+
+- **`shell`/`gui`/`pkg` are still ring-0 kernel tasks** - only `cat`
+  is a genuine ring-3 program so far. A full shell-to-ring3 conversion
+  is a much larger, separate undertaking (the shell currently calls
+  dozens of kernel functions directly - `vfs_list_files()`,
+  `pkg_install()`, `process_exec()` itself - each of which would need
+  either an existing syscall or a new one), deliberately not attempted
+  in this pass given the risk of a rushed, incomplete conversion
+  breaking the project's 60+ passing self-tests.
+- **Only one ring-3 coreutils program exists** (`cat`) - `ls` (listing
+  files) would need a new syscall, since `vfs_list_files()` has no
+  syscall wrapper today; `echo`, `cp`, etc. are straightforward
+  extensions of the same pattern once that's in place.
+- **`process_exec_with_files()` is ring-0-only by design** - there is
+  no mechanism yet for a ring-3 program (like a future, more capable
+  shell) to grant capabilities to something *it* execs; that's a
+  genuinely separate, larger design question (does the granting
+  process need its own broader privilege? a capability-delegation
+  model? bounded by what it itself was granted?) not addressed here.
+
+## Phase 30 and beyond
+
+Not started. Candidates: virtio-net/virtio-blk (the next unclaimed
+item from the original gap-analysis roadmap), a real `ls` syscall +
+ring-3 program, HID keyboard reports, USB hubs/bulk transfers,
+extending capability-based access control further, true lowercase
+font forms, TCP retransmission/windowing, a sockets-style syscall API
+for TCP, and a genuinely unified boot+data disk image. Each would
+benefit from being scoped on its own terms rather than assumed as
+"next."

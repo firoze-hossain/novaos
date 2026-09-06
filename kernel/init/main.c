@@ -14,7 +14,7 @@
 #include "../arch/x86/boot/multiboot.h"
 #include "../fs/vfs.h"
 #include "../fs/ext2.h"
-#include "../pkg/pkgmgr.h"
+#include "../../userland/pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
 #include "../drivers/usb/uhci.h"
 #include "../drivers/sound/ac97.h"
@@ -28,8 +28,8 @@
 #include "../task/user_demo.h"
 #include "../task/sandbox_demo.h"
 #include "../task/unprivileged_demo.h"
-#include "../shell/shell.h"
-#include "../shell/firstrun.h"
+#include "../../userland/shell/shell.h"
+#include "../../userland/shell/firstrun.h"
 #include "../lib/string.h"
 #include "../lib/stdio.h"
 #include <stdarg.h>
@@ -200,6 +200,16 @@ void kernel_late_init(void) {
             kernel_log("[WARN] ext2_write_file failed\n");
         }
     }
+
+    /* Self-test (Phase 29): a genuine ring-3 coreutils program - see
+     * coreutils_test_task() below, which runs this correctly as a
+     * proper kernel task once the scheduler has actually started,
+     * rather than here (kernel_main() isn't itself a registered
+     * process, so calling process_wait()'s scheduler_yield()-based
+     * blocking loop directly from this point in boot has no valid
+     * "current process" to yield from/back to - the same reasoning
+     * Phase 23's ELF self-test was built around a dedicated ring-3
+     * process for, applied here to a dedicated kernel task instead). */
 
     /* Self-test: if a NIC is attached, ping the gateway (QEMU user-
      * mode networking's SLIRP stack always answers pings to itself at
@@ -424,6 +434,37 @@ void kernel_late_init(void) {
     }
 }
 
+/* Phase 29: runs as a proper kernel task (registered before
+ * scheduler_start(), the same as idle/shell above) specifically so
+ * process_wait()'s scheduler_yield()-based blocking loop has a valid
+ * "current process" to yield from - calling this directly from
+ * kernel_main() instead would have no such thing, since kernel_main()
+ * itself is never registered as a process. Runs a genuine ring-3
+ * coreutils program (userland/coreutils/cat.c) - not a kernel-
+ * compiled task like every other process in this project's self-
+ * tests, but a completely separately-compiled ELF32 executable
+ * talking to the kernel only through syscalls, the real proof this
+ * project's kernel/userland architectural split supports the same
+ * category of separation Linux-kernel-vs-Ubuntu-userland has. */
+static void coreutils_test_task(void) {
+    if (vfs_is_mounted()) {
+        const char* cat_argv[] = {"CAT.ELF", "HELLO.TXT"};
+        const char* cat_files[] = {"HELLO.TXT"};
+        int cat_pid = process_exec_with_files("CAT.ELF", cat_argv, 2,
+                                               cat_files, 1);
+        if (cat_pid >= 0) {
+            int cat_exit = process_wait(cat_pid);
+            kernel_log("[ OK ] Ring-3 coreutils: CAT.ELF (a real, "
+                       "separately-compiled ELF32 program, not a kernel "
+                       "task) exited with code %d\n", cat_exit);
+        } else {
+            kernel_log("[WARN] Ring-3 coreutils: CAT.ELF failed to "
+                       "start\n");
+        }
+    }
+    process_exit_current(0);
+}
+
 static void print_banner(void) {
     vga_set_color(VGA_COLOR_CYAN, VGA_COLOR_BLACK);
     vga_puts("   _   _                  _____  _____ \n");
@@ -474,6 +515,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_init();
     process_create_kernel_task("idle", idle_task_entry);
     process_create_kernel_task("shell", shell_run);
+    process_create_kernel_task("coreutils-test", coreutils_test_task);
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);
 

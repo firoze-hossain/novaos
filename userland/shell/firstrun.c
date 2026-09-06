@@ -3,12 +3,12 @@
  * sysconfig.c, greets returning users on every later boot
  */
 #include "firstrun.h"
-#include "../drivers/vga/vga.h"
-#include "../drivers/keyboard/keyboard.h"
-#include "../fs/vfs.h"
-#include "../config/sysconfig.h"
-#include "../lib/string.h"
-#include "../include/kernel.h"
+#include "../../kernel/drivers/vga/vga.h"
+#include "../../kernel/drivers/keyboard/keyboard.h"
+#include "../../kernel/fs/vfs.h"
+#include "../../kernel/config/sysconfig.h"
+#include "../../kernel/lib/string.h"
+#include "../../kernel/include/kernel.h"
 
 static char g_hostname[SYSCONFIG_HOSTNAME_MAX] = "novaos";
 static char g_username[SYSCONFIG_USERNAME_MAX] = "user";

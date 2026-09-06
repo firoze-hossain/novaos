@@ -117,8 +117,20 @@ KERNEL_DIR = kernel
 BUILD_DIR = build
 ISO_DIR = iso
 
-# Find source files
-C_SOURCES = $(shell find $(KERNEL_DIR) -name "*.c")
+# Find source files. Phase 29: kernel/ now holds only the true
+# kernel (boot, arch, drivers, fs, net, task/scheduler, mm, lib,
+# init) - shell/gui/pkg moved to userland/ for architectural clarity
+# (Linux-kernel-vs-Ubuntu-userland style separation), but are still
+# compiled directly into the kernel binary as kernel tasks for now,
+# not yet real ring-3 processes - see PROGRESS.md for the honest scope
+# note on why, and userland/coreutils/ for the first genuine ring-3
+# userland programs. userland/libc/ and userland/examples/ are
+# deliberately NOT included here - they have their own, completely
+# separate build process (userland/examples/build.sh) targeting real
+# ELF executables, not the kernel image.
+USERLAND_KERNEL_TASK_DIRS = userland/shell userland/gui userland/pkg
+C_SOURCES = $(shell find $(KERNEL_DIR) -name "*.c") \
+            $(shell find $(USERLAND_KERNEL_TASK_DIRS) -name "*.c")
 ASM_SOURCES = $(shell find $(KERNEL_DIR) -name "*.asm")
 
 # Build object files
@@ -198,6 +210,8 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "ext2 mounted: block_size=4096" $(TEST_LOG) && \
 	    grep -q "EXT2 FILE READ OK: EXT2TEST.TXT" $(TEST_LOG) && \
 	    grep -q "EXT2 WRITE.READBACK OK: EXT2WROT.TXT" $(TEST_LOG) && \
+	    grep -q "SYS_OPEN..HELLO.TXT.. -> handle .* .capability granted." $(TEST_LOG) && \
+	    grep -q "Ring-3 coreutils: CAT.ELF" $(TEST_LOG) && \
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
 	    grep -q "PING OK" $(TEST_LOG) && \

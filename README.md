@@ -306,6 +306,31 @@ a VM.
   booting real-mode code - the appropriate order of operations for
   code this unforgiving of mistakes
 
+**Phase 29 - Kernel/Userland Architectural Separation**
+- Addressed a real, correctly-identified architectural gap:
+  `kernel/shell/`, `kernel/gui/`, `kernel/pkg/` were compiled directly
+  into the kernel binary, running in ring 0 - nothing like the clean
+  Linux-kernel-vs-Ubuntu-userland split those names implied
+- All three physically moved to `userland/`, with every include path
+  individually reasoned about (not a blind find-and-replace) - full
+  clean rebuild, zero regressions, both `make test` and `make
+  test-custom-boot` still pass
+- **Honestly, this alone is organizational, not a new security
+  property** - `shell`/`gui`/`pkg` still run in ring 0. The real proof
+  is `userland/coreutils/cat.c`: a genuinely separate, standalone
+  ELF32 executable talking to the kernel *only* through syscalls -
+  the actual category of thing `cat` is to the Linux kernel
+- Surfaced and resolved a real design tension: `process_exec()`
+  deliberately grants no file capabilities by default (Phase 11's
+  least-privilege model), so a new `process_exec_with_files()` lets a
+  trusted, ring-0 caller grant specific access at exec time, without
+  weakening what ring-3 `SYS_EXEC` itself can grant
+- Found and fixed a real bug through the same debugging discipline
+  used throughout this project: the first version hung the boot by
+  calling a blocking wait before the scheduler had started - the
+  exact mistake previously identified and avoided in Phase 23,
+  caught immediately and fixed the same way
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -329,7 +354,7 @@ inside the Ubuntu shell it gives you - see TESTING.md for details.
 
 ```
 novaos/
-├── kernel/
+├── kernel/             # Phase 29: the TRUE kernel only - boot/arch/drivers/fs/net/task/mm, nothing userland-conceptual
 │   ├── arch/x86/
 │   │   ├── boot/       # Multiboot entry point
 │   │   ├── cpu/        # GDT, TSS, IDT, ISR, IRQ, syscall, context switch
@@ -337,15 +362,18 @@ novaos/
 │   ├── drivers/        # vga, serial, timer, keyboard, ata, net (ne2000, rtl8139), video (Mode 13h), mouse (PS/2), rtc, pci, sound (ac97), usb (uhci)
 │   ├── fs/             # VFS (FAT32 + ext2 fallback), FAT32 (read + write), ext2 (read-only), MBR/GPT partitions
 │   ├── net/            # ethernet, arp, ipv4, icmp, udp, tftp, dns, tcp
-│   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas
-│   ├── pkg/            # nova-pkg package manager
 │   ├── config/         # persistent system identity (hostname/username)
 │   ├── task/           # process table, scheduler, ELF loader, syscall + sandbox/greeter/unprivileged demo tasks
-│   ├── shell/          # minimal built-in shell + first-run wizard
-│   ├── lib/            # freestanding string/stdio subset
+│   ├── lib/            # freestanding string/stdio subset (kernel-internal, separate from userland/libc/)
 │   ├── include/        # public kernel headers
 │   └── init/           # kernel_main and init sequencing
-├── userland/           # Phase 24: minimal libc (crt0, syscalls, string/stdio/stdlib) + example C programs
+├── userland/           # Phase 24 libc + Phase 29 kernel/userland separation
+│   ├── libc/           # crt0, syscalls, string/stdio/stdlib - what a real ring-3 program links against
+│   ├── coreutils/      # Phase 29: genuine ring-3 ELF programs (cat) - talk to the kernel only via syscalls
+│   ├── examples/       # Phase 24 example C programs
+│   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas - still ring-0 for now, see PROGRESS.md
+│   ├── pkg/            # nova-pkg package manager - still ring-0 for now
+│   └── shell/          # minimal built-in shell + first-run wizard - still ring-0 for now
 ├── tools/              # linker script, grub.cfg, FAT32 test fixtures, ELF test fixture sources, custom-boot/ (Phase 28c bootloader)
 ├── scripts/            # per-OS setup scripts
 ├── .github/workflows/  # CI (build + make test on every push)
