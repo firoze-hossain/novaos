@@ -22,6 +22,9 @@
 #include "../../drivers/vga/vga.h"
 #include "../../fs/vfs.h"
 #include "../../drivers/keyboard/keyboard.h"
+#include "../../drivers/rtc/rtc.h"
+#include "../../drivers/pci/pci.h"
+#include "../../drivers/sound/ac97.h"
 #include "../../net/udp.h"
 #include "../../task/process.h"
 #include "../../task/scheduler.h"
@@ -240,6 +243,64 @@ static void handle_list_files(registers_t* regs) {
     regs->eax = (uint32_t)list_files_staging_len;
 }
 
+/* Phase 31: restores shell command parity after Phase 30's ring-3
+ * conversion, one syscall at a time. Each of these three reads
+ * already-safe-to-call kernel state with no capability gate needed -
+ * the same "no gate needed" reasoning SYS_WRITE/SYS_YIELD/SYS_SBRK
+ * already use. */
+
+static void handle_rtc_read(registers_t* regs) {
+    rtc_time_t* out = (rtc_time_t*)regs->ebx;
+    rtc_read(out);
+    regs->eax = 0;
+}
+
+/* Same staging-accumulator pattern as list_files_callback() above,
+ * for pci_enumerate()'s callback interface instead of
+ * vfs_list_files()'s. */
+static char lspci_staging[2048];
+static int lspci_staging_len;
+
+static void lspci_callback(const pci_device_t* dev) {
+    int remaining = (int)sizeof(lspci_staging) - lspci_staging_len;
+    if (remaining <= 0) {
+        return;
+    }
+    int written = snprintf(
+        lspci_staging + lspci_staging_len, (size_t)remaining,
+        "%d:%d.%d %x:%x %s\n", dev->bus, dev->device, dev->function,
+        dev->vendor_id, dev->device_id,
+        pci_class_name(dev->class_code, dev->subclass));
+    if (written > 0) {
+        lspci_staging_len += written;
+    }
+}
+
+static void handle_lspci(registers_t* regs) {
+    char* buf = (char*)regs->ebx;
+    int buf_size = (int)regs->ecx;
+
+    lspci_staging_len = 0;
+    pci_enumerate(lspci_callback);
+
+    if (lspci_staging_len >= buf_size) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    memcpy(buf, lspci_staging, (size_t)lspci_staging_len);
+    regs->eax = (uint32_t)lspci_staging_len;
+}
+
+static void handle_beep(registers_t* regs) {
+    if (!ac97_is_present()) {
+        regs->eax = 0;
+        return;
+    }
+    ac97_beep();
+    regs->eax = 1;
+}
+
 /* Phase 14's SYS_NET_SEND: the same capability-gate-then-act pattern
  * as handle_open() above, just for a network destination instead of a
  * filename. Uses a fixed source port for this demo syscall rather
@@ -403,6 +464,18 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_LIST_FILES:
             handle_list_files(regs);
+            break;
+
+        case SYS_RTC_READ:
+            handle_rtc_read(regs);
+            break;
+
+        case SYS_LSPCI:
+            handle_lspci(regs);
+            break;
+
+        case SYS_BEEP:
+            handle_beep(regs);
             break;
 
         default:

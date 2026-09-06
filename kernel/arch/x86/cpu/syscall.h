@@ -111,6 +111,29 @@
  * SYS_OPEN's existing capability check, unaffected by this). */
 #define SYS_LIST_FILES 14
 
+/* Phase 31: restoring shell command parity after Phase 30's ring-3
+ * conversion. Each of these reads existing, already-safe-to-call
+ * kernel state - no new capability gate needed, the same "no gate
+ * needed" reasoning SYS_WRITE/SYS_YIELD/SYS_SBRK already use. */
+
+/* EBX = buffer (6 bytes: year_lo, year_hi, month, day, hour, minute,
+ * second - 7 bytes total, matching rtc_time_t's layout exactly so the
+ * caller can just memcpy it onto a local rtc_time_t). Always
+ * succeeds (the RTC itself has no failure mode this kernel detects). */
+#define SYS_RTC_READ 15
+
+/* EBX = buffer, ECX = buffer size. Fills the buffer with a newline-
+ * separated PCI device listing ("BUS:DEV.FN VENDOR:DEVICE CLASS\n"
+ * per entry, matching the existing `lspci` kernel-side formatting)
+ * and returns the number of bytes written, or -1 if the buffer was
+ * too small. */
+#define SYS_LSPCI 16
+
+/* No arguments. Plays the same short tone the kernel's own `beep`
+ * self-test does. Returns 1 if AC97 hardware was found and the beep
+ * was issued, 0 if no AC97 device is present. */
+#define SYS_BEEP 17
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

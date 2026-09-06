@@ -92,17 +92,19 @@ static int tokenize(char* line, char* tokens[MAX_TOKENS]) {
 }
 
 static void cmd_help(void) {
-    printf("NovaOS ring-3 shell (Phase 30) - available commands:\n");
+    printf("NovaOS ring-3 shell (Phase 30/31) - available commands:\n");
     printf("  ls              - list files in the root directory\n");
     printf("  cat FILE        - print a file's contents\n");
     printf("  run FILE [args] - load and run a real ELF executable\n");
     printf("  echo TEXT       - print TEXT\n");
     printf("  clear           - clear the screen\n");
+    printf("  date            - show the current date/time\n");
+    printf("  lspci           - list PCI devices\n");
+    printf("  beep            - play a short tone through AC97 audio\n");
     printf("  help            - show this message\n");
     printf("\n");
-    printf("Not yet available here (need new syscalls not built in\n");
-    printf("this phase): ping, nslookup, tftp, pkg, store, beep, date,\n");
-    printf("lspci. See PROGRESS.md.\n");
+    printf("Not yet available here (need new syscalls not built yet):\n");
+    printf("ping, nslookup, tftp, pkg, store. See PROGRESS.md.\n");
 }
 
 static void cmd_ls(void) {
@@ -169,6 +171,34 @@ static void cmd_clear(void) {
     }
 }
 
+/* Phase 31: restores date/lspci/beep command parity with the original
+ * ring-0 shell, via three new syscalls (SYS_RTC_READ/SYS_LSPCI/
+ * SYS_BEEP) added specifically for this. */
+
+static void cmd_date(void) {
+    nova_rtc_time_t t;
+    sys_rtc_read(&t);
+    printf("%d-%d-%d %d:%d:%d\n", t.year, t.month, t.day, t.hour,
+           t.minute, t.second);
+}
+
+static void cmd_lspci(void) {
+    static char buf[2048];
+    int n = sys_lspci(buf, sizeof(buf) - 1);
+    if (n < 0) {
+        printf("lspci: listing too large for the buffer\n");
+        return;
+    }
+    buf[n] = '\0';
+    sys_write(buf);
+}
+
+static void cmd_beep(void) {
+    if (!sys_beep()) {
+        printf("beep: no AC97 audio device detected\n");
+    }
+}
+
 int main(int argc, char** argv, char** envp) {
     (void)argc;
     (void)argv;
@@ -200,6 +230,12 @@ int main(int argc, char** argv, char** envp) {
             cmd_echo(argc2, tokens);
         } else if (strcmp(tokens[0], "clear") == 0) {
             cmd_clear();
+        } else if (strcmp(tokens[0], "date") == 0) {
+            cmd_date();
+        } else if (strcmp(tokens[0], "lspci") == 0) {
+            cmd_lspci();
+        } else if (strcmp(tokens[0], "beep") == 0) {
+            cmd_beep();
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

@@ -358,10 +358,41 @@ a VM.
   `sendkey` routing to a USB keyboard instead of PS/2 when both are
   attached) - each found through the same systematic debugging
   discipline used throughout this project
-- **Honestly scoped**: `ping`/`pkg`/the GUI/`beep`/`date`/`lspci`
-  aren't in the ring-3 shell yet - each needs its own new syscall
-  surface not built in this pass. See PROGRESS.md for the full,
-  honest limitations list
+- **Honestly scoped**: `ping`/`pkg`/the GUI aren't in the ring-3 shell
+  yet - each needs its own new syscall surface not built in this pass
+  (`date`/`lspci`/`beep` were added next, in Phase 31). See
+  PROGRESS.md for the full, honest limitations list
+
+**Interim fix - USB busy-wait timing**
+- A real `make test` failure reported on a real machine (not this
+  project's usual sandboxed testing environment): the boot log
+  stopped right after `AC97 beep: playing...`, with none of the later
+  self-tests ever appearing before the timeout
+- Root cause: `usb_uhci_init()`'s port-reset delays used raw
+  instruction-count busy-wait loops instead of this kernel's own
+  timer-based delay - wall-clock duration for a raw instruction count
+  varies unpredictably with host CPU speed, so the exact same code
+  that finishes fine on one machine can push boot time past
+  `TEST_TIMEOUT` on a slower one
+- Fixed by using `timer_sleep_ms()` (the same mechanism every other
+  timeout in this kernel already relies on) instead; also increased
+  `TEST_TIMEOUT` from 15s to 25s as a defensive margin given how much
+  the self-test suite has grown across 30 phases
+
+**Phase 31 - Restoring Shell Command Parity (date/lspci/beep)**
+- The first concrete step restoring the ring-3 shell's command set:
+  three new syscalls (`SYS_RTC_READ`, `SYS_LSPCI`, `SYS_BEEP`) for
+  the simplest, lowest-risk commands - reading existing kernel state,
+  no new capability model needed (unlike `ping`'s request/reply
+  timeout semantics or `pkg`'s install/remove state, both deliberately
+  left as harder, separate follow-up work)
+- Verified through real interactive testing: `date`, `lspci`, and
+  `beep` all confirmed working, including a screendump specifically
+  taken to resolve an apparent discrepancy in the debug log (traced
+  to a cosmetic 256-byte limit in the kernel's own debug-logging
+  helper, unrelated to the actual `SYS_WRITE`/`SYS_LSPCI`
+  functionality, which was confirmed complete and correct on the real
+  screen)
 
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.

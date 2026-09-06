@@ -4,6 +4,7 @@
 #include "uhci.h"
 #include "../pci/pci.h"
 #include "../../arch/x86/io.h"
+#include "../timer/timer.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
 
@@ -296,21 +297,23 @@ static void enumerate_port(int port_index, uint16_t portsc_reg) {
      * at the default address (0) afterward, the standard USB
      * attach sequence. */
     outw((uint16_t)(io_base + portsc_reg), status | PORTSC_RESET);
-    for (volatile int i = 0; i < 500000; i++) { } /* ~50ms, USB spec's
-                                                       minimum reset
-                                                       duration, done
-                                                       as a busy-wait
-                                                       since this
-                                                       kernel's
-                                                       timer_sleep_ms()
-                                                       isn't reachable
-                                                       from this early
-                                                       in boot without
-                                                       a new dependency */
+    /* USB spec's minimum reset duration (~50ms). Uses timer_sleep_ms()
+     * (PIT-tick-based, the same mechanism every other timeout in this
+     * kernel relies on) rather than a raw instruction-count busy-wait
+     * loop - an earlier version of this code used the latter under
+     * the mistaken assumption that the timer wasn't available this
+     * early in boot; it is (timer_init() runs well before
+     * usb_uhci_init() - confirmed by boot log ordering), and a raw
+     * instruction count's actual wall-clock duration varies
+     * unpredictably with host CPU speed/virtualization overhead,
+     * which could push boot time past make test's TEST_TIMEOUT on a
+     * slower or more heavily virtualized host even though the exact
+     * same code reliably finishes in time on a faster one. */
+    timer_sleep_ms(50);
     status = inw((uint16_t)(io_base + portsc_reg));
     outw((uint16_t)(io_base + portsc_reg),
          (uint16_t)(status & ~PORTSC_RESET));
-    for (volatile int i = 0; i < 100000; i++) { }
+    timer_sleep_ms(10);
 
     status = inw((uint16_t)(io_base + portsc_reg));
     if (!(status & PORTSC_ENABLE)) {
@@ -340,9 +343,9 @@ static void enumerate_port(int port_index, uint16_t portsc_reg) {
         kernel_log("[WARN] USB port %d: SET_ADDRESS failed\n", port_index);
         return;
     }
-    for (volatile int i = 0; i < 20000; i++) { } /* let the device
-                                                     settle into its
-                                                     new address */
+    /* USB spec recommends >=2ms after SET_ADDRESS before the device
+     * responds at its new address - 10ms for a safe margin. */
+    timer_sleep_ms(10);
 
     /* Full GET_DESCRIPTOR at the real address, now that the actual
      * max packet size (desc.max_packet_size0) is known. */
@@ -385,7 +388,7 @@ void usb_uhci_init(void) {
     /* Global reset, then a short wait, then clear it - the standard
      * UHCI controller reset sequence. */
     outw((uint16_t)(io_base + REG_USBCMD), USBCMD_GRESET);
-    for (volatile int i = 0; i < 100000; i++) { }
+    timer_sleep_ms(10);
     outw((uint16_t)(io_base + REG_USBCMD), 0x0000);
 
     outw((uint16_t)(io_base + REG_USBCMD), USBCMD_HCRESET);

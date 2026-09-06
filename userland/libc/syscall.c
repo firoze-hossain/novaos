@@ -96,3 +96,27 @@ int sys_list_files(char* buf, int buf_size) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_rtc_read(nova_rtc_time_t* out) {
+    int result = SYS_RTC_READ;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(out)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_lspci(char* buf, int buf_size) {
+    int result = SYS_LSPCI;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(buf), "c"(buf_size)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_beep(void) {
+    int result = SYS_BEEP;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}

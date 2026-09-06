@@ -40,6 +40,8 @@ in the same PR as the code it describes.
 | P28c - A Real, From-Scratch Bootloader | Complete (scoped - see below) |
 | P29 - Kernel/Userland Architectural Separation | Complete (scoped - see below) |
 | P30 - Genuine Ring-3 Shell (Kernel Independence, Completed) | Complete (scoped - see below) |
+| Interim fix - USB busy-wait timing | Complete - see below |
+| P31 - Restoring Shell Command Parity (date/lspci/beep) | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -3092,11 +3094,133 @@ disturb anything else running underneath the shell.
 ## Phase 31 and beyond
 
 Not started. Candidates: virtio-net/virtio-blk (the next unclaimed
-item from the original gap-analysis roadmap), the remaining shell
-syscalls (network, pkg, GUI launch, sound, RTC, PCI) to restore full
-command parity with the old ring-0 shell, HID keyboard reports, USB
-hubs/bulk transfers, extending capability-based access control
-further, true lowercase font forms, TCP retransmission/windowing, a
-sockets-style syscall API for TCP, and a genuinely unified boot+data
-disk image. Each would benefit from being scoped on its own terms
-rather than assumed as "next."
+## Interim fix - USB busy-wait timing
+
+**Status: Complete.** A real `make test` failure was reported on a
+real machine (not this project's usual sandboxed testing
+environment): the boot log stopped right after `AC97 beep:
+playing...`, with none of the later self-tests (the ring-3 shell,
+`demo-a`/`demo-b`, `sandbox`, `fork()`) ever appearing before the
+15-second `TEST_TIMEOUT` killed the QEMU process.
+
+### Root cause
+
+`usb_uhci_init()`'s port-reset and controller-reset delays
+(Phase 28b) used raw instruction-count busy-wait loops
+(`for (volatile int i = 0; i < 500000; i++) { }`) instead of this
+kernel's own `timer_sleep_ms()` (PIT-tick-based, the same mechanism
+every other timeout in this kernel relies on). A raw instruction
+count's actual wall-clock duration varies unpredictably with host CPU
+speed and virtualization overhead - the exact same code that reliably
+finishes in time on one machine can take substantially longer on a
+slower or more heavily virtualized host, pushing total boot time past
+`TEST_TIMEOUT` even though nothing about the feature itself is
+broken. The original busy-wait loops were written under a stated but
+untested assumption that `timer_sleep_ms()` "isn't reachable from
+this early in boot" - checking the actual boot log ordering (`PIT
+timer initialized` appears well before `UHCI controller`) showed this
+assumption was simply wrong.
+
+### Fix
+
+Replaced all four busy-wait loops in `kernel/drivers/usb/uhci.c` with
+`timer_sleep_ms()` calls at the same intended durations. Also
+increased `TEST_TIMEOUT` from 15s to 25s as a defensive safety
+margin, since the cumulative self-test suite has grown substantially
+across 30 phases.
+
+### Verified
+
+Full self-test suite (network, USB, ext2, the ring-3 shell, `fork()`,
+everything) now completes in ~8s in this project's own testing
+environment - comfortably within even the original 15s timeout, let
+alone the new 25s one. Both `make test` (GRUB boot) and `make
+test-custom-boot` (the real bootloader) re-verified passing on a
+completely fresh clone.
+
+## Phase 31 - Restoring Shell Command Parity (date/lspci/beep)
+
+**Status: Complete (scoped).** The first concrete step toward
+restoring the ring-3 shell's (Phase 30) command set to match the
+original ring-0 shell's, one syscall at a time - starting with the
+three simplest, lowest-risk additions: reading existing kernel state
+with no new capability model needed, unlike networking (`ping`,
+needing real request/reply timeout semantics through a syscall
+boundary) or package management (`pkg`, needing careful install/
+remove state design), which remain open, harder follow-ups rather
+than rushed into this same pass.
+
+### What was built
+
+- **`SYS_RTC_READ`** - writes the kernel's own `rtc_time_t` struct
+  directly into the caller's buffer. The userland libc redeclares the
+  identical struct layout (`nova_rtc_time_t`) rather than sharing a
+  header, the same "kept as a separate copy since userland is compiled
+  completely separately" reasoning every other libc/kernel header
+  duplication in this tree already follows.
+- **`SYS_LSPCI`** - the same callback-to-staging-buffer bridge
+  `SYS_LIST_FILES` (Phase 30) established, applied to
+  `pci_enumerate()`'s callback interface instead of
+  `vfs_list_files()`'s.
+- **`SYS_BEEP`** - the simplest of the three: no arguments, calls the
+  existing `ac97_beep()` directly, returns whether AC97 hardware was
+  even present.
+- **`date`/`lspci`/`beep`** added to `userland/ring3-shell/shell.c`,
+  using the three new syscalls plus the existing libc `printf`.
+
+### Verified behavior
+
+Real interactive testing (typed commands via QEMU monitor keystrokes,
+not automated self-tests):
+```
+> date
+2026-9-6 13:38:16
+> lspci
+0:0.0 8086:1237 Host bridge
+0:1.0 8086:7000 ISA bridge
+0:1.1 8086:7010 IDE controller
+0:1.3 8086:7113 Bridge device
+0:2.0 1234:1111 Display controller
+0:3.0 10EC:8139 Ethernet controller
+0:4.0 8086:2415 Multimedia audio controller
+> beep
+```
+A screendump was taken specifically to resolve an apparent
+discrepancy: the boot log's own `[SYSCALL] SYS_WRITE ...` debug line
+for the `lspci` output looked truncated mid-word. Investigated rather
+than assumed either "it's fine" or "it's broken": traced to
+`kernel_log()`'s own internal 256-byte formatting buffer (used only
+for that debug log line, unrelated to the actual `vga_puts()` call
+that renders to the real screen) - the screendump confirmed the real,
+user-facing output was complete and correct the whole time. A logging
+convenience function's cosmetic limit, not a functional bug in the
+new syscall.
+
+Full `make test` and `make test-custom-boot` both re-verified passing
+with zero regressions after these additions.
+
+### Known limitations / follow-ups
+
+- **`ping`/`nslookup`/`tftp`, `pkg`, and `store` (the GUI) are still
+  not available in the ring-3 shell** - each needs meaningfully more
+  design work than this phase's three additions (real request/reply
+  timeout semantics through a syscall boundary for networking;
+  install/remove state management for packages; some way to launch a
+  still-ring-0 GUI from a ring-3 caller). Tracked as real, harder
+  follow-up work, not attempted here.
+- **`kernel_log()`'s 256-byte debug-formatting buffer** truncates its
+  own logged representation of any sufficiently long `SYS_WRITE` call
+  - cosmetic only (the actual `vga_puts()` output is unaffected), but
+  worth fixing eventually so this project's own debug logs stay
+  reliable for future troubleshooting.
+
+## Phase 32 and beyond
+
+Not started. Candidates: the remaining shell syscalls (`ping`, `pkg`,
+launching the GUI) to fully restore command parity, virtio-net/
+virtio-blk (the next unclaimed item from the original gap-analysis
+roadmap), HID keyboard reports, USB hubs/bulk transfers, extending
+capability-based access control further, true lowercase font forms,
+TCP retransmission/windowing, a sockets-style syscall API for TCP,
+and a genuinely unified boot+data disk image. Each would benefit from
+being scoped on its own terms rather than assumed as "next."
