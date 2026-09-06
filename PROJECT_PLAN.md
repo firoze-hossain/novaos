@@ -143,7 +143,9 @@ at the end. Concretely, in the order it gets built:
 | **P28b** | UHCI USB controller + device enumeration | Complete (scoped - see PROGRESS.md; also fixed a real missing-volatile bug in the DMA transfer descriptors) |
 | **P28c** | A real, from-scratch bootloader | Complete (scoped - see PROGRESS.md; purely additive, parallel to the existing GRUB boot path) |
 | **P29** | Kernel/userland architectural separation + first genuine ring-3 coreutils program | Complete (scoped - see PROGRESS.md; shell/gui/pkg reorganized but still ring-0, cat is genuinely ring-3) |
-| **P30** | Genuine ring-3 shell - NovaOS now boots into a real ELF program, not a kernel task | Complete (scoped - see PROGRESS.md; ls/cat/run/echo/help/clear only - networking/pkg/GUI/sound/RTC/PCI commands need their own new syscalls, not yet built) |
+| **P30** | Genuine ring-3 shell - NovaOS now boots into a real ELF program, not a kernel task | Complete (scoped - see PROGRESS.md; ls/cat/run/echo/help/clear only at the time - see P31) |
+| **Fix** | USB busy-wait timing - real `make test` failure on a real machine, fixed with timer-based delays | Complete - see PROGRESS.md |
+| **P31** | Restoring shell command parity: date/lspci/beep via 3 new syscalls | Complete (scoped - see PROGRESS.md; ping/pkg/GUI still need their own, harder syscall work) |
 
 **All three items from the "bootloader, TCP, USB" request are now
 complete** (P28a-c). Each was tackled sequentially with full

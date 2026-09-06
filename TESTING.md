@@ -348,18 +348,32 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
-## The genuine ring-3 shell (Phase 30)
+## The genuine ring-3 shell (Phase 30-31)
 
 NovaOS now boots directly into `userland/ring3-shell/shell.c` - a
 real, separately-compiled ELF32 program, not a kernel task. Try `help`,
-`ls`, `cat HELLO.TXT`, `echo hello`, `run HELLO.ELF one two`.
+`ls`, `cat HELLO.TXT`, `echo hello`, `run HELLO.ELF one two`, `date`,
+`lspci`, `beep`.
 
-**Not yet available in this shell** (need their own new syscalls, not
-built yet): `ping`, `nslookup`, `tftp`, `pkg`, `store`, `beep`, `date`,
-`lspci`. These commands still exist in `userland/shell/shell.c` (the
-original, Phase 3-era ring-0 shell, kept in the tree but no longer
-launched at boot) as a reference for what a future syscall surface
-would need to cover.
+**Not yet available in this shell** (each needs meaningfully more
+design work than a simple state-read syscall - real request/reply
+timeout semantics for networking, install/remove state for packages,
+some way to launch a still-ring-0 GUI from ring-3): `ping`,
+`nslookup`, `tftp`, `pkg`, `store`. These commands still exist in
+`userland/shell/shell.c` (the original, Phase 3-era ring-0 shell,
+kept in the tree but no longer launched at boot) as a reference for
+what a future syscall surface would need to cover.
+
+**A note on `TEST_TIMEOUT`**: an earlier version of this project's USB
+driver used raw instruction-count busy-wait loops for port-reset
+delays, whose actual duration varies with host CPU speed - on a
+slower or more heavily virtualized machine, this could push total
+boot time past the test timeout even with nothing actually broken.
+Fixed by switching to `timer_sleep_ms()`; `TEST_TIMEOUT` was also
+raised from 15s to 25s as a defensive margin. If you ever see `make
+test` fail with the boot log stopping partway through hardware
+initialization, check whether a similar raw busy-wait has crept back
+in before assuming a functional regression.
 
 **A real gotcha when testing interactively**: if you attach a USB
 keyboard (`-device usb-kbd`) *and* rely on QEMU's monitor `sendkey`

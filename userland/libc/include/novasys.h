@@ -24,6 +24,22 @@
 #define SYS_FORK     12
 #define SYS_READ_KEY 13
 #define SYS_LIST_FILES 14
+#define SYS_RTC_READ 15
+#define SYS_LSPCI 16
+#define SYS_BEEP 17
+
+/* Matches kernel/drivers/rtc/rtc.h's rtc_time_t exactly (same target,
+ * same simple POD layout, no padding either side needs to worry
+ * about) - SYS_RTC_READ writes the kernel's own struct directly into
+ * whatever buffer this points at. */
+typedef struct {
+    unsigned short year;
+    unsigned char month;
+    unsigned char day;
+    unsigned char hour;
+    unsigned char minute;
+    unsigned char second;
+} nova_rtc_time_t;
 
 int sys_write(const char* str);
 void sys_exit(int code) __attribute__((noreturn));
@@ -38,5 +54,8 @@ void* sys_sbrk(int increment);
 int sys_fork(void);
 int sys_read_key(void);
 int sys_list_files(char* buf, int buf_size);
+int sys_rtc_read(nova_rtc_time_t* out);
+int sys_lspci(char* buf, int buf_size);
+int sys_beep(void);
 
 #endif

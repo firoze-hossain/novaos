@@ -193,7 +193,7 @@ debug: $(ISO_FILE) $(DISK_IMG)
 # serial log, and fails (non-zero exit) if the expected subsystem
 # init markers are missing. This is what scripts/test.sh and CI use,
 # and it works identically on Linux, macOS, and Windows/WSL2.
-TEST_TIMEOUT ?= 15
+TEST_TIMEOUT ?= 25
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)
