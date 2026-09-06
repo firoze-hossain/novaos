@@ -89,6 +89,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->allowed_file_count = 0;
     p->allowed_host_count = 0;
     p->can_spawn = false;
+    p->can_open_any_file = false;
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
@@ -172,6 +173,7 @@ static process_t* create_user_task_common(const char* name,
     p->allowed_file_count = 0; /* least privilege by default */
     p->allowed_host_count = 0;
     p->can_spawn = false;
+    p->can_open_any_file = false;
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
@@ -215,6 +217,9 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
     p->allowed_host_count = host_count;
 
     p->can_spawn = can_spawn;
+    p->can_open_any_file = false; /* sandboxed tasks only ever use the
+                                      fixed allowed_files[] list, never
+                                      this broader grant */
 
     scheduler_add(p);
     return p->pid;
@@ -411,7 +416,7 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
 
 static int process_exec_internal(const char* path, const char** argv,
                                   int argc, const char** filenames,
-                                  int file_count) {
+                                  int file_count, bool grant_any_file) {
     if (argc > MAX_EXEC_ARGS) {
         argc = MAX_EXEC_ARGS;
     }
@@ -550,8 +555,13 @@ static int process_exec_internal(const char* path, const char** argv,
         }
         p->allowed_file_count = file_count;
     }
+    p->can_open_any_file = grant_any_file;
     p->allowed_host_count = 0;
-    p->can_spawn = false;
+    /* A trusted, general-purpose shell needs both broad file access
+     * and the ability to run programs - the same single grant_any_file
+     * flag covers both, since they're both part of the same "this is
+     * the shell, not a sandboxed program" trust decision. */
+    p->can_spawn = grant_any_file;
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
@@ -564,7 +574,7 @@ static int process_exec_internal(const char* path, const char** argv,
 }
 
 int process_exec(const char* path, const char** argv, int argc) {
-    return process_exec_internal(path, argv, argc, NULL, 0);
+    return process_exec_internal(path, argv, argc, NULL, 0, false);
 }
 
 /* Phase 29: for trusted (ring-0) callers only - lets a caller grant
@@ -584,7 +594,20 @@ int process_exec(const char* path, const char** argv, int argc) {
  * extending it). */
 int process_exec_with_files(const char* path, const char** argv, int argc,
                              const char** filenames, int file_count) {
-    return process_exec_internal(path, argv, argc, filenames, file_count);
+    return process_exec_internal(path, argv, argc, filenames, file_count,
+                                  false);
+}
+
+/* Phase 30: exec's a process with broad, "may open any file" access
+ * (see can_open_any_file's comment in process.h) - reserved for the
+ * one genuinely trusted, general-purpose program that needs it: the
+ * interactive shell itself, which has to open whatever file the user
+ * names at a prompt, not a small set known in advance. Not exposed to
+ * ring-3 SYS_EXEC, and not something an ordinary exec'd program (like
+ * userland/coreutils/cat.c) receives even indirectly - only the
+ * kernel's own boot sequence calls this, for the shell specifically. */
+int process_exec_as_shell(const char* path, const char** argv, int argc) {
+    return process_exec_internal(path, argv, argc, NULL, 0, true);
 }
 
 int process_wait(int pid) {
@@ -725,6 +748,7 @@ int process_fork(registers_t* parent_regs) {
     memcpy(child->allowed_hosts, parent->allowed_hosts,
            sizeof(parent->allowed_hosts));
     child->can_spawn = parent->can_spawn;
+    child->can_open_any_file = parent->can_open_any_file;
     child->heap_current = parent->heap_current;
     child->heap_mapped_end = parent->heap_mapped_end;
 

@@ -514,7 +514,19 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     process_init();
     process_create_kernel_task("idle", idle_task_entry);
-    process_create_kernel_task("shell", shell_run);
+    /* Phase 30: NovaOS now boots into a genuine ring-3 shell
+     * (SHELL.ELF, userland/ring3-shell/shell.c) via
+     * process_exec_as_shell() instead of running a shell as a
+     * ring-0 kernel task (userland/shell/shell.c, Phase 29's
+     * organizationally-separated but still-ring-0 shell, kept in the
+     * tree but no longer launched at boot). This is non-blocking
+     * (just creates and schedules the process, like every other
+     * process_create_*() call here) - safe to call directly from
+     * kernel_main() before scheduler_start(), unlike a call that
+     * would block on process_wait(). See PROGRESS.md for the honest
+     * scope note on which commands this shell doesn't have yet. */
+    const char* shell_argv[] = {"SHELL.ELF"};
+    process_exec_as_shell("SHELL.ELF", shell_argv, 1);
     process_create_kernel_task("coreutils-test", coreutils_test_task);
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);

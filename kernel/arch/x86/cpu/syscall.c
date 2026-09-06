@@ -21,11 +21,13 @@
 #include "gdt.h"
 #include "../../drivers/vga/vga.h"
 #include "../../fs/vfs.h"
+#include "../../drivers/keyboard/keyboard.h"
 #include "../../net/udp.h"
 #include "../../task/process.h"
 #include "../../task/scheduler.h"
 #include "../../task/greeter_task.h"
 #include "../../lib/string.h"
+#include "../../lib/stdio.h"
 #include "../../include/kernel.h"
 
 extern void isr128(void);
@@ -58,6 +60,9 @@ static int str_eq_ci(const char* a, const char* b) {
 }
 
 static bool process_has_capability(const process_t* p, const char* filename) {
+    if (p->can_open_any_file) {
+        return true; /* Phase 30 - see the field's comment in process.h */
+    }
     for (int i = 0; i < p->allowed_file_count; i++) {
         if (str_eq_ci(p->allowed_files[i], filename)) {
             return true;
@@ -172,6 +177,67 @@ static void handle_close(registers_t* regs) {
         open_files[handle].owner_pid == (p != NULL ? p->pid : -1)) {
         open_files[handle].in_use = false;
     }
+}
+
+static void handle_read_key(registers_t* regs) {
+    if (keyboard_has_char()) {
+        /* Safe to call the "blocking" keyboard_get_char() here
+         * specifically because we just confirmed a character is
+         * already buffered - it will return immediately without ever
+         * reaching its internal hlt-wait loop, which would otherwise
+         * deadlock the kernel from inside an interrupts-disabled
+         * syscall handler. See SYS_READ_KEY's comment in syscall.h. */
+        regs->eax = (uint32_t)(int)keyboard_get_char();
+    } else {
+        regs->eax = (uint32_t)-1;
+    }
+}
+
+/* Phase 30: staging state for handle_list_files() below -
+ * vfs_list_files() is callback-based (kernel-internal style), but a
+ * syscall needs to fill a caller-provided buffer instead - this
+ * accumulates each entry into a static buffer the callback appends
+ * to, then the syscall handler copies the result out. Safe as plain
+ * (non-reentrant) static state: syscalls execute one at a time with
+ * interrupts disabled, so nothing else can be mid-listing
+ * concurrently. */
+static char list_files_staging[2048];
+static int list_files_staging_len;
+
+static void list_files_callback(const char* name, uint32_t size,
+                                 bool is_directory) {
+    (void)is_directory;
+    int remaining = (int)sizeof(list_files_staging) - list_files_staging_len;
+    if (remaining <= 0) {
+        return; /* buffer already full - drop any further entries
+                    rather than overflow */
+    }
+    int written = snprintf(list_files_staging + list_files_staging_len,
+                            (size_t)remaining, "%s %d\n", name, (int)size);
+    if (written > 0) {
+        list_files_staging_len += written;
+    }
+}
+
+static void handle_list_files(registers_t* regs) {
+    char* buf = (char*)regs->ebx;
+    int buf_size = (int)regs->ecx;
+
+    if (!vfs_is_mounted()) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    list_files_staging_len = 0;
+    vfs_list_files(list_files_callback);
+
+    if (list_files_staging_len >= buf_size) {
+        regs->eax = (uint32_t)-1; /* caller's buffer too small */
+        return;
+    }
+
+    memcpy(buf, list_files_staging, (size_t)list_files_staging_len);
+    regs->eax = (uint32_t)list_files_staging_len;
 }
 
 /* Phase 14's SYS_NET_SEND: the same capability-gate-then-act pattern
@@ -329,6 +395,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_FORK:
             handle_fork(regs);
+            break;
+
+        case SYS_READ_KEY:
+            handle_read_key(regs);
+            break;
+
+        case SYS_LIST_FILES:
+            handle_list_files(regs);
             break;
 
         default:

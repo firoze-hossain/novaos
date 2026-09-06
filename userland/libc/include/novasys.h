@@ -21,6 +21,9 @@
 #define SYS_EXEC     9
 #define SYS_WAIT     10
 #define SYS_SBRK     11
+#define SYS_FORK     12
+#define SYS_READ_KEY 13
+#define SYS_LIST_FILES 14
 
 int sys_write(const char* str);
 void sys_exit(int code) __attribute__((noreturn));
@@ -32,5 +35,8 @@ int sys_spawn(void);
 int sys_exec(const char* path, char** argv, int argc);
 int sys_wait(int pid);
 void* sys_sbrk(int increment);
+int sys_fork(void);
+int sys_read_key(void);
+int sys_list_files(char* buf, int buf_size);
 
 #endif

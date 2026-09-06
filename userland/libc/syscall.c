@@ -75,3 +75,24 @@ void* sys_sbrk(int increment) {
                        : "memory", "cc");
     return (void*)result;
 }
+
+int sys_fork(void) {
+    int result = SYS_FORK;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
+int sys_read_key(void) {
+    int result = SYS_READ_KEY;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
+int sys_list_files(char* buf, int buf_size) {
+    int result = SYS_LIST_FILES;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(buf), "c"(buf_size)
+                       : "memory", "cc");
+    return result;
+}
