@@ -34,6 +34,7 @@
 #include "../../include/kernel.h"
 #include "../../drivers/video/vga_graphics.h"
 #include "../../drivers/mouse/ps2mouse.h"
+#include "../../net/icmp.h"
 
 extern void isr128(void);
 
@@ -372,6 +373,16 @@ static void handle_mouse_read(registers_t* regs) {
     regs->eax = 1;
 }
 
+static void handle_ping_start(registers_t* regs) {
+    uint32_t dest_ip = regs->ebx;
+    icmp_ping_start(dest_ip);
+}
+
+static void handle_ping_poll(registers_t* regs) {
+    uint32_t* out_rtt = (uint32_t*)regs->ebx;
+    regs->eax = (uint32_t)icmp_ping_poll(out_rtt);
+}
+
 /* Phase 14's SYS_NET_SEND: the same capability-gate-then-act pattern
  * as handle_open() above, just for a network destination instead of a
  * filename. Uses a fixed source port for this demo syscall rather
@@ -575,6 +586,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_MOUSE_READ:
             handle_mouse_read(regs);
+            break;
+
+        case SYS_PING_START:
+            handle_ping_start(regs);
+            break;
+
+        case SYS_PING_POLL:
+            handle_ping_poll(regs);
             break;
 
         default:

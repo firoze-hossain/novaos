@@ -189,6 +189,35 @@
  * the former case. */
 #define SYS_MOUSE_READ 24
 
+/* Phase 33: real ping, done safely from ring-3. Deliberately split
+ * into two non-blocking syscalls rather than one that waits - a
+ * syscall handler runs with interrupts disabled for its whole
+ * duration (see syscall_stub.asm), and icmp_ping()'s own ~3-second
+ * wait depends on two different hardware IRQs (the NIC's, for a
+ * reply to ever be seen; the timer's, for its own deadline check to
+ * advance at all) that could never fire during that window - turning
+ * a bounded 3-second network wait into an unbounded hang of the
+ * entire kernel, not just the calling process. The exact same class
+ * of mistake SYS_READ_KEY (Phase 30) was designed to avoid, applied
+ * here to networking instead of the keyboard. A ring-3 caller wanting
+ * to wait for the result loops SYS_PING_POLL with SYS_YIELD between
+ * calls, the same pattern every other blocking wait in this kernel
+ * already uses one level up. No capability gate: pinging a host isn't
+ * a read of anything sensitive, the same reasoning
+ * SYS_WRITE/SYS_LIST_FILES already use. */
+
+/* EBX = destination IPv4 address, as a big-endian-packed uint32_t
+ * (matching every other IP address this kernel already passes around
+ * - see ip_send()'s own parameter). Sends the Echo Request and
+ * returns immediately; no return value. */
+#define SYS_PING_START 25
+
+/* EBX = pointer to a uint32_t the RTT (in timer ticks) is written to
+ * if a reply has arrived. Returns 1 if the reply arrived (RTT
+ * filled in), 0 if still waiting and the ~3s deadline hasn't passed,
+ * -1 if the deadline passed with no reply. */
+#define SYS_PING_POLL 26
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

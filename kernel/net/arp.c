@@ -57,6 +57,14 @@ void arp_send_request(uint32_t ip) {
     eth_send(BROADCAST_MAC, ETHERTYPE_ARP, &pkt, sizeof(pkt));
 }
 
+bool arp_is_cached(uint32_t ip, uint8_t mac_out[6]) {
+    if (cache_valid && cache_ip == ip) {
+        memcpy(mac_out, cache_mac, 6);
+        return true;
+    }
+    return false;
+}
+
 bool arp_resolve(uint32_t ip, uint8_t mac_out[6]) {
     if (cache_valid && cache_ip == ip) {
         memcpy(mac_out, cache_mac, 6);
