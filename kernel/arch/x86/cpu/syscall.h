@@ -134,6 +134,61 @@
  * was issued, 0 if no AC97 device is present. */
 #define SYS_BEEP 17
 
+/* Phase 32: converting the package manager to ring-3 (a shell
+ * builtin, not a separate exec'd binary - see PROGRESS.md for why:
+ * exec'd programs start with zero capabilities by default (Phase
+ * 23), and there is no mechanism yet for the shell to delegate a
+ * subset of its own broad access to something it execs, so a
+ * genuinely separate pkg.elf couldn't actually read/write/delete
+ * anything). These two are gated by the same can_open_any_file
+ * capability SYS_OPEN already checks (Phase 30) - broadened in
+ * meaning from "may open any file" to "has broad, trusted file
+ * access", covering write and delete too, rather than adding a
+ * second, separate capability for what is, for the one process that
+ * has it (the shell), the same trust decision.
+ *
+ * EBX = filename, ECX = data pointer, EDX = size. Whole-file,
+ * atomic writes only (matching vfs_write_file()'s own semantics) -
+ * no partial/streamed writes. Returns 1 on success, -1 on failure
+ * (no capability, or the underlying filesystem write failed). */
+#define SYS_WRITE_FILE 18
+
+/* EBX = filename. Returns 1 on success, -1 on failure (no
+ * capability, or the file didn't exist / underlying delete failed). */
+#define SYS_DELETE_FILE 19
+
+/* Phase 32b: the foundational syscalls a ring-3 graphics program
+ * needs - graphics mode switching, drawing primitives, and mouse
+ * input. Deliberately scoped to a proof-of-concept ring-3 graphics
+ * demo in this pass, not a full port of the existing compositor's
+ * multi-window management or the Store's package-browsing UI - see
+ * PROGRESS.md for why that's a substantially larger undertaking left
+ * as honest follow-up work. No capability gate: entering graphics
+ * mode and drawing to it isn't a read of anything sensitive, the
+ * same reasoning SYS_WRITE/SYS_LIST_FILES already use. */
+
+#define SYS_GFX_ENTER 20 /* no args - enters VGA Mode 13h (320x200x256) */
+#define SYS_GFX_EXIT 21  /* no args - restores text mode and clears it */
+
+/* EBX = x, ECX = y, EDX = color index (0-255, VGA's default 256-
+ * color palette). */
+#define SYS_GFX_PUT_PIXEL 22
+
+/* EBX = pointer to a 5-int-wide {x, y, w, h, color} buffer - more
+ * fields than fit in three registers, so passed as a small buffer the
+ * kernel reads from rather than adding a fourth/fifth register
+ * argument convention just for this one syscall. */
+#define SYS_GFX_FILL_RECT 23
+
+/* EBX = pointer to a caller-provided buffer matching
+ * kernel/drivers/mouse/ps2mouse.h's mouse_state_t layout exactly
+ * (dx, dy as ints, then three bool button flags) - written directly,
+ * the same pattern SYS_RTC_READ already uses for rtc_time_t. Returns
+ * 1 if a PS/2 mouse was detected at boot, 0 otherwise (matching
+ * ps2mouse_is_present()) - the buffer is only meaningfully filled in
+ * the former case. */
+#define SYS_MOUSE_READ 24
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

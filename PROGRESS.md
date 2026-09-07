@@ -42,6 +42,8 @@ in the same PR as the code it describes.
 | P30 - Genuine Ring-3 Shell (Kernel Independence, Completed) | Complete (scoped - see below) |
 | Interim fix - USB busy-wait timing | Complete - see below |
 | P31 - Restoring Shell Command Parity (date/lspci/beep) | Complete (scoped - see below) |
+| P32a - Package Manager Converted to Ring-3 | Complete (scoped - see below) |
+| P32b - Foundational Ring-3 Graphics + a Real VGA Bug Fix | Complete (scoped - see below) |
 
 ## Phase 1 - Bootloader & Kernel Foundation
 
@@ -3216,8 +3218,184 @@ with zero regressions after these additions.
 
 ## Phase 32 and beyond
 
-Not started. Candidates: the remaining shell syscalls (`ping`, `pkg`,
-launching the GUI) to fully restore command parity, virtio-net/
+## Phase 32a - Package Manager Converted to Ring-3
+
+**Status: Complete (scoped).** `nova-pkg` converted from a ring-0
+kernel task (`userland/pkg/pkgmgr.c`) to real ring-3 logic living
+entirely in `userland/ring3-shell/shell.c` - `list`/`install`/`remove`
+reimplemented from scratch using only syscalls, with zero calls into
+any kernel-side pkg-specific code.
+
+### A deliberate design choice, not a shortcut
+
+This is a shell builtin, not a separate exec'd `pkg.elf`. Exec'd
+programs start with zero capabilities (Phase 23's design), and there
+is no mechanism yet for the shell to delegate a subset of its own
+broad access to something it execs - a genuinely separate `pkg.elf`
+couldn't actually read, write, or delete anything. Building that
+delegation mechanism properly (does the granting process need its own
+broader privilege? a capability-subset model?) is a real, separate
+design question, deliberately not rushed into this pass just to make
+`pkg` a standalone binary. The logic itself is still genuinely ring-3
+either way - it's the process boundary that differs from a "purer"
+Unix-philosophy version.
+
+### What was built
+
+Two new syscalls, gated by the same `can_open_any_file` capability
+`SYS_OPEN` already checks (broadened in meaning from "may open any
+file" to "has broad, trusted file access" - the same trust decision,
+for the one process that has it):
+- **`SYS_WRITE_FILE`** (EBX=filename, ECX=data, EDX=size) - whole-file,
+  atomic writes, matching `vfs_write_file()`'s own semantics.
+- **`SYS_DELETE_FILE`** (EBX=filename).
+
+`userland/ring3-shell/shell.c` redeclares `pkg_header_t` and
+`install_record_t` (as `nova_pkg_header_t`/`nova_install_record_t`)
+rather than sharing a header with `userland/pkg/pkgmgr.h`, the same
+pattern `nova_rtc_time_t` already established - verified byte-for-byte
+against a real fixture file (`tools/fixtures/EDITOR.PKG`) rather than
+assumed. Implements `find_pkg_files()` (parses `SYS_LIST_FILES`'s text
+output for `*.PKG` entries), `load_install_db()`/`save_install_db()`
+(`INSTALL.DB` read/write), and the three `pkg` subcommands.
+
+### Verified behavior
+
+Real interactive testing (typed commands via QEMU monitor keystrokes,
+screendumped for a definitive visual check), the complete lifecycle:
+```
+> pkg install Editor
+Installed 'Editor' -> EDITOR.APP
+> pkg list
+  Editor (1.0) - A tiny text editor (demo package) [installed]
+  Game (2.1) - A tiny game (demo package)
+> ls
+EDITOR.APP 62    INSTALL.DB 101
+> pkg remove Editor
+Removed 'Editor'
+> pkg list
+  Editor (1.0) - A tiny text editor (demo package)
+  Game (2.1) - A tiny game (demo package)
+```
+File sizes matched exactly (62 bytes = the package's own
+`payload_size`, 101 bytes = exactly one `install_record_t`). Full
+`make test` and `make test-custom-boot` both re-verified passing with
+zero regressions.
+
+### Known limitations
+
+No network fetch (matches the original ring-0 `pkgmgr.c`'s own
+documented limitation - NovaOS's network stack doesn't speak HTTP/FTP
+yet); no dependency resolution or versioning beyond each package's own
+manifest.
+
+## Phase 32b - Foundational Ring-3 Graphics + a Real VGA Bug Fix
+
+**Status: Complete (scoped).** Adds the syscall infrastructure a
+ring-3 graphics program needs, plus a genuine, verified-working
+proof-of-concept program using them. Deliberately scoped: **not** a
+port of the existing compositor's multi-window management or the
+Store's package-browsing UI (`userland/gui/compositor.c`, `store.c`
+remain ring-0) - a substantially larger undertaking left as honest
+follow-up work.
+
+### What was built
+
+Five new syscalls, none capability-gated (entering graphics mode and
+drawing to it isn't a read of anything sensitive, the same reasoning
+`SYS_WRITE`/`SYS_LIST_FILES` already use):
+- `SYS_GFX_ENTER` / `SYS_GFX_EXIT` - VGA Mode 13h (320x200x256) on/off.
+- `SYS_GFX_PUT_PIXEL` (EBX=x, ECX=y, EDX=color).
+- `SYS_GFX_FILL_RECT` (EBX=pointer to a 5-int `{x,y,w,h,color}` buffer
+  - more fields than fit in three registers).
+- `SYS_MOUSE_READ` (EBX=pointer to a buffer matching `mouse_state_t`'s
+  exact layout - verified with a standalone `-m32` sizeof/offsetof
+  check rather than assumed: 12 bytes, dx@0/dy@4/left@8/right@9/
+  middle@10).
+
+`userland/coreutils/gui.c` draws a small static scene (colored
+"window"-like rectangles via `fill_rect`, a diagonal line via
+`put_pixel`), polls the mouse once, waits for a keypress (the same
+`SYS_READ_KEY`+`SYS_YIELD` loop the shell's own input uses -
+deliberately not a raw busy-wait, the exact timing anti-pattern the
+Phase 31 USB fix corrected), then returns to text mode. Wired into
+the shell as a `gui` command.
+
+### A real bug found through more rigorous interactive testing than this project had previously done
+
+The first test showed graphics rendering perfectly during the demo,
+but the screen turned into unreadable vertical stripes immediately
+after returning to text mode - while the underlying system stayed
+100% functional throughout (confirmed via serial log: the shell kept
+processing typed commands correctly, just not rendering their output
+legibly). This is the kind of bug only a screendump taken specifically
+*after* a mode transition would catch - nothing in this project had
+tested that precise moment this rigorously before.
+
+**Root cause**: VGA Mode 13h uses Chain-4 addressing, where a linear
+framebuffer write at `0xA0000` touches all 4 memory planes at once -
+including Plane 2, where the text-mode character generator (font
+bitmap) lives. Drawing in graphics mode was silently destroying the
+font table text mode needed afterward.
+
+**Investigation, not guessing**: a first hypothesis (a missing VGA
+synchronous-reset step before reprogramming clock-related registers)
+was implemented, tested with a screendump, and found *not* to fix the
+symptom - a real, separate VGA best practice worth keeping regardless,
+but not the actual cause. The Plane 2 corruption hypothesis was tested
+next and confirmed. The fix itself then needed a second correction: the
+first attempt at saving/restoring Plane 2 left three registers
+(`SEQ4`/`GC5`/`GC6`) in their temporary "unchained, single-plane
+access" configuration instead of text mode's own values, since nothing
+reapplied text mode's full register set after the restore step -
+found by checking the *actual* screendump after each attempt rather
+than assuming the fix worked once it compiled.
+
+**Fixed** by saving Plane 2's contents before entering graphics mode
+and restoring them after leaving, via the standard VGA "unchain"
+technique (temporarily disabling Chain-4/Odd-Even addressing so Read
+Map Select / Map Mask can access one plane at a time, linearly) -
+deliberately not by reloading the actual font bitmap from scratch,
+which would need embedding and trusting a hand-transcribed 4KB
+reference table; this way, whatever the BIOS/VGA BIOS already loaded
+at boot is preserved byte-for-byte, regardless of its exact contents.
+
+### Verified behavior
+
+```
+> gui
+Entering graphics mode (VGA Mode 13h, 320x200)...
+[a small scene: two colored "window" rectangles with titlebars,
+ a red diagonal line of individual pixels - screendumped and
+ confirmed pixel-correct]
+[space pressed]
+Graphics demo complete. Mouse detected (last delta: dx=0 dy=0).
+> ls
+HELLO.TXT 68
+...
+GUI.ELF 14312
+>
+```
+Completely clean, readable text immediately after `gui` exits and
+after a subsequent `ls` - confirmed with screendumps at every stage of
+the fix, not just the final result. Full `make test` and `make
+test-custom-boot` both re-verified passing with zero regressions.
+
+### Known limitations
+
+A static, non-interactive proof-of-concept scene, not a full
+compositor - no window management, dragging, or Store-style package
+browsing in graphics mode. `SYS_GFX_FILL_RECT`'s buffer-based argument
+passing is a one-off pattern for this one syscall rather than a
+general multi-argument syscall convention (a real design question if
+more multi-argument graphics syscalls are added later).
+
+## Phase 33 and beyond
+
+Not started. Candidates: a full ring-3 compositor/Store port (now that
+the foundational graphics/mouse syscalls exist), the remaining shell
+syscalls (`ping`, launching the GUI as a persistent session rather
+than a one-shot demo) to further restore command parity, virtio-net/
 virtio-blk (the next unclaimed item from the original gap-analysis
 roadmap), HID keyboard reports, USB hubs/bulk transfers, extending
 capability-based access control further, true lowercase font forms,

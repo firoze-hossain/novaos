@@ -32,6 +32,8 @@
 #include "../../lib/string.h"
 #include "../../lib/stdio.h"
 #include "../../include/kernel.h"
+#include "../../drivers/video/vga_graphics.h"
+#include "../../drivers/mouse/ps2mouse.h"
 
 extern void isr128(void);
 
@@ -301,6 +303,75 @@ static void handle_beep(registers_t* regs) {
     regs->eax = 1;
 }
 
+static void handle_write_file(registers_t* regs) {
+    process_t* p = process_current();
+    const char* filename = (const char*)regs->ebx;
+    const void* data = (const void*)regs->ecx;
+    uint32_t size = regs->edx;
+
+    if (p == NULL || !p->can_open_any_file) {
+        kernel_log("[SECURITY] pid %d denied SYS_WRITE_FILE('%s') - "
+                   "no broad file access capability\n",
+                   p != NULL ? p->pid : -1, filename);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    regs->eax = vfs_write_file(filename, data, size) ? 1u : (uint32_t)-1;
+}
+
+static void handle_delete_file(registers_t* regs) {
+    process_t* p = process_current();
+    const char* filename = (const char*)regs->ebx;
+
+    if (p == NULL || !p->can_open_any_file) {
+        kernel_log("[SECURITY] pid %d denied SYS_DELETE_FILE('%s') - "
+                   "no broad file access capability\n",
+                   p != NULL ? p->pid : -1, filename);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    regs->eax = vfs_delete_file(filename) ? 1u : (uint32_t)-1;
+}
+
+static void handle_gfx_enter(registers_t* regs) {
+    (void)regs;
+    vga_graphics_enter();
+}
+
+static void handle_gfx_exit(registers_t* regs) {
+    (void)regs;
+    vga_graphics_exit();
+    vga_clear();
+}
+
+static void handle_gfx_put_pixel(registers_t* regs) {
+    int x = (int)regs->ebx;
+    int y = (int)regs->ecx;
+    uint8_t color = (uint8_t)regs->edx;
+    vga_put_pixel(x, y, color);
+}
+
+static void handle_gfx_fill_rect(registers_t* regs) {
+    /* {x, y, w, h, color} as five consecutive ints in the caller's
+     * buffer - see SYS_GFX_FILL_RECT's comment in syscall.h for why
+     * a buffer instead of more register arguments. */
+    int* params = (int*)regs->ebx;
+    vga_fill_rect(params[0], params[1], params[2], params[3],
+                  (uint8_t)params[4]);
+}
+
+static void handle_mouse_read(registers_t* regs) {
+    if (!ps2mouse_is_present()) {
+        regs->eax = 0;
+        return;
+    }
+    mouse_state_t* out = (mouse_state_t*)regs->ebx;
+    *out = ps2mouse_read();
+    regs->eax = 1;
+}
+
 /* Phase 14's SYS_NET_SEND: the same capability-gate-then-act pattern
  * as handle_open() above, just for a network destination instead of a
  * filename. Uses a fixed source port for this demo syscall rather
@@ -476,6 +547,34 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_BEEP:
             handle_beep(regs);
+            break;
+
+        case SYS_WRITE_FILE:
+            handle_write_file(regs);
+            break;
+
+        case SYS_DELETE_FILE:
+            handle_delete_file(regs);
+            break;
+
+        case SYS_GFX_ENTER:
+            handle_gfx_enter(regs);
+            break;
+
+        case SYS_GFX_EXIT:
+            handle_gfx_exit(regs);
+            break;
+
+        case SYS_GFX_PUT_PIXEL:
+            handle_gfx_put_pixel(regs);
+            break;
+
+        case SYS_GFX_FILL_RECT:
+            handle_gfx_fill_rect(regs);
+            break;
+
+        case SYS_MOUSE_READ:
+            handle_mouse_read(regs);
             break;
 
         default:

@@ -348,21 +348,31 @@ See `tools/build-disk-image.sh` for exactly how the partitioned image
 is built, and PROGRESS.md's Phase 25 entry for the full scope (ext2 is
 read-only, root-directory-only, direct+singly-indirect blocks only).
 
-## The genuine ring-3 shell (Phase 30-31)
+## The genuine ring-3 shell (Phase 30-32)
 
 NovaOS now boots directly into `userland/ring3-shell/shell.c` - a
 real, separately-compiled ELF32 program, not a kernel task. Try `help`,
 `ls`, `cat HELLO.TXT`, `echo hello`, `run HELLO.ELF one two`, `date`,
-`lspci`, `beep`.
+`lspci`, `beep`, `pkg list`, `pkg install Editor`, `pkg remove Editor`,
+`gui`.
 
 **Not yet available in this shell** (each needs meaningfully more
 design work than a simple state-read syscall - real request/reply
-timeout semantics for networking, install/remove state for packages,
-some way to launch a still-ring-0 GUI from ring-3): `ping`,
-`nslookup`, `tftp`, `pkg`, `store`. These commands still exist in
-`userland/shell/shell.c` (the original, Phase 3-era ring-0 shell,
-kept in the tree but no longer launched at boot) as a reference for
-what a future syscall surface would need to cover.
+timeout semantics for networking, or a full compositor/Store port
+rather than the current proof-of-concept graphics demo): `ping`,
+`nslookup`, `tftp`, `store` (the full compositor/Software Center UI -
+`gui` is a static proof-of-concept scene, not this). These commands
+still exist in `userland/shell/shell.c` (the original, Phase 3-era
+ring-0 shell, kept in the tree but no longer launched at boot) as a
+reference for what a future syscall surface would need to cover.
+
+**Testing graphics mode changes**: if you ever modify
+`kernel/drivers/video/vga_graphics.c`, screendump *specifically after*
+returning to text mode (`sys_gfx_exit()`/the `gui` command finishing),
+not just during graphics mode - Phase 32b's real bug (Mode 13h's
+Chain-4 writes corrupting the text-mode font data in VGA Plane 2) was
+only ever visible at that exact moment; graphics-mode rendering itself
+was correct the whole time.
 
 **A note on `TEST_TIMEOUT`**: an earlier version of this project's USB
 driver used raw instruction-count busy-wait loops for port-reset

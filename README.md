@@ -394,6 +394,46 @@ a VM.
   functionality, which was confirmed complete and correct on the real
   screen)
 
+**Phase 32a - Package Manager Converted to Ring-3**
+- `pkg list`/`install`/`remove` reimplemented from scratch in
+  `userland/ring3-shell/shell.c`, using only two new syscalls
+  (`SYS_WRITE_FILE`, `SYS_DELETE_FILE`) - zero calls into any
+  kernel-side pkg-specific code
+- A shell builtin, not a separate exec'd `pkg.elf`, by deliberate
+  choice: exec'd programs start with zero capabilities, and there's
+  no mechanism yet for the shell to delegate a subset of its own
+  broad access to something it execs - building that properly is a
+  real, separate design question, not rushed into this pass
+- Verified through the complete real-world lifecycle: install, list
+  (showing `[installed]`), remove, list again - file sizes matched
+  exactly (62 bytes = the package's own payload size, 101 bytes = one
+  install record), screendumped for a definitive check
+
+**Phase 32b - Foundational Ring-3 Graphics + a Real VGA Bug Fix**
+- Five new syscalls (`SYS_GFX_ENTER/EXIT`, `SYS_GFX_PUT_PIXEL`,
+  `SYS_GFX_FILL_RECT`, `SYS_MOUSE_READ`) and a genuine, verified-
+  working ring-3 graphics demo (`gui.c`) - deliberately a
+  proof-of-concept scene, **not** a port of the existing multi-window
+  compositor or the Store's package-browsing UI, which remain ring-0
+- **A real bug found through more rigorous testing than this project
+  had done before**: graphics rendered perfectly, but the screen
+  turned into unreadable stripes immediately after returning to text
+  mode - while the system stayed 100% functional underneath the
+  whole time (confirmed via serial log). Root cause: VGA Mode 13h's
+  Chain-4 addressing touches all 4 memory planes on every framebuffer
+  write, silently destroying the font bitmap data text mode needs
+  afterward
+- Investigated, not guessed: a first hypothesis (a missing VGA
+  synchronous-reset step) was implemented and screendump-tested, and
+  found *not* to be the actual cause - kept anyway as a legitimate,
+  separate best practice - before the real cause (font-plane
+  corruption) was confirmed and fixed, including catching a second
+  bug in the fix itself (leftover registers not restored) the same
+  way: by checking the actual screendump, not assuming success once
+  it compiled
+- Verified with a completely clean, readable screen immediately after
+  `gui` exits and after a subsequent `ls`
+
 See [PROGRESS.md](PROGRESS.md) for verification details and known
 limitations of the current build.
 
@@ -433,7 +473,7 @@ novaos/
 ├── userland/           # Phase 24 libc + Phase 29 kernel/userland separation + Phase 30 ring-3 shell
 │   ├── libc/           # crt0, syscalls, string/stdio/stdlib - what a real ring-3 program links against
 │   ├── ring3-shell/    # Phase 30: the genuine ring-3 shell NovaOS boots into - real ELF, syscalls only
-│   ├── coreutils/      # Phase 29: genuine ring-3 ELF programs (cat) - talk to the kernel only via syscalls
+│   ├── coreutils/      # Phase 29: genuine ring-3 ELF programs (cat) - talk to the kernel only via syscalls; Phase 32b adds gui.c, a graphics/mouse syscall demo
 │   ├── examples/       # Phase 24 example C programs
 │   ├── gui/            # compositor (windowing demo), store (Software Center), font + canvas - still ring-0 for now, see PROGRESS.md
 │   ├── pkg/            # nova-pkg package manager - still ring-0 for now

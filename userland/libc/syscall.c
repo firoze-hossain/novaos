@@ -120,3 +120,58 @@ int sys_beep(void) {
     __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
     return result;
 }
+
+int sys_write_file(const char* filename, const void* data,
+                    unsigned int size) {
+    int result = SYS_WRITE_FILE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(filename), "c"(data), "d"(size)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_delete_file(const char* filename) {
+    int result = SYS_DELETE_FILE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(filename)
+                       : "memory", "cc");
+    return result;
+}
+
+void sys_gfx_enter(void) {
+    int eax = SYS_GFX_ENTER;
+    __asm__ volatile ("int $0x80" : "+a"(eax) : : "memory", "cc");
+}
+
+void sys_gfx_exit(void) {
+    int eax = SYS_GFX_EXIT;
+    __asm__ volatile ("int $0x80" : "+a"(eax) : : "memory", "cc");
+}
+
+void sys_gfx_put_pixel(int x, int y, unsigned char color) {
+    int eax = SYS_GFX_PUT_PIXEL;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(eax)
+                       : "b"(x), "c"(y), "d"((int)color)
+                       : "memory", "cc");
+}
+
+void sys_gfx_fill_rect(int x, int y, int w, int h, unsigned char color) {
+    int params[5] = {x, y, w, h, (int)color};
+    int eax = SYS_GFX_FILL_RECT;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(eax)
+                       : "b"(params)
+                       : "memory", "cc");
+}
+
+int sys_mouse_read(nova_mouse_state_t* out) {
+    int result = SYS_MOUSE_READ;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(out)
+                       : "memory", "cc");
+    return result;
+}
