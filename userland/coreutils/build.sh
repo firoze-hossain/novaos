@@ -17,7 +17,7 @@ $CC -c "$LIBC/string.c" -o string.o
 $CC -c "$LIBC/stdio.c" -o stdio.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
 
-for prog in cat; do
+for prog in cat gui; do
     $CC -c "$prog.c" -o "${prog}_main.o"
     ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
         -o "$prog.elf" crt0.o "${prog}_main.o" syscall.o string.o stdio.o stdlib.o

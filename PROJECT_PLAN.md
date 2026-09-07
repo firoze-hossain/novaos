@@ -145,7 +145,9 @@ at the end. Concretely, in the order it gets built:
 | **P29** | Kernel/userland architectural separation + first genuine ring-3 coreutils program | Complete (scoped - see PROGRESS.md; shell/gui/pkg reorganized but still ring-0, cat is genuinely ring-3) |
 | **P30** | Genuine ring-3 shell - NovaOS now boots into a real ELF program, not a kernel task | Complete (scoped - see PROGRESS.md; ls/cat/run/echo/help/clear only at the time - see P31) |
 | **Fix** | USB busy-wait timing - real `make test` failure on a real machine, fixed with timer-based delays | Complete - see PROGRESS.md |
-| **P31** | Restoring shell command parity: date/lspci/beep via 3 new syscalls | Complete (scoped - see PROGRESS.md; ping/pkg/GUI still need their own, harder syscall work) |
+| **P31** | Restoring shell command parity: date/lspci/beep via 3 new syscalls | Complete (scoped - see PROGRESS.md; ping/pkg/GUI still need their own, harder syscall work - see P32) |
+| **P32a** | Package manager converted to a genuine ring-3 shell builtin | Complete (scoped - see PROGRESS.md; shell builtin, not a separate exec'd binary - no capability-delegation mechanism exists yet) |
+| **P32b** | Foundational ring-3 graphics/mouse syscalls + a working demo, plus a real VGA Plane-2 font-corruption bug found and fixed | Complete (scoped - see PROGRESS.md; proof-of-concept scene, not a full compositor/Store port) |
 
 **All three items from the "bootloader, TCP, USB" request are now
 complete** (P28a-c). Each was tackled sequentially with full
