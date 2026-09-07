@@ -175,3 +175,20 @@ int sys_mouse_read(nova_mouse_state_t* out) {
                        : "memory", "cc");
     return result;
 }
+
+void sys_ping_start(unsigned int dest_ip) {
+    int eax = SYS_PING_START;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(eax)
+                       : "b"(dest_ip)
+                       : "memory", "cc");
+}
+
+int sys_ping_poll(unsigned int* out_rtt) {
+    int result = SYS_PING_POLL;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(out_rtt)
+                       : "memory", "cc");
+    return result;
+}

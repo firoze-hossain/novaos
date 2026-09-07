@@ -19,7 +19,7 @@ ifeq ($(UNAME_S),Darwin)
         PREFIX :=
     endif
     QEMU = qemu-system-i386
-    GRUB_MKRESCUE = grub-mkrescue
+    GRUB_MKRESCUE = i686-elf-grub-mkrescue
     # Mac-specific flags
     CFLAGS_EXTRA = -Wno-builtin-declaration-mismatch
     LDFLAGS_EXTRA =
@@ -29,7 +29,7 @@ else ifeq ($(UNAME_S),Linux)
     LD = ld
     ASM = nasm
     QEMU = qemu-system-x86_64
-    GRUB_MKRESCUE = grub-mkrescue
+    GRUB_MKRESCUE = i686-elf-grub-mkrescue
     CFLAGS_EXTRA =
     LDFLAGS_EXTRA =
 else
@@ -267,11 +267,11 @@ help:
 	@echo "  make install-image - Build a bootable image + print USB/VM install instructions"
 	@echo "  make help     - Show this help"
 
-# Phase 20: novaos.iso is a hybrid image (xorriso/grub-mkrescue's
+# Phase 20: novaos.iso is a hybrid image (xorriso/i686-elf-grub-mkrescue's
 # default output) - the same file boots both as an El Torito CD *and*
 # as a raw BIOS hard disk/USB image via its embedded MBR. This is
 # NovaOS's real installer: no separate bootloader-writing step is
-# needed, because grub-mkrescue already produces one. Verified by
+# needed, because i686-elf-grub-mkrescue already produces one. Verified by
 # attaching novaos.iso directly as a QEMU hard disk (not -cdrom) and
 # confirming the full system - FAT32, networking, everything - boots
 # identically (see PROGRESS.md's Phase 20 entry).

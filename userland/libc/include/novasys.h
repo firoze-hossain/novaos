@@ -36,6 +36,8 @@
 #define SYS_GFX_PUT_PIXEL 22
 #define SYS_GFX_FILL_RECT 23
 #define SYS_MOUSE_READ 24
+#define SYS_PING_START 25
+#define SYS_PING_POLL 26
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -86,5 +88,7 @@ void sys_gfx_exit(void);
 void sys_gfx_put_pixel(int x, int y, unsigned char color);
 void sys_gfx_fill_rect(int x, int y, int w, int h, unsigned char color);
 int sys_mouse_read(nova_mouse_state_t* out);
+void sys_ping_start(unsigned int dest_ip);
+int sys_ping_poll(unsigned int* out_rtt);
 
 #endif

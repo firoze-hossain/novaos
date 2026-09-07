@@ -125,7 +125,7 @@ static int tokenize(char* line, char* tokens[MAX_TOKENS]) {
 }
 
 static void cmd_help(void) {
-    printf("NovaOS ring-3 shell (Phase 30/31/32) - available commands:\n");
+    printf("NovaOS ring-3 shell (Phase 30-33) - available commands:\n");
     printf("  ls              - list files in the root directory\n");
     printf("  cat FILE        - print a file's contents\n");
     printf("  run FILE [args] - load and run a real ELF executable\n");
@@ -138,12 +138,12 @@ static void cmd_help(void) {
     printf("  pkg install NAME        - install a package\n");
     printf("  pkg remove NAME         - remove an installed package\n");
     printf("  gui             - run a ring-3 graphics demo\n");
+    printf("  ping HOST_IP    - ICMP echo (real ~3s timeout, written in Rust)\n");
     printf("  help            - show this message\n");
     printf("\n");
-    printf("Not yet available here: ping, nslookup, tftp (networking\n");
-    printf("needs real timeout syscalls), store (the full compositor +\n");
-    printf("Software Center UI - see PROGRESS.md for why 'gui' above\n");
-    printf("is a proof-of-concept, not a full port).\n");
+    printf("Not yet available here: nslookup, tftp, store (the full\n");
+    printf("compositor + Software Center UI - see PROGRESS.md for why\n");
+    printf("'gui' above is a proof-of-concept, not a full port).\n");
 }
 
 static void cmd_ls(void) {
@@ -200,6 +200,25 @@ static void cmd_gui(void) {
     int pid = sys_exec("GUI.ELF", gui_argv, 1);
     if (pid < 0) {
         printf("gui: failed to load GUI.ELF\n");
+        return;
+    }
+    sys_wait(pid);
+}
+
+/* Phase 33: ping is a genuine ring-3 program written in Rust
+ * (userland/ping-rs/main.rs) - not a shell builtin like pkg is. It
+ * needs no special capabilities (SYS_PING_START/POLL aren't
+ * capability-gated), so plain SYS_EXEC (no can_open_any_file/
+ * can_spawn delegation needed) is enough, the same as `run`/`gui`. */
+static void cmd_ping(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("usage: ping HOST_IP\n");
+        return;
+    }
+    const char* ping_argv[] = {"PING.ELF", argv[1]};
+    int pid = sys_exec("PING.ELF", ping_argv, 2);
+    if (pid < 0) {
+        printf("ping: failed to load PING.ELF\n");
         return;
     }
     sys_wait(pid);
@@ -532,6 +551,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_pkg(argc2, tokens);
         } else if (strcmp(tokens[0], "gui") == 0) {
             cmd_gui();
+        } else if (strcmp(tokens[0], "ping") == 0) {
+            cmd_ping(argc2, tokens);
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

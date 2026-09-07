@@ -421,11 +421,15 @@ static int process_exec_internal(const char* path, const char** argv,
         argc = MAX_EXEC_ARGS;
     }
 
-    /* 64KB comfortably covers the small, statically-linked test
-     * binaries this loader targets; a much larger real-world program
-     * would need this read streamed rather than buffered whole, which
-     * vfs_read_file() doesn't support yet - see PROGRESS.md. */
-    static uint8_t elf_buffer[65536];
+    /* 2MB - large enough for statically-linked Rust binaries (Phase
+     * 33), which are substantially bigger than this project's C test
+     * binaries even for trivial programs, since core's compiled code
+     * (much of it unused by any single program) gets linked in
+     * wholesale rather than as a shared library. Originally 64KB,
+     * sized only for small C test binaries - a real ELF32 loader
+     * would stream this rather than buffer the whole file at once,
+     * which vfs_read_file() doesn't support yet - see PROGRESS.md. */
+    static uint8_t elf_buffer[2 * 1024 * 1024];
     int file_size = vfs_read_file(path, elf_buffer, sizeof(elf_buffer));
     if (file_size <= 0) {
         kernel_log("[FAULT] process_exec: couldn't read '%s'\n", path);
