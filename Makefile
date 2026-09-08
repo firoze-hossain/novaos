@@ -19,7 +19,7 @@ ifeq ($(UNAME_S),Darwin)
         PREFIX :=
     endif
     QEMU = qemu-system-i386
-    GRUB_MKRESCUE = i686-elf-grub-mkrescue
+    GRUB_MKRESCUE = grub-mkrescue
     # Mac-specific flags
     CFLAGS_EXTRA = -Wno-builtin-declaration-mismatch
     LDFLAGS_EXTRA =
@@ -29,7 +29,7 @@ else ifeq ($(UNAME_S),Linux)
     LD = ld
     ASM = nasm
     QEMU = qemu-system-x86_64
-    GRUB_MKRESCUE = i686-elf-grub-mkrescue
+    GRUB_MKRESCUE = grub-mkrescue
     CFLAGS_EXTRA =
     LDFLAGS_EXTRA =
 else
