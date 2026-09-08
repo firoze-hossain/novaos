@@ -510,6 +510,16 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     print_banner();
 
+    /* Phase 35: NovaOS's first kernel-side Rust code
+     * (kernel/rust/lib.rs), called directly from here - proves the
+     * integration works at runtime, not just that it links. A real,
+     * observable computation (20+22=42), not something that could
+     * pass by coincidence if the FFI boundary were subtly broken. */
+    extern int rust_kernel_selftest_add(int a, int b);
+    int rust_result = rust_kernel_selftest_add(20, 22);
+    kernel_log("[ OK ] Kernel-side Rust self-test: rust_kernel_selftest_add"
+               "(20, 22) = %d (expected 42)\n", rust_result);
+
     firstrun_check_and_run();
 
     process_init();

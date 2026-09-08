@@ -1,3 +1,12 @@
+# Phase 35: explicit default goal, since kernel-side Rust's build
+# rules (further down) would otherwise become the default target
+# simply by being the first rule textually defined in this file -
+# make's actual default-target behavior, not something obvious from
+# reading the file top to bottom. Found the hard way: `make` with no
+# arguments silently built only the Rust sysroot and stopped, never
+# reaching novaos.iso at all.
+.DEFAULT_GOAL := all
+
 # Detect OS
 UNAME_S := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -136,7 +145,42 @@ ASM_SOURCES = $(shell find $(KERNEL_DIR) -name "*.asm")
 # Build object files
 C_OBJS = $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SOURCES))
 ASM_OBJS = $(patsubst %.asm, $(BUILD_DIR)/%.o, $(ASM_SOURCES))
-OBJS = $(C_OBJS) $(ASM_OBJS)
+
+# Phase 35: kernel-side Rust (kernel/rust/) - the first Rust code
+# linked directly into the kernel binary itself, not a standalone
+# userland ELF. Uses the same tools/rust-sysroot/ toolchain Phase 33
+# built for userland Rust (RUSTC_BOOTSTRAP=1 on stable rustc, since
+# this environment has no rustup/nightly access - see that script's
+# own comments for the full reasoning); no changes needed there. The
+# resulting object file and the two rlibs it depends on (core,
+# compiler_builtins) are added directly to OBJS below, so ld's normal
+# kernel link step picks them up exactly like any other .o - no
+# separate link pass, no special-casing in the final $(LD) invocation.
+RUST_SYSROOT_DIR = tools/rust-sysroot
+RUST_TARGET_JSON = $(RUST_SYSROOT_DIR)/i686-novaos.json
+RUST_LIB_DIR = $(RUST_SYSROOT_DIR)/sysroot/lib/rustlib/i686-novaos/lib
+RUST_CORE_RLIB = $(RUST_LIB_DIR)/libcore.rlib
+RUST_COMPILER_BUILTINS_RLIB = $(RUST_LIB_DIR)/libcompiler_builtins.rlib
+KERNEL_RUST_OBJ = $(BUILD_DIR)/kernel/rust/lib.o
+
+RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
+
+$(RUST_SYSROOT_MARKER):
+	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
+	@touch $@
+
+$(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
+
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+	@mkdir -p $(dir $@)
+	RUSTC_BOOTSTRAP=1 rustc --edition 2021 --target $(RUST_TARGET_JSON) \
+	    --crate-type lib -C panic=abort -C opt-level=2 \
+	    --emit obj=$@ \
+	    --extern core=$(RUST_CORE_RLIB) \
+	    --extern compiler_builtins=$(RUST_COMPILER_BUILTINS_RLIB) \
+	    kernel/rust/lib.rs
+
+OBJS = $(C_OBJS) $(ASM_OBJS) $(KERNEL_RUST_OBJ) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 
 # Targets
 KERNEL_BIN = $(BUILD_DIR)/novaos.bin
@@ -211,6 +255,7 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "EXT2 FILE READ OK: EXT2TEST.TXT" $(TEST_LOG) && \
 	    grep -q "EXT2 WRITE.READBACK OK: EXT2WROT.TXT" $(TEST_LOG) && \
 	    grep -q "SYS_OPEN..HELLO.TXT.. -> handle .* .capability granted." $(TEST_LOG) && \
+	    grep -q "Kernel-side Rust self-test.*= 42" $(TEST_LOG) && \
 	    grep -q "Ring-3 coreutils: CAT.ELF" $(TEST_LOG) && \
 	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
 	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
