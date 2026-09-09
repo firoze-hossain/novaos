@@ -24,7 +24,21 @@ $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
 
 echo "Compiling main.rs (Phase 33 - NovaOS's first Rust userland program)..."
-RUSTC_BOOTSTRAP=1 rustc --edition 2021 --target "$RUST_SYSROOT/i686-novaos.json" \
+# Detected at execution time, not hardcoded - must match whichever
+# toolchain build-sysroot.sh actually used for the rlibs this links
+# against (nightly + -Z build-std if rustup/nightly are available,
+# RUSTC_BOOTSTRAP=1 on stable otherwise - see that script's own
+# comments). Linking rlibs built by one rustc against object code
+# compiled by a different one risks a metadata version mismatch, the
+# same way any two mismatched rustc versions would.
+if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
+    RUSTC_CMD="rustc +nightly"
+    BOOTSTRAP_ENV=""
+else
+    RUSTC_CMD="rustc"
+    BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
+fi
+env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options --target "$RUST_SYSROOT/i686-novaos.json" \
     --crate-type bin -C panic=abort -C opt-level=2 \
     --emit obj=ping_main.o \
     --extern core="$LIBRUST/libcore.rlib" \

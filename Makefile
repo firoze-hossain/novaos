@@ -173,7 +173,12 @@ $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
 $(KERNEL_RUST_OBJ): kernel/rust/lib.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
-	RUSTC_BOOTSTRAP=1 rustc --edition 2021 --target $(RUST_TARGET_JSON) \
+	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
+	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
+	else \
+	    RUSTC_CMD="rustc"; BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"; \
+	fi; \
+	env $$BOOTSTRAP_ENV $$RUSTC_CMD --edition 2021 -Z unstable-options --target $(RUST_TARGET_JSON) \
 	    --crate-type lib -C panic=abort -C opt-level=2 \
 	    --emit obj=$@ \
 	    --extern core=$(RUST_CORE_RLIB) \

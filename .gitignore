@@ -23,6 +23,25 @@ opt/
 # tools/rust-sysroot/build-sysroot.sh on demand, never hand-edited ----
 tools/rust-sysroot/sysroot/
 
+# ---- Rust custom target JSON (Phase 35 fix) - regenerated on every
+# run. Several of its fields' correct JSON *type* (string vs number)
+# genuinely differs between rustc versions - confirmed by real
+# machines needing different fields flipped - so it's detected per-
+# build, not something that can be committed as one fixed,
+# correct-for-everyone file ----
+tools/rust-sysroot/i686-novaos.json
+
+# ---- Fallback-path artifacts (build-sysroot-bootstrap.sh): fetched
+# compiler_builtins source (patched in place) and its probe scratch
+# file. Regenerated on demand, never hand-edited ----
+tools/rust-sysroot/compiler_builtins-*-src/
+tools/rust-sysroot/rust_target_probe.rs
+
+# ---- Preferred-path artifact (build-sysroot.sh): the throwaway cargo
+# project used only to trigger `-Z build-std`. Nothing in this project
+# links against it; it exists solely as a build scratch space ----
+tools/rust-sysroot/nightly-build-std-project/
+
 # ---- Logs & test output ----
 *.log
 serial.log
