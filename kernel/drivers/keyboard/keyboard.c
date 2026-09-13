@@ -12,6 +12,9 @@
 #include "scancodes.h"
 #include "../../arch/x86/cpu/irq.h"
 #include "../../arch/x86/io.h"
+#include "../driver.h"
+
+DRIVER_REGISTER("PS/2 keyboard", keyboard_init, DRIVER_PHASE_EARLY);
 
 #define KEYBOARD_DATA_PORT 0x60
 #define BUFFER_SIZE 256

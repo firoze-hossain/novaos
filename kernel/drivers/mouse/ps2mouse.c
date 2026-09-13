@@ -5,6 +5,9 @@
 #include "../../arch/x86/cpu/irq.h"
 #include "../../arch/x86/io.h"
 #include "../../include/kernel.h"
+#include "../driver.h"
+
+DRIVER_REGISTER("PS/2 mouse", ps2mouse_init, DRIVER_PHASE_EARLY);
 
 #define PS2_DATA    0x60
 #define PS2_STATUS  0x64
