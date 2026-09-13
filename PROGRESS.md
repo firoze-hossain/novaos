@@ -3702,7 +3702,145 @@ above), not an oversight. No true dependency-ordering support exists
 two-phase model can't express would need either a new phase added or
 genuine dependency-graph support, neither attempted here.
 
-## Phase 40 and beyond
+## Phase 40: kernel synchronization primitives (Rust)
+
+**Status: Complete (scoped).** This kernel's first real synchronization
+primitive - directly closes a gap this project's own PROGRESS.md and
+release-readiness roadmap have both named explicitly: "no spinlock/
+mutex exists anywhere in this kernel yet."
+
+### What was built
+
+`kernel/rust/spinlock.rs`: `SpinLock<T>`, the standard `spin_lock_
+irqsave`/`spin_unlock_irqrestore` shape (the same one Linux uses for
+exactly this situation) - disables this CPU's local interrupts for the
+duration the lock is held (closing a real, present gap: an IRQ handler
+could otherwise preempt and race with non-interrupt kernel code
+touching the same shared state, even on this single-core target,
+independent of any future SMP question) *and* spins on a real atomic
+compare-and-swap (forward-compatible with multi-core, even though none
+exists yet). The *previous* interrupt-enabled state is saved and
+restored, not unconditionally toggled - required for correct nesting
+(acquiring a second lock while already holding a first, then releasing
+the inner one, must not prematurely re-enable interrupts the outer
+critical section still needs off). Follows Rust's ordinary RAII guard
+shape (`std::sync::Mutex`'s own shape in hosted Rust) rather than a
+manual lock()/unlock() pair specifically so the safety property is
+enforced by the type system - the protected data is unreachable except
+through the guard `lock()` returns, and releasing it is `Drop`, not
+something a caller can forget.
+
+Demonstrated on real, already-shipped state, not left as an unused,
+theoretical primitive: `kernel/rust/pipe.rs`'s own `PIPES` table -
+previously "safe" only by a documented, load-bearing comment
+("syscalls run with interrupts disabled") - is now wrapped in a real
+`SpinLock<[Pipe; MAX_PIPES]>`. No observable behavior change today
+(nothing yet calls into pipe.rs from interrupt context), but the
+underlying guarantee is now enforced rather than merely documented and
+trusted.
+
+### Verified behavior
+
+A three-part ring-0 self-test (`rust_spinlock_selftest`, called
+directly from `kernel_main()`, no syscall involved) checks, and
+reports individually rather than as one pass/fail bit: (1) basic
+protection - a value written inside a critical section is correctly
+observable after the guard drops; (2) single-level interrupt save/
+restore - interrupts are off while any lock is held and correctly
+restored to their prior state afterward, checked by directly reading
+EFLAGS' interrupt bit, not by trusting the implementation to report on
+itself; (3) correctly-nested interrupt handling - two distinct locks,
+one acquired while the other is already held, leave interrupts off for
+the *entire* nested region and only restore them once the *outer*
+guard (not just the inner one) has dropped - the specific property a
+naive "always cli on lock, always sti on unlock" implementation would
+get wrong. All three passed on the first attempt, with the inline
+`pushfd`/`cli`/`popfd` assembly written carefully and reasoned through
+in advance rather than iterated on by trial and error.
+
+Learned directly from Phase 38's own investigation, not just
+remembered as a rule: confirmed via `nm build/novaos.bin` that every
+new Rust static this phase introduces (`PIPES`'s new wrapper, and the
+self-test's own `LOCK`/`OUTER`/`INNER` statics) lands safely inside
+`kernel_start`/`kernel_end` - checked directly, not assumed safe
+because `make test` passed.
+
+### Known limitations
+
+Only `pipe.rs`'s `PIPES` table uses the new `SpinLock` so far - the
+rest of this kernel's shared state (still entirely C-side) is
+unchanged, protected only by the same "interrupts disabled during
+syscalls" assumption as before. Extending `SpinLock` (or a C-callable
+equivalent) to protect existing C kernel state is real, separate
+follow-up work. No `Mutex` (a lock that yields to the scheduler instead
+of spinning) exists yet - not needed until a critical section long
+enough to make busy-waiting wasteful actually exists; every current use
+is a handful of array-index operations.
+
+## Phase 41: Python build/test/development tooling
+
+**Status: Complete.** Not kernel or userland code - developer-facing
+tooling, requested directly rather than inferred from a gap-analysis
+document.
+
+### `tools/python/test_runner.py`
+
+Replaces the Makefile's own `test` target internals: previously a
+single, unbroken chain of ~47 `grep -q "..." $(TEST_LOG) && \` lines,
+which reported only "the boot test failed" on any mismatch, never
+which one - a real, repeatedly-experienced pain point during this
+project's own development (see this file's own Phase 38 entry, where
+tracking down a real bug required manually re-running individual grep
+patterns by hand, one at a time, specifically because the Makefile
+chain gave no per-assertion feedback). Every one of those same ~47
+checks is now a named `Assertion` with its own one-line description of
+what it actually proves - ported faithfully from the Makefile, not
+reduced or reworded away from what it originally checked, now joined
+by two more from Phase 39/40 (driver registration, spinlock). A failed
+run reports every failing check individually, with the exact pattern
+that didn't match - not just a final pass/fail. `make test` now calls
+this script (`--boot`, which builds nothing itself but boots QEMU,
+captures the serial log, and checks it); it can also be run standalone
+against an already-captured log for fast iteration without a full
+rebuild+reboot (`--log build/test-serial.log`).
+
+Verified directly, not just "it compiles": ran it against a real,
+complete, passing boot log (51/51 assertions passed) and separately
+against a deliberately truncated one, confirming it correctly named
+every specific assertion that should fail and why, with the right exit
+code (1) in the failing case and (0) in the passing one - the actual
+value proposition demonstrated, not assumed from reading the code.
+
+### `tools/python/check_prereqs.py`
+
+Complements (doesn't replace) `scripts/setup-linux.sh`/`setup-mac.sh`,
+which *install* dependencies for one specific OS each: this *checks*
+what's already on `PATH`, the same way on every platform, without
+installing anything - useful both before a first build and after this
+project's own dependencies change. `grub-mkrescue` is checked
+separately from the rest of the tool list, since its actual command
+name genuinely differs by platform (`grub-mkrescue` on Linux vs.
+`i686-elf-grub-mkrescue` via Homebrew on macOS). New `make
+check-prereqs` target. Verified against this real environment (all
+required tools correctly reported present) and against a deliberately
+broken one (temporarily removed `nasm` from `PATH` entirely, confirmed
+the script correctly reported it missing with the right install
+guidance and a non-zero exit code, then confirmed a clean pass again
+once restored).
+
+### Known limitations
+
+Neither script is wired into a CI workflow file (no `.github/
+workflows/` exists in this repo yet) - both are ready to be, given
+their clean exit-code contracts, but that wiring itself wasn't
+attempted here. `tools/custom-boot/test-custom-boot.sh` (the separate
+custom-bootloader test, invoked by `make test-custom-boot`) was left
+as its own shell script rather than folded into `test_runner.py` -
+it's testing a genuinely different thing (stage1/stage2 boot code, not
+GRUB), and unifying it was judged out of scope for this pass rather
+than attempted and left half-done.
+
+## Phase 42 and beyond
 
 Not started. Candidates: migrating `timer_init`/`vfs_init`/`net_init`
 to driver registration too (their own self-test interleaving would
@@ -3710,13 +3848,11 @@ need to move with them, or stay behind as separate, later self-test
 functions - a real design question, not just mechanical migration);
 extending `process_fork()` to duplicate `open_files[]` entries by
 owner pid, unlocking real cross-process pipe use and a genuine shell
-`|` operator; kernel-level synchronization primitives (no spinlock/
-mutex exists anywhere in this kernel yet); signals; real UID/GID and
-file-ownership permissions; a versioned, single-source-of-truth
-syscall ABI header (`kernel/arch/x86/cpu/syscall.h` and `userland/
-libc/include/novasys.h` are still two, hand-synchronized copies); a
-build-time check that `kernel_end` covers every section in the final
-binary (Phase 38's own "Known limitations"); a full ring-3 compositor/
-Store port; virtio-net/virtio-blk; TCP retransmission/windowing and a
-sockets-style syscall API for TCP.
-assumed as "next."
+`|` operator; signals; real UID/GID and file-ownership permissions; a
+versioned, single-source-of-truth syscall ABI header (`kernel/arch/
+x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
+hand-synchronized copies); a build-time check that `kernel_end` covers
+every section in the final binary (Phase 38's own "Known
+limitations"); wiring tools/python's two scripts into a CI workflow; a
+full ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
+retransmission/windowing and a sockets-style syscall API for TCP.

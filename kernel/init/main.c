@@ -636,6 +636,27 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    wraparound_ok ? "pass" : "FAIL");
     }
 
+    /* Phase 40: kernel/rust/spinlock.rs's own self-test - see that
+     * file's own doc comment for exactly what each of the three
+     * checks (basic protection, single-level interrupt save/restore,
+     * correctly-nested interrupt save/restore) proves and why. Called
+     * the same way as every other kernel-side Rust self-test in this
+     * project: directly, from ring 0, no syscall involved. Returns a
+     * bitmask (0 = every check passed) rather than a bool, so a
+     * failure here points at exactly which property broke instead of
+     * just "something did." */
+    {
+        extern int rust_spinlock_selftest(void);
+        int result = rust_spinlock_selftest();
+        kernel_log("[ %s ] Kernel-side Rust spinlock self-test: "
+                   "basic-protection=%s interrupt-save-restore=%s "
+                   "nested-lock-interrupt-handling=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
     firstrun_check_and_run();
 
     process_init();

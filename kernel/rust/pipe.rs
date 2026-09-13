@@ -70,17 +70,23 @@
 //!   itself works correctly, end to end through the real syscall
 //!   path, not the shell integration on top of it.
 //!
-//! Concurrency note: like every other syscall in this kernel,
-//! whatever calls into these functions does so from inside
-//! syscall_handler(), which runs with interrupts disabled for its
-//! entire duration (see syscall_stub.asm) - there is never more than
-//! one in-flight call into this module at a time, on this single-core
-//! target. The `static mut` access below is exactly as safe as this
-//! kernel's other non-atomic global syscall-handler state already is
-//! (e.g. syscall.c's own list_files_staging buffer, by its own
-//! comment: "safe as plain (non-reentrant) static state: syscalls
-//! execute one at a time with interrupts disabled") - not a special
-//! exemption invented for this module.
+//! Concurrency note (updated in Phase 40): PIPES was originally
+//! protected only by the documented assumption that syscalls run
+//! with interrupts disabled for their entire duration, so nothing
+//! else could run concurrently with syscall-handler code on this
+//! single-core target - true, but not a *type-enforced* guarantee,
+//! and silent about interrupt-context reentrancy specifically (two
+//! different IRQ handlers touching the same state) and about any
+//! future second CPU. Now wrapped in kernel/rust/spinlock.rs's
+//! SpinLock<T> instead - the same access pattern as before
+//! (`PIPES.lock()` in place of the old `unsafe { pipes() }` accessor)
+//! but now a real, enforced lock rather than a comment asking every
+//! future caller to already know and respect an assumption. No
+//! observable behavior change today (nothing yet calls into this
+//! module from interrupt context), but see spinlock.rs's own header
+//! comment for why that's exactly the point - this makes the next
+//! piece of code that *does* need to touch pipe state from an IRQ
+//! handler correct by construction, not another thing to remember.
 
 const MAX_PIPES: usize = 8;
 const PIPE_CAPACITY: usize = 1024;
@@ -110,22 +116,8 @@ impl Pipe {
 }
 
 const EMPTY_PIPE: Pipe = Pipe::new();
-static mut PIPES: [Pipe; MAX_PIPES] = [EMPTY_PIPE; MAX_PIPES];
-
-/// Returns a mutable reference to the pipe table. Goes through
-/// `addr_of_mut!` rather than writing `&mut PIPES` directly - both
-/// are equally sound here (see this file's own concurrency note
-/// above), but `addr_of_mut!` is the community-recommended idiom for
-/// accessing a `static mut` specifically because it avoids newer
-/// rustc versions' `static_mut_refs` lint (warn-by-default as of
-/// some rustc versions, on a path to becoming a hard error) without
-/// this file needing to `#![allow(...)]` a lint that may not even
-/// exist by that name on every rustc version this project has been
-/// built against so far.
-#[inline(always)]
-unsafe fn pipes() -> &'static mut [Pipe; MAX_PIPES] {
-    &mut *core::ptr::addr_of_mut!(PIPES)
-}
+static PIPES: crate::spinlock::SpinLock<[Pipe; MAX_PIPES]> =
+    crate::spinlock::SpinLock::new([EMPTY_PIPE; MAX_PIPES]);
 
 /// Allocates a new pipe. Returns its id (0..MAX_PIPES), or -1 if every
 /// pipe slot is already in use - this kernel's usual fixed-capacity-
@@ -133,7 +125,7 @@ unsafe fn pipes() -> &'static mut [Pipe; MAX_PIPES] {
 /// full" case), not a real, expected condition in ordinary use.
 #[no_mangle]
 pub extern "C" fn rust_pipe_create() -> i32 {
-    let pipes = unsafe { pipes() };
+    let mut pipes = PIPES.lock();
     for (i, p) in pipes.iter_mut().enumerate() {
         if !p.in_use {
             p.in_use = true;
@@ -173,7 +165,8 @@ pub unsafe extern "C" fn rust_pipe_read(id: i32, buf: *mut u8, max_len: u32) -> 
     if id < 0 || (id as usize) >= MAX_PIPES || buf.is_null() {
         return -1;
     }
-    let p = &mut pipes()[id as usize];
+    let mut pipes = PIPES.lock();
+    let p = &mut pipes[id as usize];
     if !p.in_use {
         return -1;
     }
@@ -211,7 +204,8 @@ pub unsafe extern "C" fn rust_pipe_write(id: i32, buf: *const u8, len: u32) -> i
     if id < 0 || (id as usize) >= MAX_PIPES || buf.is_null() {
         return -1;
     }
-    let p = &mut pipes()[id as usize];
+    let mut pipes = PIPES.lock();
+    let p = &mut pipes[id as usize];
     if !p.in_use || !p.reader_open {
         return -1;
     }
@@ -238,7 +232,7 @@ pub extern "C" fn rust_pipe_close(id: i32, is_read_end: i32) {
     if id < 0 || (id as usize) >= MAX_PIPES {
         return;
     }
-    let pipes = unsafe { pipes() };
+    let mut pipes = PIPES.lock();
     let p = &mut pipes[id as usize];
     if !p.in_use {
         return;

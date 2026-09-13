@@ -171,7 +171,7 @@ $(RUST_SYSROOT_MARKER):
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -246,62 +246,8 @@ TEST_TIMEOUT ?= 25
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)
-	@mkdir -p $(BUILD_DIR)
-	@rm -f $(TEST_LOG)
-	@echo "Booting NovaOS headlessly for up to $(TEST_TIMEOUT)s..."
-	@timeout $(TEST_TIMEOUT) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) \
-	    -display none -serial file:$(TEST_LOG) || true
-	@echo "--- boot log ---"; cat $(TEST_LOG) || true; echo "----------------"
-	@grep -q "Interrupts enabled" $(TEST_LOG) && \
-	    grep -q "FAT32 mounted" $(TEST_LOG) && \
-	    grep -q "FILE READ OK: HELLO.TXT" $(TEST_LOG) && \
-	    grep -q "Partition table found (MBR): 2 partition" $(TEST_LOG) && \
-	    grep -q "ext2 mounted: block_size=4096" $(TEST_LOG) && \
-	    grep -q "EXT2 FILE READ OK: EXT2TEST.TXT" $(TEST_LOG) && \
-	    grep -q "EXT2 WRITE.READBACK OK: EXT2WROT.TXT" $(TEST_LOG) && \
-	    grep -q "SYS_OPEN..HELLO.TXT.. -> handle .* .capability granted." $(TEST_LOG) && \
-	    grep -q "Kernel-side Rust self-test.*= 42" $(TEST_LOG) && \
-	    grep -q "Ring-3 coreutils: CAT.ELF" $(TEST_LOG) && \
-	    grep -q "ring3-A. PASS" $(TEST_LOG) && \
-	    grep -q "ring3-B. PASS" $(TEST_LOG) && \
-	    grep -q "PING OK" $(TEST_LOG) && \
-	    grep -q "TFTP FETCH OK" $(TEST_LOG) && \
-	    grep -q "PKG INSTALL OK" $(TEST_LOG) && \
-	    grep -q "PKG REMOVE OK" $(TEST_LOG) && \
-	    grep -q "First-run check: returning user" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: HELLO.TXT opened" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: SYS_OPEN" $(TEST_LOG) && \
-	    grep -q "PCI ENUMERATION OK" $(TEST_LOG) && \
-	    grep -q "vendor=0x8086 device=0x1237" $(TEST_LOG) && \
-	    grep -q "Network up (RTL8139)" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: SYS_SPAWN succeeded" $(TEST_LOG) && \
-	    grep -q "unprivileged. PASS: SYS_SPAWN correctly denied" $(TEST_LOG) && \
-	    grep -q "greeter. Hello" $(TEST_LOG) && \
-	    grep -q "Hello from a real ELF executable" $(TEST_LOG) && \
-	    grep -q "HELLO.ELF. .pid .*. exited with code 42" $(TEST_LOG) && \
-	    grep -q "malloc.d string: it works!" $(TEST_LOG) && \
-	    grep -q "HELLOC.ELF. .pid .*. exited with code 7" $(TEST_LOG) && \
-	    grep -q "SYS_EXEC loaded and ran a real C program" $(TEST_LOG) && \
-	    grep -q "process_fork: pid .* forked" $(TEST_LOG) && \
-	    grep -q "sandbox-child. I am the child" $(TEST_LOG) && \
-	    grep -q "fork.. . copy-on-write correctly isolated" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: SYS_EXEC loaded and ran" $(TEST_LOG) && \
-	    grep -q "AC97 audio at PCI" $(TEST_LOG) && \
-	    grep -q "AC97 beep: playing" $(TEST_LOG) && \
-	    grep -q "UHCI controller at PCI" $(TEST_LOG) && \
-	    grep -q "USB device on port .*vendor=0x627" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \
-	    grep -q "SECURITY. pid .* denied SYS_NET_SEND" $(TEST_LOG) && \
-	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \
-	    grep -q "Kernel-side Rust pipe self-test.*roundtrip=pass" $(TEST_LOG) && \
-	    grep -q "wraparound.400x4B.=pass" $(TEST_LOG) && \
-	    grep -q "sandbox. PASS: SYS_PIPE" $(TEST_LOG) && \
-	    grep -q "Driver .PS/2 keyboard. initializing" $(TEST_LOG) && \
-	    grep -q "Driver .PS/2 mouse. initializing" $(TEST_LOG) && \
-	    grep -q "Driver .UHCI USB controller. initializing" $(TEST_LOG) && \
-	    grep -q "Driver .AC97 audio. initializing" $(TEST_LOG) && \
-	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
-	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
+	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
+	    --iso $(ISO_FILE) --disk $(DISK_IMG)
 
 # Clean
 clean:
@@ -310,6 +256,13 @@ clean:
 # Setup
 setup:
 	@./scripts/setup-$(shell ./scripts/detect-os.sh).sh
+
+# Phase 41: cross-platform prerequisite check (tools/python/
+# check_prereqs.py) - complements `setup` above (which *installs*
+# dependencies for one specific OS) by *checking* what's already on
+# PATH, the same way on every platform, without installing anything.
+check-prereqs:
+	@python3 tools/python/check_prereqs.py
 
 # Help
 help:
@@ -321,6 +274,7 @@ help:
 	@echo "  make test     - Headless boot smoke test (for CI)"
 	@echo "  make clean    - Clean build files"
 	@echo "  make setup    - Install dependencies"
+	@echo "  make check-prereqs - Check which build dependencies are present"
 	@echo "  make install-image - Build a bootable image + print USB/VM install instructions"
 	@echo "  make help     - Show this help"
 
@@ -355,4 +309,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test clean setup help install-image test-custom-boot
+.PHONY: all run debug test clean setup check-prereqs help install-image test-custom-boot
