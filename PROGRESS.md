@@ -3528,18 +3528,125 @@ silently reading garbage into the new field. A real config-format
 version byte (so old configs upgrade cleanly instead of resetting) is
 real follow-up work, not attempted here.
 
-## Phase 38 and beyond
+## Phase 38: the real cause of the "Phase 36 scheduler bug" - a linker script gap, not the scheduler
 
-Not started. Candidates, in roughly the priority order suggested by
-the two phases above: **fixing the Phase 36 scheduler/`process_wait()`
-bug** (a genuine correctness issue, arguably higher priority than any
-new feature); extending `process_fork()` to duplicate `open_files[]`
-entries by owner pid, unlocking real cross-process pipe use and a
-genuine shell `|` operator; kernel-level synchronization primitives
-(no spinlock/mutex exists anywhere in this kernel yet); signals; a
-driver registration table (drivers are still hardcoded function calls
-in `kernel_main()`); real UID/GID and file-ownership permissions; a
-full ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
+**Status: Complete - root cause found and fixed, not worked around.**
+Phase 36's own notes described a real, reproducible hang and named it
+a probable scheduler/`process_wait()` timing bug. That diagnosis was
+wrong, in a specific, now-confirmed way - tracked down properly this
+phase rather than left as an open, mysterious correctness issue.
+
+### Investigation
+
+Started by reading `scheduler.c`/`process.c` closely for a plausible
+race. Found one real, independent bug along the way:
+`free_user_address_space()` freed every physical frame a process's
+page tables referenced unconditionally, including ones still marked
+`PAGE_COW` - still potentially in active use by whichever process it
+was `fork()`'d from or a surviving sibling. Fixed (skip freeing
+`PAGE_COW`-marked frames - a bounded leak, matching this project's own
+already-documented, accepted fallback for the "no reference counting
+on shared frames yet" gap - rather than freeing memory still in use).
+Real, worth keeping - but rebuilding and re-testing with just this fix
+still reproduced the exact same hang, unchanged. Not the cause of this
+specific bug.
+
+Stopped guessing at that point and got a direct answer instead:
+instrumented the scheduler to trace exactly which process was picked
+at each scheduling decision around the hang, then re-ran the exact
+reproduction case with QEMU's own `-d int,cpu_reset` exception tracing
+enabled. That showed the real event directly: not a hang at all, but
+a **page fault immediately escalating through a double fault into a
+triple fault** (which is why it looked like a silent hang - `-no-
+reboot` shuts QEMU down instead of visibly resetting). The faulting
+address, cross-referenced against the kernel's own symbol table, was
+inside `paging_switch_address_space()` itself, at the instruction
+immediately after loading the new value into CR3 - meaning the kernel
+could no longer fetch its own next instruction the moment it switched
+into that particular process's page directory.
+
+A second, targeted diagnostic (comparing that process's page-directory
+entries against the live kernel page directory, entry by entry, right
+before the switch) found the exact divergence: several entries had
+been overwritten with the literal ASCII bytes of this project's own
+pipe self-test message string, "Hello through a NovaOS pipe!" -
+confirmed by decoding the mismatched hex values back to text, not
+inferred. That is a direct, physical proof of two unrelated pieces of
+memory silently aliasing the same physical page.
+
+Traced why: `objdump -h`/`nm` on `kernel/rust/*.o` and the final
+`novaos.bin` directly (not assumed) showed that rustc names its own
+sections per-symbol rather than using the plain names this project's
+C object files produce - `.bss._ZN3lib4pipe5PIPES...` for
+`kernel/rust/pipe.rs`'s `PIPES` array, not plain `.bss`.
+`tools/linker.ld`'s section rules matched only the exact, plain names
+(`*(.bss)`), so every Rust section was, as far as the linker script
+was concerned, an unmatched "orphan" left for the linker's own default
+placement heuristics - which happened to still work by luck for every
+Rust symbol that existed before this phase (small enough, or fortunate
+enough in placement order, to still land inside the `kernel_start`/
+`kernel_end` range `tools/linker.ld` computes and `pmm_init()` reserves
+as "already part of the kernel's own image, not available memory").
+Phase 36's ~8KB `PIPES` array was the first Rust symbol large or
+differently-ordered enough that its own orphaned section landed
+starting at *exactly* the same address `kernel_end` was computed to
+be - confirmed directly via `nm build/novaos.bin`, both symbols at the
+identical address. Everything from that address onward was therefore
+free for `pmm_alloc_frame()` to hand out, and eventually did - to an
+ordinary process's page directory, which then silently shared physical
+memory with this kernel's own live `PIPES` array. The very first byte
+ever written through any pipe overwrote that process's page-directory
+contents with the message being written.
+
+### The fix
+
+`tools/linker.ld`'s `.text`/`.rodata`/`.data`/`.bss` rules each now
+match both the plain name and any `name.*` variant (`*(.bss)
+*(.bss.*)`, and so on) - the standard, general fix for this exact
+class of linker-script gap, not specific to this one Rust symbol.
+Confirmed directly, not just by re-running the test suite: `nm
+build/novaos.bin` now shows `PIPES` sitting well inside the
+`kernel_start`/`kernel_end` range, and the same reproduction case
+(pipe activity immediately before a `fork()`'d child exits and the
+scheduler moves on to an unrelated, already-running process) now
+completes cleanly with zero page-directory divergence, confirmed via
+the same diagnostic instrumentation before it was removed - not merely
+"the test suite passed so presumably it's fine."
+
+### What this unlocks
+
+The ring-3 `SYS_PIPE`/`SYS_WRITE_HANDLE` syscall-path test in
+`sandbox_demo_task()` - previously left out of the automated suite
+specifically because it reproducibly triggered this exact bug - is now
+a standing, permanent, automated part of `make test`. Both the ring-0
+direct-call pipe self-test and this ring-3 syscall-path test now run
+and pass on every boot.
+
+### Known limitations
+
+No build-time check yet verifies that `kernel_end` actually covers
+every section the final binary contains - this specific class of bug
+(a new, sufficiently large or unluckily-ordered Rust symbol landing
+outside the reserved range again) could in principle recur if the
+general `*(.bss.*)`-style fix above ever proves incomplete for some
+future section-naming pattern. A `make`-time assertion (e.g. checking
+`objdump`/`readelf` output for any input section not accounted for
+between `kernel_start` and `kernel_end`) would catch this class of
+problem automatically instead of relying on it being large enough to
+notice by symptom again - real, scoped follow-up work, not attempted
+here.
+
+## Phase 39 and beyond
+
+Not started. Candidates: extending `process_fork()` to duplicate
+`open_files[]` entries by owner pid, unlocking real cross-process pipe
+use and a genuine shell `|` operator; kernel-level synchronization
+primitives (no spinlock/mutex exists anywhere in this kernel yet);
+signals; a driver registration table (drivers are still hardcoded
+function calls in `kernel_main()`); real UID/GID and file-ownership
+permissions; a build-time check that `kernel_end` covers every section
+in the final binary (see Phase 38's own "Known limitations"); a full
+ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
 retransmission/windowing and a sockets-style syscall API for TCP.
 Each would benefit from being scoped on its own terms rather than
 assumed as "next."

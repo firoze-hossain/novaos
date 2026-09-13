@@ -531,20 +531,20 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      *
      * The syscall-dispatch layer this test intentionally bypasses
      * (SYS_PIPE/SYS_WRITE_HANDLE, and SYS_READ/SYS_CLOSE's new pipe-
-     * handling branches) was manually verified separately, from real
-     * ring-3 code exercising the actual syscall path, and passed
-     * cleanly - see PROGRESS.md for that result. It is deliberately
-     * NOT wired into this boot sequence as a standing, automated test:
-     * doing so (tried two different ways - a dedicated new process,
-     * and a few extra syscalls added inside the existing
-     * sandbox_demo_task()) reproducibly triggered a genuine, pre-
-     * existing, timing-sensitive kernel bug elsewhere - a hang between
-     * some other, unrelated child process exiting and its parent's own
-     * SYS_WAIT loop noticing, evidently sensitive to exactly how many
-     * instructions run before that point in the boot sequence. That
-     * bug is real, is not caused by anything pipe-specific, and is
-     * tracked as its own, separate, honest gap in PROGRESS.md rather
-     * than either silently worked around or left undocumented. */
+     * handling branches) has its own separate, permanent, ring-3
+     * verification inside sandbox_demo_task() (kernel/task/
+     * sandbox_demo.c) - earlier attempts at exactly this ring-3 test
+     * reproducibly triggered what looked at the time like a genuine,
+     * pre-existing scheduler bug (a hang after some unrelated process
+     * exited); that was tracked down to its real cause - not the
+     * scheduler at all, but tools/linker.ld not capturing rustc's
+     * per-symbol section naming (`.bss.SOMENAME` instead of plain
+     * `.bss`), which left this exact PIPES array outside the range
+     * pmm_init() reserves as "already part of the kernel's own loaded
+     * image" and therefore available for pmm_alloc_frame() to (and
+     * eventually did) hand out to an ordinary process's page
+     * directory, silently aliasing the two. See PROGRESS.md for the
+     * full account of that investigation. */
     {
         extern int rust_pipe_create(void);
         extern int rust_pipe_read(int id, uint8_t* buf, uint32_t max_len);

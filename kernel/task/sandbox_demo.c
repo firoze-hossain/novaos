@@ -79,12 +79,39 @@ static inline int sys_fork(void) {
     return result;
 }
 
+static inline int sys_pipe(int out_handles[2]) {
+    int result = SYS_PIPE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(out_handles)
+                       : "memory", "cc");
+    return result;
+}
+
+static inline int sys_write_handle(int handle, const void* buf, int len) {
+    int result = SYS_WRITE_HANDLE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(buf), "d"(len)
+                       : "memory", "cc");
+    return result;
+}
+
 static inline void sys_exit(int exit_code) {
     /* Phase 23: SYS_EXIT now takes an exit code in EBX (previously
      * ignored) - explicitly passing 0 here rather than leaving EBX as
      * whatever it happened to contain, now that the kernel actually
      * records and can return this value via process_wait(). */
     __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT), "b"(exit_code));
+}
+
+static bool bytes_equal(const char* a, const char* b, int len) {
+    for (int i = 0; i < len; i++) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void sandbox_demo_task(void) {
@@ -206,6 +233,43 @@ void sandbox_demo_task(void) {
     } else {
         sys_write("[sandbox] FAIL: SYS_EXEC(\"HELLOC.ELF\") failed to "
                   "start.\n");
+    }
+
+    /* Phase 36: SYS_PIPE/SYS_WRITE_HANDLE, exercised through the real
+     * ring-3 syscall path - proves the syscall-dispatch layer around
+     * kernel/rust/pipe.rs works correctly (the Rust implementation
+     * itself has its own, separate, more thorough direct-call
+     * self-test - see kernel_main()). A standing, automated part of
+     * this task's self-test suite - see tools/linker.ld's own comment
+     * and PROGRESS.md for the real bug this test originally,
+     * reproducibly exposed (nothing to do with pipes' own
+     * correctness) and its fix, before which this exact test had to
+     * be temporarily left out of the automated suite. */
+    int pipe_handles[2] = {-1, -1};
+    if (sys_pipe(pipe_handles) == 0) {
+        int read_handle = pipe_handles[0];
+        int write_handle = pipe_handles[1];
+        static const char pipe_msg[] = "Hello through a NovaOS pipe!";
+        const int pipe_msg_len = (int)sizeof(pipe_msg) - 1;
+
+        int written = sys_write_handle(write_handle, pipe_msg, pipe_msg_len);
+        char pipe_readback[64];
+        int got = sys_read(read_handle, pipe_readback,
+                            (int)sizeof(pipe_readback));
+        sys_close(read_handle);
+        sys_close(write_handle);
+
+        if (written == pipe_msg_len && got == pipe_msg_len &&
+            bytes_equal(pipe_readback, pipe_msg, pipe_msg_len)) {
+            sys_write("[sandbox] PASS: SYS_PIPE/SYS_WRITE_HANDLE/SYS_READ - "
+                      "wrote and read back the exact same message through "
+                      "a pipe.\n");
+        } else {
+            sys_write("[sandbox] FAIL: pipe readback didn't match what was "
+                      "written.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_PIPE failed.\n");
     }
 
     /* Phase 27: prove fork() genuinely duplicates this process and
