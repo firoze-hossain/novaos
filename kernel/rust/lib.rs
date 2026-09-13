@@ -25,6 +25,7 @@
 #![no_std]
 
 mod pipe;
+mod spinlock;
 
 use core::panic::PanicInfo;
 
