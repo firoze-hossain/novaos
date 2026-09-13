@@ -12,6 +12,10 @@
 
 static char g_hostname[SYSCONFIG_HOSTNAME_MAX] = "novaos";
 static char g_username[SYSCONFIG_USERNAME_MAX] = "user";
+/* Phase 37: defaults to this project's own current, single userland's
+ * init program - see firstrun.h's own comment on when/why this stays
+ * at the default rather than whatever a loaded SYSTEM.CFG says. */
+static char g_init_path[SYSCONFIG_INIT_PATH_MAX] = "SHELL.ELF";
 
 static void bounded_copy(char* dest, const char* src, size_t size) {
     size_t i = 0;
@@ -49,6 +53,17 @@ void firstrun_check_and_run(void) {
     if (sysconfig_load(&cfg)) {
         bounded_copy(g_hostname, cfg.hostname, sizeof(g_hostname));
         bounded_copy(g_username, cfg.username, sizeof(g_username));
+        /* Phase 37: an old-format SYSTEM.CFG can never reach this
+         * branch at all (sysconfig_load()'s exact-size check already
+         * rejected it, sending this boot down the first-run path
+         * instead - see sysconfig.h). This guard instead covers a
+         * *new*-format config whose init_path was simply never set
+         * (e.g. written by code that only knew about hostname/
+         * username) - g_init_path's own compiled-in default is kept
+         * rather than overwriting it with an empty string. */
+        if (cfg.init_path[0] != '\0') {
+            bounded_copy(g_init_path, cfg.init_path, sizeof(g_init_path));
+        }
 
         vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
         vga_printf("Welcome back, %s! (%s)\n\n", g_username, g_hostname);
@@ -91,6 +106,12 @@ void firstrun_check_and_run(void) {
     memset(&new_cfg, 0, sizeof(new_cfg));
     bounded_copy(new_cfg.hostname, hostname_buf, sizeof(new_cfg.hostname));
     bounded_copy(new_cfg.username, username_buf, sizeof(new_cfg.username));
+    /* Phase 37: explicit, not left as the zero-fill above plus a
+     * reader-side fallback - a SYSTEM.CFG this wizard writes should be
+     * a complete, self-describing record of what this system boots
+     * into, not something that only works by relying on every future
+     * reader happening to default it the same way. */
+    bounded_copy(new_cfg.init_path, g_init_path, sizeof(new_cfg.init_path));
 
     if (sysconfig_save(&new_cfg)) {
         vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
@@ -114,4 +135,8 @@ const char* firstrun_get_hostname(void) {
 
 const char* firstrun_get_username(void) {
     return g_username;
+}
+
+const char* firstrun_get_init_path(void) {
+    return g_init_path;
 }

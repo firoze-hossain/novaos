@@ -19,6 +19,7 @@ bool sysconfig_load(sysconfig_t* out) {
      * these fields (vga_printf, string comparisons) assumes one. */
     out->hostname[SYSCONFIG_HOSTNAME_MAX - 1] = '\0';
     out->username[SYSCONFIG_USERNAME_MAX - 1] = '\0';
+    out->init_path[SYSCONFIG_INIT_PATH_MAX - 1] = '\0';
     return true;
 }
 

@@ -25,4 +25,14 @@ void firstrun_check_and_run(void);
 const char* firstrun_get_hostname(void);
 const char* firstrun_get_username(void);
 
+/* Phase 37: which program kernel_main() should exec as PID 1 - see
+ * sysconfig.h's own comment on why this exists (making the kernel's
+ * boot handoff config-driven instead of a hardcoded string). Always
+ * returns a valid, non-empty 8.3 filename: "SHELL.ELF" if no disk is
+ * attached, if this is a genuinely first boot, or if a loaded
+ * SYSTEM.CFG has this field empty (an old-format file, or a config
+ * that simply never set it) - the same "safe, working default over a
+ * hard failure" choice this file already makes for hostname/username. */
+const char* firstrun_get_init_path(void);
+
 #endif
