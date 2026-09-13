@@ -218,6 +218,35 @@
  * -1 if the deadline passed with no reply. */
 #define SYS_PING_POLL 26
 
+/* Phase 36: this kernel's first real inter-process communication
+ * primitive - a pipe, implemented in kernel/rust/pipe.rs (see that
+ * file's own header comment for the full design and honest scope
+ * limits, especially: non-blocking, and not yet inherited across
+ * fork()). Both syscalls below extend the existing open_files[]
+ * handle table (Phase 11) with a new, non-VFS-backed handle kind,
+ * rather than introducing a separate handle namespace - SYS_READ and
+ * SYS_CLOSE (Phase 11) already work unchanged on a pipe's read handle,
+ * since both now dispatch on the handle's kind internally.
+ *
+ * EBX = pointer to a 2-int buffer the kernel fills with
+ * {read_handle, write_handle} on success. No capability check: a
+ * process's own pipe, connecting only its own future SYS_READ/
+ * SYS_WRITE_HANDLE calls to each other, isn't a read of anything
+ * outside itself - the same reasoning SYS_SBRK/SYS_FORK already use.
+ * Returns 0 on success, -1 on failure (open_files[] or the Rust pipe
+ * table exhausted). */
+#define SYS_PIPE 27
+
+/* EBX = handle, ECX = buffer, EDX = length. The write-side complement
+ * to the existing SYS_READ - deliberately scoped to pipe write-end
+ * handles only for this phase (a VFS handle, which SYS_OPEN only ever
+ * hands out for reading, returns -1 here; whole-file writes still go
+ * through the separate, existing SYS_WRITE_FILE). Returns bytes
+ * actually written (may be less than `length` if the pipe's buffer
+ * is full - see pipe.rs), or -1 (invalid/not-owned/non-pipe handle,
+ * or the pipe's read end has already been closed). */
+#define SYS_WRITE_HANDLE 28
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

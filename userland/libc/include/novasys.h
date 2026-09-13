@@ -38,6 +38,8 @@
 #define SYS_MOUSE_READ 24
 #define SYS_PING_START 25
 #define SYS_PING_POLL 26
+#define SYS_PIPE 27
+#define SYS_WRITE_HANDLE 28
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -90,5 +92,17 @@ void sys_gfx_fill_rect(int x, int y, int w, int h, unsigned char color);
 int sys_mouse_read(nova_mouse_state_t* out);
 void sys_ping_start(unsigned int dest_ip);
 int sys_ping_poll(unsigned int* out_rtt);
+
+/* Phase 36: kernel pipes. sys_pipe() fills out_handles[0]/[1] with a
+ * fresh {read_handle, write_handle} pair, returning 0 on success or
+ * -1 on failure. The read end is read with the existing sys_read()
+ * and closed with the existing sys_close() - both already dispatch
+ * correctly on a pipe handle (see kernel/arch/x86/cpu/syscall.c);
+ * only writing needed a new syscall at all, since nothing before this
+ * phase could write to a handle rather than a whole named file.
+ * sys_write_handle() returns bytes actually written (may be less than
+ * `len` - see kernel/rust/pipe.rs), or -1. */
+int sys_pipe(int out_handles[2]);
+int sys_write_handle(int handle, const void* buf, int len);
 
 #endif

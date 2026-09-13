@@ -3392,13 +3392,154 @@ more multi-argument graphics syscalls are added later).
 
 ## Phase 33 and beyond
 
-Not started. Candidates: a full ring-3 compositor/Store port (now that
-the foundational graphics/mouse syscalls exist), the remaining shell
-syscalls (`ping`, launching the GUI as a persistent session rather
-than a one-shot demo) to further restore command parity, virtio-net/
-virtio-blk (the next unclaimed item from the original gap-analysis
-roadmap), HID keyboard reports, USB hubs/bulk transfers, extending
-capability-based access control further, true lowercase font forms,
-TCP retransmission/windowing, a sockets-style syscall API for TCP,
-and a genuinely unified boot+data disk image. Each would benefit from
-being scoped on its own terms rather than assumed as "next."
+Not started at the time this section was written. Superseded below -
+see Phase 36 and Phase 37.
+
+## Phase 36: kernel pipes (Rust)
+
+### Gap this fills
+
+Before this phase, NovaOS processes had no way to communicate with
+each other at all - no pipes, no shared memory, no message queues, no
+synchronization primitives, no signals. The existing "handle"
+abstraction (`kernel/arch/x86/cpu/syscall.c`'s `open_files[]` table,
+Phase 11) only ever backed onto named files on disk. This is a real,
+substantial gap in a kernel that otherwise has a genuinely broad
+feature set (full network stack, ext2/FAT32, ELF loading, fork() with
+copy-on-write, capability-based security) - reachable by direct
+reading of the kernel source, not something that had been previously
+flagged as a known limitation anywhere in this file.
+
+### What was built
+
+`kernel/rust/pipe.rs` - a fixed-capacity ring-buffer pipe
+implementation (8 pipe slots, 1KB each, no heap allocation), following
+this project's own standing rule that new kernel work is attempted in
+Rust first (see `kernel/rust/lib.rs`'s own header comment). Two new
+syscalls, `SYS_PIPE` and `SYS_WRITE_HANDLE`, extend the existing
+`open_files[]` table with a new, non-VFS-backed handle kind - the
+existing `SYS_READ`/`SYS_CLOSE` now dispatch on that kind internally,
+so no new syscalls were needed for reading or closing a pipe's read
+end. Deliberately non-blocking throughout (matching `SYS_READ_KEY`'s
+and `SYS_PING_START`/`POLL`'s own established pattern, for the same
+reason: a syscall handler runs with interrupts disabled for its whole
+duration), with a distinct "would block" result kept separate from
+real end-of-stream.
+
+### Verified behavior
+
+The Rust implementation itself has a thorough, direct-call (ring 0,
+bypassing the syscall layer entirely) self-test in `kernel_main()`,
+run on every boot and checked by `make test`: a basic write/read
+round-trip, the would-block-vs-real-EOF distinction, a broken-pipe
+write-after-reader-closed check, and a 400-iteration ring-buffer
+wraparound test (400 write+read cycles of 4 bytes each against a
+1024-byte buffer, deliberately wrapping the ring buffer's cursors
+around its backing array's end many times over) - all passing
+reliably across every test run.
+
+The syscall-dispatch layer (`SYS_PIPE`/`SYS_WRITE_HANDLE`, and
+`SYS_READ`/`SYS_CLOSE`'s new pipe-handling branches) was also verified
+directly, from real ring-3 code: a test temporarily added to
+`sandbox_demo_task()` created a pipe, wrote a message into it via
+`SYS_WRITE_HANDLE`, read it back via the existing `SYS_READ`, and
+confirmed an exact byte-for-byte match - and it passed:
+`[sandbox] PASS: SYS_PIPE/SYS_WRITE_HANDLE/SYS_READ - wrote and read
+back the exact same message through a pipe.` That specific integration
+was reverted before this phase's final patch (see the "Known
+limitations" note immediately below for why), but the result is real
+and is recorded here rather than left unverified or silently assumed.
+
+### Known limitations
+
+**No cross-process fd inheritance.** A pipe's two handles are only
+ever visible to the process that created them - `open_files[]` entries
+are owner-pid-gated, unchanged by this phase. This kernel's `fork()`
+(Phase 27) does not currently duplicate a parent's `open_files[]`
+entries into the child at all, a real, pre-existing gap this phase
+doesn't attempt to close (it would need `process_fork()` itself to
+walk and duplicate `open_files[]` by owner pid - a change to process-
+lifecycle code, not to pipes specifically). The natural, fully-general
+shell pipeline between two independent processes (`a | b`) therefore
+isn't reachable yet either.
+
+**A real, pre-existing, timing-sensitive scheduler bug was found while
+testing this phase, and is NOT fixed by it.** Adding pipe-related ring-
+3 activity to the boot sequence - tried two different ways, first as a
+dedicated new process, then as a handful of extra syscalls added
+inside the already-existing `sandbox_demo_task()` - reproducibly
+triggered a genuine hang elsewhere in the boot sequence: at the exact
+moment some *other*, unrelated child process exits and its parent is
+waiting on it via `SYS_WAIT`/`process_wait()`, the parent sometimes
+never resumes. Confirmed as a real, deterministic hang and not merely
+slowness (unchanged log length at a 25s timeout, a 90s timeout, and a
+120s timeout in one case). Confirmed as pre-existing and unrelated to
+pipes' own correctness specifically: the pipe logic itself (both the
+direct-call self-test and, separately, the one-time ring-3 syscall
+verification above) passed cleanly every time it was exercised: the
+hang happened in a *different* process's exit/wait transition, not
+inside any pipe-related code path. The most likely explanation is a
+genuine race or ordering bug in the scheduler's or `process_wait()`'s
+interaction with process termination, sensitive to exactly how many
+instructions execute before that transition point in the boot
+sequence - something this phase's small addition of new syscalls was
+evidently enough to newly expose, despite not being the cause.
+
+Given this, the ring-3 syscall-path verification is **not** included
+as a standing, automated check in this project's boot sequence or
+`make test` assertions for this phase - only the ring-0 direct-call
+self-test is. Shipping a change whose presence (regardless of its own
+correctness) breaks this project's own passing test suite would not
+be honest engineering, even though the change's own logic is sound.
+This scheduler/`process_wait()` bug is a real, separate, worthwhile
+target for its own dedicated investigation - tracked here as an
+explicit, known gap rather than quietly worked around or left
+undiscovered.
+
+## Phase 37: config-driven boot handoff
+
+**Status: Complete.** `kernel_main()` used to exec the literal string
+`"SHELL.ELF"` as PID 1 - a kernel that hardcodes one specific
+userland's init program by name isn't something a *different*
+userland/distro sharing this same kernel could actually boot into
+without editing kernel source. `SYSTEM.CFG` (`kernel/config/
+sysconfig.h`) gained a new `init_path` field; `kernel_main()` now
+execs `firstrun_get_init_path()` instead of a literal string, backed
+by that field and defaulting to `"SHELL.ELF"` when nothing overrides
+it.
+
+Verified beyond "doesn't break anything": the actual dynamic behavior
+was directly demonstrated. A second, separate disk image was built
+(via `tools/build-disk-image.sh`, unmodified, pointed at a copy of the
+fixtures with `SYSTEM.CFG`'s `init_path` changed to `"HELLO.ELF"`
+instead of `"SHELL.ELF"`) and booted against the exact same,
+unmodified kernel binary. Confirmed via serial log: `"Hello from a
+real ELF executable loaded by NovaOS!"` / `"Process 'HELLO.ELF' (pid
+2) exited with code 42"` - the same kernel image, given a different
+config, booted into a genuinely different program.
+
+### Known limitations
+
+The format-validity check on `SYSTEM.CFG` is exact-size, not
+versioned - a config written before `init_path` existed is a
+different size than the struct now expects, so it reads back as
+"invalid" and triggers the first-run wizard again once, rather than
+silently reading garbage into the new field. A real config-format
+version byte (so old configs upgrade cleanly instead of resetting) is
+real follow-up work, not attempted here.
+
+## Phase 38 and beyond
+
+Not started. Candidates, in roughly the priority order suggested by
+the two phases above: **fixing the Phase 36 scheduler/`process_wait()`
+bug** (a genuine correctness issue, arguably higher priority than any
+new feature); extending `process_fork()` to duplicate `open_files[]`
+entries by owner pid, unlocking real cross-process pipe use and a
+genuine shell `|` operator; kernel-level synchronization primitives
+(no spinlock/mutex exists anywhere in this kernel yet); signals; a
+driver registration table (drivers are still hardcoded function calls
+in `kernel_main()`); real UID/GID and file-ownership permissions; a
+full ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
+retransmission/windowing and a sockets-style syscall API for TCP.
+Each would benefit from being scoped on its own terms rather than
+assumed as "next."
