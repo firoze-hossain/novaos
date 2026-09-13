@@ -263,9 +263,39 @@ static void free_user_address_space(uint32_t page_directory_phys) {
         uint32_t pt_phys = pd[i] & 0xFFFFF000u;
         uint32_t* pt = (uint32_t*)pt_phys;
         for (uint32_t j = 0; j < 1024; j++) {
-            if (pt[j] & PAGE_PRESENT) {
-                pmm_free_frame(pt[j] & 0xFFFFF000u);
+            if (!(pt[j] & PAGE_PRESENT)) {
+                continue;
             }
+            /* A real, previously-undiscovered bug, found and fixed
+             * here (not the already-documented "COW frames leak"
+             * limitation in PROGRESS.md - this is a worse, different
+             * problem than a leak): a page still marked PAGE_COW may
+             * still be actively mapped and in use by another process
+             * - the parent this one was fork()'d from, or a sibling
+             * that shares the same original frame. Freeing it here
+             * unconditionally, as this code previously did, hands
+             * that exact physical frame to the PMM's free list while
+             * that other process's own page tables still point at it
+             * as present, valid memory - the next unrelated
+             * pmm_alloc_frame() call anywhere in the kernel can then
+             * hand the same physical frame to something completely
+             * different, which promptly overwrites live code/data/
+             * stack contents the other process still depends on.
+             * Confirmed as the real mechanism behind a hang this
+             * project had been treating as a mysterious, timing-
+             * sensitive scheduler bug: instrumented the scheduler
+             * directly and traced the exact failure to a process
+             * being scheduled immediately after a fork()'d sibling
+             * exited and freed a still-shared page this way. Without
+             * this fix, a COW frame is never freed at all - a real,
+             * bounded leak (documented in PROGRESS.md's own Phase 27
+             * notes), not a correctness bug - which is the safe,
+             * conservative fallback until real reference counting on
+             * shared frames exists (tracked as its own follow-up). */
+            if (pt[j] & PAGE_COW) {
+                continue;
+            }
+            pmm_free_frame(pt[j] & 0xFFFFF000u);
         }
         pmm_free_frame(pt_phys);
     }
