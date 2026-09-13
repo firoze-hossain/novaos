@@ -524,8 +524,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     process_init();
     process_create_kernel_task("idle", idle_task_entry);
-    /* Phase 30: NovaOS now boots into a genuine ring-3 shell
-     * (SHELL.ELF, userland/ring3-shell/shell.c) via
+    /* Phase 30: NovaOS now boots into a genuine ring-3 shell via
      * process_exec_as_shell() instead of running a shell as a
      * ring-0 kernel task (userland/shell/shell.c, Phase 29's
      * organizationally-separated but still-ring-0 shell, kept in the
@@ -534,9 +533,23 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * process_create_*() call here) - safe to call directly from
      * kernel_main() before scheduler_start(), unlike a call that
      * would block on process_wait(). See PROGRESS.md for the honest
-     * scope note on which commands this shell doesn't have yet. */
-    const char* shell_argv[] = {"SHELL.ELF"};
-    process_exec_as_shell("SHELL.ELF", shell_argv, 1);
+     * scope note on which commands this shell doesn't have yet.
+     *
+     * Phase 37: WHICH file to exec here is no longer a literal string
+     * baked into this function - it comes from
+     * firstrun_get_init_path() (backed by SYSTEM.CFG's new init_path
+     * field, see sysconfig.h), defaulting to this project's own
+     * current shell ("SHELL.ELF") when nothing else is configured.
+     * This is the concrete fix for a real, previously-named gap: a
+     * kernel that hardcodes one specific userland's init program by
+     * name isn't something a *different* userland could boot into
+     * without editing kernel source. A different userland/distro
+     * sharing this same kernel binary now only needs its own
+     * SYSTEM.CFG (or first-run wizard) to name a different init
+     * program - no kernel change required. */
+    const char* init_path = firstrun_get_init_path();
+    const char* shell_argv[] = {init_path};
+    process_exec_as_shell(init_path, shell_argv, 1);
     process_create_kernel_task("coreutils-test", coreutils_test_task);
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);
