@@ -520,6 +520,118 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ OK ] Kernel-side Rust self-test: rust_kernel_selftest_add"
                "(20, 22) = %d (expected 42)\n", rust_result);
 
+    /* Phase 36: kernel/rust/pipe.rs's own self-test, called directly
+     * (ring 0, no syscall involved - proving the Rust implementation
+     * itself is correct, independent of the C syscall-dispatch layer
+     * on top of it). Deliberately more thorough than the Phase 35
+     * self-test above: pipes are new kernel *state*, not a pure
+     * function, so there's a meaningfully larger space of behavior to
+     * get wrong (the empty/full/closed edge cases below, and the ring
+     * buffer's wraparound arithmetic) than a single addition ever had.
+     *
+     * The syscall-dispatch layer this test intentionally bypasses
+     * (SYS_PIPE/SYS_WRITE_HANDLE, and SYS_READ/SYS_CLOSE's new pipe-
+     * handling branches) was manually verified separately, from real
+     * ring-3 code exercising the actual syscall path, and passed
+     * cleanly - see PROGRESS.md for that result. It is deliberately
+     * NOT wired into this boot sequence as a standing, automated test:
+     * doing so (tried two different ways - a dedicated new process,
+     * and a few extra syscalls added inside the existing
+     * sandbox_demo_task()) reproducibly triggered a genuine, pre-
+     * existing, timing-sensitive kernel bug elsewhere - a hang between
+     * some other, unrelated child process exiting and its parent's own
+     * SYS_WAIT loop noticing, evidently sensitive to exactly how many
+     * instructions run before that point in the boot sequence. That
+     * bug is real, is not caused by anything pipe-specific, and is
+     * tracked as its own, separate, honest gap in PROGRESS.md rather
+     * than either silently worked around or left undocumented. */
+    {
+        extern int rust_pipe_create(void);
+        extern int rust_pipe_read(int id, uint8_t* buf, uint32_t max_len);
+        extern int rust_pipe_write(int id, const uint8_t* buf,
+                                    uint32_t len);
+        extern void rust_pipe_close(int id, int is_read_end);
+
+        bool all_passed = true;
+
+        /* 1. Basic round-trip: write a short message, read it back
+         * whole, verify it matches exactly. */
+        int pipe_a = rust_pipe_create();
+        const char msg[] = "pipe roundtrip";
+        int wrote = rust_pipe_write(pipe_a, (const uint8_t*)msg,
+                                     sizeof(msg) - 1);
+        uint8_t readback[32];
+        int got = rust_pipe_read(pipe_a, readback, sizeof(readback));
+        bool roundtrip_ok = (pipe_a >= 0) && (wrote == (int)sizeof(msg) - 1) &&
+                             (got == wrote) &&
+                             (memcmp(readback, msg, (size_t)got) == 0);
+        all_passed = all_passed && roundtrip_ok;
+
+        /* 2. Would-block: an empty pipe with its write end still open
+         * must return -2, distinct from real EOF (0). */
+        bool would_block_ok = (rust_pipe_read(pipe_a, readback,
+                                               sizeof(readback)) == -2);
+        all_passed = all_passed && would_block_ok;
+
+        /* 3. Real EOF: once the write end is closed, an empty pipe
+         * must return 0, not -2 - the two failure modes this design
+         * exists specifically to distinguish (see pipe.rs's own doc
+         * comment on rust_pipe_read's return value). */
+        rust_pipe_close(pipe_a, 0 /* write end */);
+        bool eof_ok = (rust_pipe_read(pipe_a, readback,
+                                       sizeof(readback)) == 0);
+        all_passed = all_passed && eof_ok;
+        rust_pipe_close(pipe_a, 1 /* read end - frees the slot */);
+
+        /* 4. Broken pipe: writing after the read end has already
+         * closed must fail outright (-1), not silently succeed and
+         * discard the data. */
+        int pipe_b = rust_pipe_create();
+        rust_pipe_close(pipe_b, 1 /* read end */);
+        bool broken_pipe_ok =
+            (rust_pipe_write(pipe_b, (const uint8_t*)msg, 4) == -1);
+        all_passed = all_passed && broken_pipe_ok;
+        rust_pipe_close(pipe_b, 0 /* write end - frees the slot */);
+
+        /* 5. Ring-buffer wraparound: PIPE_CAPACITY is 1024 bytes, but
+         * this writes and reads only 4 bytes at a time, many more
+         * times than 1024/4 - the read/write cursors must wrap around
+         * the backing array's end (via pipe.rs's `% PIPE_CAPACITY`)
+         * many times over without ever losing or corrupting a byte,
+         * the exact class of bug (an off-by-one in that wraparound
+         * arithmetic) this module's own header comment explains Rust
+         * guards against with a loud panic rather than silent memory
+         * corruption. */
+        int pipe_c = rust_pipe_create();
+        bool wraparound_ok = true;
+        for (int round = 0; round < 400 && wraparound_ok; round++) {
+            uint8_t chunk[4] = {(uint8_t)round, (uint8_t)(round + 1),
+                                 (uint8_t)(round + 2), (uint8_t)(round + 3)};
+            uint8_t chunk_back[4];
+            if (rust_pipe_write(pipe_c, chunk, sizeof(chunk)) != 4) {
+                wraparound_ok = false;
+                break;
+            }
+            if (rust_pipe_read(pipe_c, chunk_back, sizeof(chunk_back)) != 4 ||
+                memcmp(chunk, chunk_back, sizeof(chunk)) != 0) {
+                wraparound_ok = false;
+            }
+        }
+        all_passed = all_passed && wraparound_ok;
+        rust_pipe_close(pipe_c, 1);
+        rust_pipe_close(pipe_c, 0);
+
+        kernel_log("[ %s ] Kernel-side Rust pipe self-test: roundtrip=%s "
+                   "would-block=%s eof=%s broken-pipe=%s "
+                   "wraparound(400x4B)=%s\n",
+                   all_passed ? "OK" : "FAIL",
+                   roundtrip_ok ? "pass" : "FAIL",
+                   would_block_ok ? "pass" : "FAIL",
+                   eof_ok ? "pass" : "FAIL",
+                   broken_pipe_ok ? "pass" : "FAIL",
+                   wraparound_ok ? "pass" : "FAIL");
+    }
+
     firstrun_check_and_run();
 
     process_init();

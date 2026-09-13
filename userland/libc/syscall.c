@@ -192,3 +192,21 @@ int sys_ping_poll(unsigned int* out_rtt) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_pipe(int out_handles[2]) {
+    int result = SYS_PIPE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(out_handles)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_write_handle(int handle, const void* buf, int len) {
+    int result = SYS_WRITE_HANDLE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(buf), "d"(len)
+                       : "memory", "cc");
+    return result;
+}

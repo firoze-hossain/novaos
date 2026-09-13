@@ -24,6 +24,8 @@
 
 #![no_std]
 
+mod pipe;
+
 use core::panic::PanicInfo;
 
 extern "C" {

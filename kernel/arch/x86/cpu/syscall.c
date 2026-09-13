@@ -40,17 +40,40 @@ extern void isr128(void);
 
 #define MAX_OPEN_FILES 8
 
+/* Phase 36: which kind of resource a handle actually refers to. The
+ * table stayed VFS-only from Phase 11 through Phase 35; pipes (see
+ * kernel/rust/pipe.rs) are the first non-VFS-backed handle kind, so
+ * every entry now needs to say which it is. pipe_id is only
+ * meaningful when kind != OPEN_KIND_VFS. */
+typedef enum {
+    OPEN_KIND_VFS = 0,
+    OPEN_KIND_PIPE_READ,
+    OPEN_KIND_PIPE_WRITE,
+} open_kind_t;
+
 typedef struct {
     bool in_use;
     int owner_pid; /* only the process that opened a handle may use it -
                        guessing/reusing another process's handle number
                        is not a way around the capability check that
                        already happened at SYS_OPEN time */
+    open_kind_t kind;
+    int pipe_id;    /* meaningful only when kind != OPEN_KIND_VFS */
     char filename[13];
     uint32_t offset;
 } open_file_t;
 
 static open_file_t open_files[MAX_OPEN_FILES];
+
+/* Phase 36: kernel/rust/pipe.rs's exported functions - see that
+ * file's own doc comments for the full contract of each. Declared
+ * once here since (unlike kernel/init/main.c's single-call-site
+ * self-test) every one of these is used from more than one function
+ * below. */
+extern int rust_pipe_create(void);
+extern int rust_pipe_read(int id, uint8_t* buf, uint32_t max_len);
+extern int rust_pipe_write(int id, const uint8_t* buf, uint32_t len);
+extern void rust_pipe_close(int id, int is_read_end);
 
 static int str_eq_ci(const char* a, const char* b) {
     while (*a && *b) {
@@ -124,6 +147,7 @@ static void handle_open(registers_t* regs) {
 
     open_files[slot].in_use = true;
     open_files[slot].owner_pid = p->pid;
+    open_files[slot].kind = OPEN_KIND_VFS;
     open_files[slot].offset = 0;
     size_t i = 0;
     while (filename[i] && i < sizeof(open_files[slot].filename) - 1) {
@@ -151,6 +175,19 @@ static void handle_read(registers_t* regs) {
         return;
     }
 
+    if (open_files[handle].kind == OPEN_KIND_PIPE_READ) {
+        /* Phase 36: the pipe ring-buffer logic itself lives entirely
+         * in kernel/rust/pipe.rs - this is just the dispatch. See
+         * that file's own doc comment for rust_pipe_read()'s full
+         * return-value contract (in particular, -2 means "would
+         * block", not an error - SYS_READ passes it through to the
+         * caller unchanged, the same way it already passes through
+         * -1 for a real error). */
+        regs->eax = (uint32_t)rust_pipe_read(open_files[handle].pipe_id,
+                                              (uint8_t*)buf, max_len);
+        return;
+    }
+
     /* No real per-handle buffering - just re-reads the whole file (up
      * to a fixed scratch size) on every call and slices out whatever
      * the current offset/max_len asks for. Fine for the small demo
@@ -175,12 +212,92 @@ static void handle_read(registers_t* regs) {
     regs->eax = to_copy;
 }
 
+static void handle_write_handle(registers_t* regs) {
+    process_t* p = process_current();
+    int handle = (int)regs->ebx;
+    const void* buf = (const void*)regs->ecx;
+    uint32_t len = regs->edx;
+
+    if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use ||
+        open_files[handle].owner_pid != (p != NULL ? p->pid : -1)) {
+        kernel_log("[SECURITY] pid %d SYS_WRITE_HANDLE with an invalid or "
+                   "not-owned handle %d\n", p != NULL ? p->pid : -1, handle);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    if (open_files[handle].kind != OPEN_KIND_PIPE_WRITE) {
+        /* Explicit, honest scope limit for this phase - see this
+         * syscall's own comment in syscall.h. */
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    regs->eax = (uint32_t)rust_pipe_write(open_files[handle].pipe_id,
+                                           (const uint8_t*)buf, len);
+}
+
+static void handle_pipe(registers_t* regs) {
+    process_t* p = process_current();
+    int* out = (int*)regs->ebx; /* {read_handle, write_handle} */
+
+    if (p == NULL) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int read_slot = -1, write_slot = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!open_files[i].in_use) {
+            if (read_slot < 0) {
+                read_slot = i;
+            } else {
+                write_slot = i;
+                break;
+            }
+        }
+    }
+    if (read_slot < 0 || write_slot < 0) {
+        kernel_log("[FAULT] SYS_PIPE: open file table full\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int pipe_id = rust_pipe_create();
+    if (pipe_id < 0) {
+        kernel_log("[FAULT] SYS_PIPE: no free pipe slots\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    open_files[read_slot].in_use = true;
+    open_files[read_slot].owner_pid = p->pid;
+    open_files[read_slot].kind = OPEN_KIND_PIPE_READ;
+    open_files[read_slot].pipe_id = pipe_id;
+
+    open_files[write_slot].in_use = true;
+    open_files[write_slot].owner_pid = p->pid;
+    open_files[write_slot].kind = OPEN_KIND_PIPE_WRITE;
+    open_files[write_slot].pipe_id = pipe_id;
+
+    out[0] = read_slot;
+    out[1] = write_slot;
+    kernel_log("[SYSCALL] pid %d SYS_PIPE -> read handle %d, write handle %d "
+               "(pipe %d)\n", p->pid, read_slot, write_slot, pipe_id);
+    regs->eax = 0;
+}
+
 static void handle_close(registers_t* regs) {
     process_t* p = process_current();
     int handle = (int)regs->ebx;
 
     if (handle >= 0 && handle < MAX_OPEN_FILES && open_files[handle].in_use &&
         open_files[handle].owner_pid == (p != NULL ? p->pid : -1)) {
+        if (open_files[handle].kind == OPEN_KIND_PIPE_READ) {
+            rust_pipe_close(open_files[handle].pipe_id, 1);
+        } else if (open_files[handle].kind == OPEN_KIND_PIPE_WRITE) {
+            rust_pipe_close(open_files[handle].pipe_id, 0);
+        }
         open_files[handle].in_use = false;
     }
 }
@@ -594,6 +711,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_PING_POLL:
             handle_ping_poll(regs);
+            break;
+
+        case SYS_PIPE:
+            handle_pipe(regs);
+            break;
+
+        case SYS_WRITE_HANDLE:
+            handle_write_handle(regs);
             break;
 
         default:

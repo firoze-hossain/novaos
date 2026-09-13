@@ -171,7 +171,7 @@ $(RUST_SYSROOT_MARKER):
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -293,6 +293,8 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "sandbox. PASS: SYS_NET_SEND to the gateway" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_NET_SEND" $(TEST_LOG) && \
 	    grep -q "SECURITY. pid .* denied SYS_OPEN" $(TEST_LOG) && \
+	    grep -q "Kernel-side Rust pipe self-test.*roundtrip=pass" $(TEST_LOG) && \
+	    grep -q "wraparound.400x4B.=pass" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 
