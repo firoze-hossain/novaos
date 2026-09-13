@@ -6,6 +6,9 @@
 #include "../../arch/x86/io.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
+#include "../driver.h"
+
+DRIVER_REGISTER("AC97 audio", ac97_init, DRIVER_PHASE_AFTER_PCI);
 
 #define AC97_CLASS_MULTIMEDIA 0x04
 #define AC97_SUBCLASS_AUDIO   0x01

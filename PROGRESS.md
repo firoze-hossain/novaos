@@ -3636,17 +3636,87 @@ problem automatically instead of relying on it being large enough to
 notice by symptom again - real, scoped follow-up work, not attempted
 here.
 
-## Phase 39 and beyond
+## Phase 39: driver self-registration
 
-Not started. Candidates: extending `process_fork()` to duplicate
-`open_files[]` entries by owner pid, unlocking real cross-process pipe
-use and a genuine shell `|` operator; kernel-level synchronization
-primitives (no spinlock/mutex exists anywhere in this kernel yet);
-signals; a driver registration table (drivers are still hardcoded
-function calls in `kernel_main()`); real UID/GID and file-ownership
-permissions; a build-time check that `kernel_end` covers every section
-in the final binary (see Phase 38's own "Known limitations"); a full
-ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
-retransmission/windowing and a sockets-style syscall API for TCP.
-Each would benefit from being scoped on its own terms rather than
+**Status: Complete (scoped).** Directly addresses the single largest
+concrete blocker to kernel independence named in this project's own
+NovaOS-Release-Readiness-Kernel-and-Userland.md doc: every driver's
+init function was called by name, directly from `kernel/init/main.c` -
+adding hardware support meant editing the kernel's own boot sequence
+source, not adding a driver source file.
+
+### What was built
+
+`kernel/drivers/driver.h`/`driver.c`: a `DRIVER_REGISTER(name, init_fn,
+phase)` macro each driver's own `.c` file uses to place a small,
+constant `driver_t` into a dedicated linker section (`.drivers`) -
+entirely at compile/link time, no runtime registration call, no C++-
+style static constructors (which need runtime support this early in
+boot isn't guaranteed to have). `driver_init_all(phase)` walks that
+section (bounded by `__drivers_start`/`__drivers_end`, added to
+`tools/linker.ld` with `KEEP()` - required, not just tidy, since
+nothing else directly references any individual entry, which a linker
+doing dead-section elimination could otherwise read as "unused" and
+discard) and runs every driver registered for that phase.
+
+Two phases exist (`DRIVER_PHASE_EARLY`, `DRIVER_PHASE_AFTER_PCI`)
+specifically to avoid reordering anything relative to the known-good
+boot sequence, rather than one flat list run all at once - PS/2
+keyboard/mouse have no dependency on PCI enumeration having run;
+UHCI/AC97 (PCI-based) genuinely do. Migrated this phase: PS/2 keyboard,
+PS/2 mouse, UHCI, AC97 - the four current drivers with no interleaved,
+order-sensitive self-test logic of their own between them. `timer_init`
+(tightly coupled to `scheduler_on_tick`'s hook setup), `vfs_init`, and
+`net_init` (both interleaved with several self-tests each, immediately
+after) stay as explicit calls for now - migrating those is real,
+separate follow-up work, not attempted in this same pass, specifically
+to avoid the class of subtle ordering bug this project already spent
+real effort tracking down once (Phase 38).
+
+### Verified behavior
+
+Beyond `make test` passing (now with explicit assertions that all four
+migrated drivers actually logged their own initialization - a real
+regression check, not just "the overall test passed"): confirmed via
+`nm`/`objdump` that `__drivers_start`/`__drivers_end` land well inside
+`kernel_start`/`kernel_end`, and that the `.drivers` section's size
+(48 bytes) exactly matches 4 drivers × `sizeof(driver_t)` - not just
+"it built," but confirmed the actual data is where it's supposed to
+be, learned directly from Phase 38's own investigation rather than
+assumed safe this time.
+
+The core claim - a new driver requires zero `kernel/init/main.c`
+changes - was directly demonstrated, not just argued: a temporary,
+minimal driver (`DRIVER_REGISTER` call, one init function, nothing
+else) was added as its own new file, confirmed to run at boot via its
+own log line, with `git diff --stat kernel/init/main.c` unchanged from
+before that file existed - then removed once it had proven the point,
+not shipped as part of this phase's actual delivered change.
+
+### Known limitations
+
+Only 4 of this kernel's ~10 drivers are migrated - timer/VFS/net stay
+as explicit calls, an intentional, scoped boundary for this phase (see
+above), not an oversight. No true dependency-ordering support exists
+(just two hand-chosen phases) - a driver with a dependency this
+two-phase model can't express would need either a new phase added or
+genuine dependency-graph support, neither attempted here.
+
+## Phase 40 and beyond
+
+Not started. Candidates: migrating `timer_init`/`vfs_init`/`net_init`
+to driver registration too (their own self-test interleaving would
+need to move with them, or stay behind as separate, later self-test
+functions - a real design question, not just mechanical migration);
+extending `process_fork()` to duplicate `open_files[]` entries by
+owner pid, unlocking real cross-process pipe use and a genuine shell
+`|` operator; kernel-level synchronization primitives (no spinlock/
+mutex exists anywhere in this kernel yet); signals; real UID/GID and
+file-ownership permissions; a versioned, single-source-of-truth
+syscall ABI header (`kernel/arch/x86/cpu/syscall.h` and `userland/
+libc/include/novasys.h` are still two, hand-synchronized copies); a
+build-time check that `kernel_end` covers every section in the final
+binary (Phase 38's own "Known limitations"); a full ring-3 compositor/
+Store port; virtio-net/virtio-blk; TCP retransmission/windowing and a
+sockets-style syscall API for TCP.
 assumed as "next."

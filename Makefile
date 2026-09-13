@@ -296,6 +296,10 @@ test: $(ISO_FILE) $(DISK_IMG)
 	    grep -q "Kernel-side Rust pipe self-test.*roundtrip=pass" $(TEST_LOG) && \
 	    grep -q "wraparound.400x4B.=pass" $(TEST_LOG) && \
 	    grep -q "sandbox. PASS: SYS_PIPE" $(TEST_LOG) && \
+	    grep -q "Driver .PS/2 keyboard. initializing" $(TEST_LOG) && \
+	    grep -q "Driver .PS/2 mouse. initializing" $(TEST_LOG) && \
+	    grep -q "Driver .UHCI USB controller. initializing" $(TEST_LOG) && \
+	    grep -q "Driver .AC97 audio. initializing" $(TEST_LOG) && \
 	    ! grep -q "PANIC\|FAULT\|FAIL" $(TEST_LOG) && \
 	    echo "✅ Boot test PASSED" || (echo "❌ Boot test FAILED" && exit 1)
 

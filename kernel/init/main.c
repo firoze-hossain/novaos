@@ -2,8 +2,7 @@
 #include "../drivers/vga/vga.h"
 #include "../drivers/serial/serial.h"
 #include "../drivers/timer/timer.h"
-#include "../drivers/keyboard/keyboard.h"
-#include "../drivers/mouse/ps2mouse.h"
+#include "../drivers/driver.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/cpu/idt.h"
 #include "../arch/x86/cpu/tss.h"
@@ -16,7 +15,6 @@
 #include "../fs/ext2.h"
 #include "../../userland/pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
-#include "../drivers/usb/uhci.h"
 #include "../drivers/sound/ac97.h"
 #include "../net/net.h"
 #include "../net/dns.h"
@@ -122,10 +120,11 @@ void kernel_late_init(void) {
                TIMER_FREQUENCY_HZ);
     timer_set_tick_hook(scheduler_on_tick);
 
-    keyboard_init();
-    kernel_log("[ OK ] PS/2 keyboard initialized (IRQ1)\n");
-
-    ps2mouse_init();
+    /* Phase 39: PS/2 keyboard + mouse are the first drivers migrated
+     * to self-registration (kernel/drivers/driver.h) - see that
+     * file's own comment for why this phase specifically, and why
+     * timer/VFS/net below stay as explicit calls for now. */
+    driver_init_all(DRIVER_PHASE_EARLY);
 
     vfs_init();
 
@@ -301,19 +300,24 @@ void kernel_late_init(void) {
      * in the log for whatever's attached via QEMU's -device usb-kbd
      * or similar, the same "does the log show a real, specific result"
      * standard every other driver in this project is held to. See
-     * PROGRESS.md for the full scope. */
-    usb_uhci_init();
+     * PROGRESS.md for the full scope.
+     *
+     * Phase 39: both UHCI and AC97 below are now driver_init_all()-
+     * registered rather than called by name - both are PCI-based, so
+     * both need pci_enumerate() (just above) to have already run,
+     * which is exactly why DRIVER_PHASE_AFTER_PCI exists as its own
+     * phase rather than lumping every driver into one flat list. */
+    driver_init_all(DRIVER_PHASE_AFTER_PCI);
 
-    /* Self-test: if an AC97 audio device is present, initialize it and
-     * play a short beep. Unlike every earlier self-test, there's no
-     * way to check "did this actually work" from headless kernel code
-     * alone - playback happens in the background on real/emulated
-     * hardware, with nothing to read back that proves audible sound
-     * came out. Verified instead by capturing QEMU's actual audio
-     * output to a WAV file during testing and inspecting its PCM data
-     * directly - see PROGRESS.md for how, and TESTING.md for how to
-     * reproduce it. */
-    ac97_init();
+    /* Self-test: if an AC97 audio device is present, play a short
+     * beep. Unlike every earlier self-test, there's no way to check
+     * "did this actually work" from headless kernel code alone -
+     * playback happens in the background on real/emulated hardware,
+     * with nothing to read back that proves audible sound came out.
+     * Verified instead by capturing QEMU's actual audio output to a
+     * WAV file during testing and inspecting its PCM data directly -
+     * see PROGRESS.md for how, and TESTING.md for how to reproduce
+     * it. */
     if (ac97_is_present()) {
         ac97_beep();
 

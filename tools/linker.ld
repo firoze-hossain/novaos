@@ -53,6 +53,27 @@ SECTIONS
         *(.rodata) *(.rodata.*)
     }
 
+    /* Phase 39: driver self-registration (kernel/drivers/driver.h) -
+     * each DRIVER_REGISTER call places one `driver_t` here, and
+     * driver_init_all() walks every entry between __drivers_start and
+     * __drivers_end. KEEP() is required, not just tidy: unlike a
+     * normal section, nothing anywhere directly calls or references
+     * any individual entry here by name - the *only* thing that
+     * refers to this data at all is the start/end symbol pair below,
+     * which a linker doing dead/unreferenced-section elimination
+     * (`--gc-sections`) could otherwise conclude means none of these
+     * entries are actually used, and discard them. This project's own
+     * current build doesn't pass --gc-sections, so this isn't
+     * currently live-fired - but KEEP() is what every other project
+     * using this same self-registration pattern relies on for exactly
+     * this reason, and is what protects this section if that ever
+     * changes, intentionally or not. */
+    .drivers : {
+        __drivers_start = .;
+        KEEP(*(.drivers))
+        __drivers_end = .;
+    }
+
     .data : {
         *(.data) *(.data.*)
     }

@@ -7,6 +7,9 @@
 #include "../timer/timer.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
+#include "../driver.h"
+
+DRIVER_REGISTER("UHCI USB controller", usb_uhci_init, DRIVER_PHASE_AFTER_PCI);
 
 #define UHCI_CLASS    0x0C
 #define UHCI_SUBCLASS 0x03
