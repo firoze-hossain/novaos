@@ -4152,25 +4152,120 @@ multi-CPU safety, not just the one new primitive
 (`kernel/rust/spinlock.rs`, Phase 40) this project has built and
 applied so far. None of that is attempted here.
 
-## Phase 45 and beyond
+## Phase 45: virtio-net (Rust virtqueue + C PCI/handshake/RX-TX glue)
 
-Not started. Candidates: the real SMP prerequisites named directly
-above (Local APIC/IO-APIC drivers, AP bootstrap, per-CPU state,
-kernel-wide locking audit) - each substantial enough to be its own,
-separately-scoped phase, not one combined effort; migrating
-`timer_init`/`vfs_init`/`net_init` to driver registration too (their
-own self-test interleaving would need to move with them, or stay
-behind as separate, later self-test functions - a real design
-question, not just mechanical migration); extending `process_fork()`
-to duplicate `open_files[]` entries by owner pid, unlocking real
-cross-process pipe use and a genuine shell `|` operator; signals; real
-UID/GID and file-ownership permissions; a versioned, single-source-of-
-truth syscall ABI header (`kernel/arch/x86/cpu/syscall.h` and
-`userland/libc/include/novasys.h` are still two, hand-synchronized
-copies); a build-time check that `kernel_end` covers every section in
-the final binary (Phase 38's own "Known limitations"); wiring
-tools/python's two scripts into a CI workflow; wiring virtio-blk into
-the VFS as a real, mountable block device; virtio-net; making RTL8139
-transmission interrupt-driven too; a full ring-3 compositor/Store
-port; TCP retransmission/windowing and a sockets-style syscall API for
-TCP.
+**Status: Complete.** This kernel's second virtio driver, and its
+first with genuinely different queue semantics than Phase 42's
+virtio-blk - a real, structural difference, not just "the same driver
+with a new device ID."
+
+### The real difference from virtio-blk, and why it mattered
+
+virtio-blk has one request/response shape: submit a chain, poll for
+its one completion. virtio-net's receive queue is fundamentally
+different - buffers must be pre-posted to the device *before* any
+packet arrives (the device fills them asynchronously, then places
+them on the used ring), and once drained, a buffer must be *recycled*
+(re-posted), not discarded - there is no equivalent of this at all in
+virtio-blk's model. `kernel/rust/virtio_net.rs` was built around this
+directly (`rust_net_rx_post_buffer`/`rust_net_rx_poll_used`, a genuine
+multi-buffer, continuously-recycled design), while the transmit queue
+- much closer to virtio-blk's own shape - reuses the same submit-and-
+poll pattern with a 2-descriptor chain (header + data, no separate
+status descriptor the way virtio-blk has).
+
+Deliberately not refactored to share code with `virtio_blk.rs`'s own
+small layout-math functions, even though the formula is identical -
+that module is already tested, working code, and the functions being
+duplicated are small enough that the duplication isn't a real
+maintenance burden, while refactoring risked destabilizing something
+that already worked for no functional gain.
+
+### A real integration-ordering issue, found before it caused a problem
+
+The first version registered `virtio_net_init()` via Phase 39's
+`DRIVER_REGISTER` (`DRIVER_PHASE_AFTER_PCI`), matching virtio-blk's own
+pattern. That's wrong for this driver specifically: `net_init()` (where
+NIC selection happens) runs *before* `DRIVER_PHASE_AFTER_PCI` - a
+virtio-net driver registered that way would never actually be found by
+the time NIC selection ran. Caught by tracing the actual boot order
+before it ever produced a real symptom, not discovered by trial and
+error: `virtio_net_init()` is now called directly from `net_init()`,
+matching how `rtl8139_init()`/`ne2000_init()` were already being called
+directly, not through `driver_init_all()` - correct because PCI
+configuration space is just I/O port reads, available from the moment
+the kernel is running, not dependent on boot-sequence position, the
+same reasoning RTL8139's own early call already relied on.
+
+### Integration: additive, not a replacement, by design
+
+`kernel/net/net.c`'s `active_nic` dispatch (already handling RTL8139/
+NE2000) gained a third option, checked *first*: if a virtio-net-pci
+device is present, it's preferred; if not (this project's own default
+test config does not attach one), NIC selection falls through to the
+exact prior RTL8139/NE2000 behavior, completely unchanged. This was
+verified directly, not assumed: the full existing 56-assertion suite
+(unmodified network config) was re-run and passed unchanged, with
+`"Network up (RTL8139)"` still logged exactly as before - proof this
+phase added a capability without altering any existing one.
+
+### Verified in two separate ways, same discipline as every prior virtio phase
+
+A ring-0 self-test (`rust_virtio_net_selftest`) checks the layout math
+(hand-computed, independently cross-checked) and the RX post/poll/
+recycle round trip against a local, stack-allocated fake queue - not
+real hardware, deliberately, the same reasoning virtio_blk.rs's own
+self-test used.
+
+Real hardware was verified manually, outside the shared test
+infrastructure - booted with `-device virtio-net-pci` in place of
+`rtl8139`, alongside virtio-blk-pci also attached. All of it worked
+together in one clean, 155-line boot with no faults: `"virtio-net at
+PCI 0:3.0 ... MAC 52:54:0:12:34:56 ... RX queue size 256, TX queue
+size 256"` (the MAC matching the one given on the QEMU command line
+exactly), `"Network up (virtio-net)"`, and then the *entire* existing
+network self-test suite - PING, TFTP fetch, DNS resolve, and TCP HTTP
+- all passed through virtio-net's real RX/TX queues instead of
+RTL8139's, alongside virtio-blk's own write/read-back test passing
+simultaneously. Real DMA, real multiple-protocol traffic, not a toy
+single-packet test.
+
+### Known limitations
+
+virtio-net's receive path is still polled, not interrupt-driven the
+way Phase 43 made RTL8139 - `virtio_net_receive()` checks the used
+ring on every call, which is real but smaller than RTL8139's original
+gap (a cheap, local memory read, not a PCI I/O port register access,
+unless a packet has genuinely completed). Giving virtio-net its own
+IRQ handler (mirroring Phase 43's approach) is real, separate,
+smaller-scoped follow-up work. Legacy transport only, matching
+virtio-blk's own choice, for the same reasons.
+
+## Phase 46 and beyond
+
+Not started. Candidates: the real SMP prerequisites named in Phase
+44's own entry (Local APIC/IO-APIC drivers, AP bootstrap, per-CPU
+state, kernel-wide locking audit) - each substantial enough to be its
+own, separately-scoped phase, not one combined effort; **wiring
+virtio-blk into the VFS as a real, mountable block device** - a real,
+substantial, separately-scoped piece of its own: `fat32.c`/`ext2.c`/
+`partition.c` call `ata_read_sectors`/`ata_write_sectors` directly at
+roughly 18 call sites across those three files, with no existing block-
+device abstraction the way `net.c`'s own NIC dispatch already has one
+for networking - introducing that abstraction (the same architectural
+shape, applied to storage) and replacing those 18 call sites is the
+real prerequisite, not yet attempted, deliberately not rushed into the
+same pass as this phase's own, already-substantial virtio-net work;
+giving virtio-net its own IRQ handler; migrating `timer_init`/
+`vfs_init`/`net_init` to driver registration too; extending
+`process_fork()` to duplicate `open_files[]` entries by owner pid,
+unlocking real cross-process pipe use and a genuine shell `|`
+operator; signals; real UID/GID and file-ownership permissions; a
+versioned, single-source-of-truth syscall ABI header (`kernel/arch/
+x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
+hand-synchronized copies); a build-time check that `kernel_end` covers
+every section in the final binary (Phase 38's own "Known
+limitations"); wiring tools/python's two scripts into a CI workflow;
+making RTL8139 transmission interrupt-driven too; a full ring-3
+compositor/Store port; TCP retransmission/windowing and a sockets-style
+syscall API for TCP.

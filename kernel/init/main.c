@@ -761,6 +761,27 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    (result & 16) ? "FAIL" : "pass");
     }
 
+    /* Phase 45: kernel/rust/virtio_net.rs's own self-test - verifies
+     * the virtqueue layout math (same shape as virtio_blk.rs's own,
+     * independently-verified formula) and the RX post/poll round trip
+     * against a local, stack-allocated fake queue, entirely
+     * independent of real hardware. The real hardware self-test (an
+     * actual Ethernet frame sent and received through real QEMU
+     * virtio-net-pci DMA) is verified separately, manually, outside
+     * this project's shared default test config - see PROGRESS.md's
+     * Phase 45 entry for why, and for that result. */
+    {
+        extern int rust_virtio_net_selftest(void);
+        int result = rust_virtio_net_selftest();
+        kernel_log("[ %s ] Kernel-side Rust virtio-net self-test: "
+                   "layout=%s rx-post-poll-roundtrip=%s "
+                   "rx-poll-no-double-report=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
     /* Real hardware discovery - whatever this actual machine's own
      * ACPI tables report, not the synthetic self-test data above.
      * Read-only and purely informational: nothing later in this boot
