@@ -734,6 +734,68 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    (result & 4) ? "FAIL" : "pass");
     }
 
+    /* Phase 44: kernel/rust/acpi.rs's own self-test - verifies the
+     * MADT-parsing logic against a small, synthetic, hand-constructed
+     * table this test builds and checksums itself, entirely
+     * independent of whatever real ACPI tables this machine actually
+     * provides (checked separately, immediately below - real
+     * hardware discovery and parsing-logic correctness are two
+     * different things, and this project's own established practice
+     * (kernel/rust/virtio_blk.rs's own two-stage layout-then-hardware
+     * verification) is to prove each on its own terms rather than
+     * conflating them). See acpi.rs's own doc comment for the full
+     * scope note: this is CPU *discovery* only, a genuine SMP
+     * prerequisite - not SMP support itself, and nothing about this
+     * kernel's actual boot/scheduling behavior changes as a result. */
+    {
+        extern int rust_acpi_selftest(void);
+        int result = rust_acpi_selftest();
+        kernel_log("[ %s ] Kernel-side Rust ACPI MADT parsing self-test: "
+                   "checksum=%s madt-found=%s local-apic-addr=%s "
+                   "enabled-cpu-count=%s apic-id=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass",
+                   (result & 8) ? "FAIL" : "pass",
+                   (result & 16) ? "FAIL" : "pass");
+    }
+
+    /* Real hardware discovery - whatever this actual machine's own
+     * ACPI tables report, not the synthetic self-test data above.
+     * Read-only and purely informational: nothing later in this boot
+     * sequence acts on this result yet (no second CPU is started, no
+     * interrupt controller changes) - see PROGRESS.md's Phase 44
+     * entry for how this was verified against several different QEMU
+     * `-smp N` configurations, confirming the logged count actually
+     * tracks reality rather than just "the code ran without
+     * crashing." */
+    {
+        extern bool rust_acpi_discover_cpus(uint32_t* out_count,
+                                             uint32_t* out_local_apic_phys,
+                                             bool* out_found_acpi);
+        uint32_t cpu_count = 0;
+        uint32_t local_apic_phys = 0;
+        bool found_acpi = false;
+        bool found = rust_acpi_discover_cpus(&cpu_count, &local_apic_phys,
+                                              &found_acpi);
+        if (found) {
+            kernel_log("[ OK ] ACPI MADT: %d CPU(s) found (Local APIC at "
+                       "phys 0x%x) - single-core boot continuing "
+                       "regardless (see PROGRESS.md's Phase 44 scope "
+                       "note)\n", (int)cpu_count, (unsigned int)local_apic_phys);
+        } else {
+            kernel_log("[WARN] ACPI MADT not found or not parseable "
+                       "(RSDP found: %s) - assuming single-core (this "
+                       "kernel does not require ACPI to boot correctly; "
+                       "if RSDP was found, the RSDT/MADT tables "
+                       "themselves are most likely above this kernel's "
+                       "own 64MB identity-mapped range - see "
+                       "kernel/rust/acpi.rs's own header comment)\n",
+                       found_acpi ? "yes" : "no");
+        }
+    }
+
     firstrun_check_and_run();
 
     process_init();

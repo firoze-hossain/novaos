@@ -215,6 +215,13 @@ ASSERTIONS: list[Assertion] = [
               "the RTL8139 RX-pending signal/check-and-clear primitive is "
               "correct, backing genuinely interrupt-driven reception instead "
               "of polling NIC hardware on every idle tick"),
+    Assertion("acpi_madt_selftest",
+              r"Kernel-side Rust ACPI MADT parsing self-test.*checksum=pass",
+              "the ACPI MADT parsing logic is correct, verified against a "
+              "synthetic table with a known-correct enabled/disabled CPU "
+              "count and Local APIC address - the genuine first "
+              "prerequisite for SMP (CPU topology discovery), not SMP "
+              "support itself"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
