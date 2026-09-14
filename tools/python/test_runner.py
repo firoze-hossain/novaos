@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,11 +76,26 @@ USB_FLAGS = ["-device", "piix3-usb-uhci", "-device", "usb-kbd"]
 # nothing before that ever reads this file's prior contents), so
 # there's nothing to keep in sync the way tools/fixtures/SYSTEM.CFG's
 # binary fixture needs to be.
+# Phase 46: still the same dedicated, separate-from-disk.img image
+# (so a filesystem mistake here can never risk the FAT32/ext2 test
+# disk every other assertion depends on) - but now formatted with a
+# real FAT32 filesystem containing one known file, not just zeroed
+# bytes, so kernel/init/main.c's own Phase 46 self-test can prove
+# virtio-blk works as a genuine, mountable VFS block device (mount,
+# read a real pre-existing file, write a new one, read it back),
+# not just raw sector I/O (which Phase 42's own self-test - superseded
+# by this, more comprehensive one - already proved).
 DEFAULT_VIRTIO_DISK = REPO_ROOT / "build" / "virtio-blk-test.img"
-VIRTIO_TEST_DISK_SIZE_BYTES = 1024 * 1024  # 1MB - far more than the
-# single 512-byte sector this driver's own self-test actually touches
-# (see kernel/init/main.c's own comment on why sector 1), generous
-# headroom for this to grow without needing to revisit the size.
+VIRTIO_TEST_DISK_SIZE_BYTES = 16 * 1024 * 1024  # 16MB - comfortably
+# above the smallest size `mformat -F` will reliably treat as FAT32
+# rather than silently falling back to FAT16 for a very small volume
+# (confirmed directly, not assumed: even 1MB worked with -F in local
+# testing, but 16MB removes any doubt without meaningfully slowing
+# down test disk generation).
+VIRTIO_FAT32_TEST_FILENAME = "VIRTTEST.TXT"
+VIRTIO_FAT32_TEST_CONTENT = (
+    b"Hello from a real FAT32 filesystem mounted through virtio-blk!\n"
+)
 
 
 @dataclass
@@ -231,6 +247,14 @@ ASSERTIONS: list[Assertion] = [
               "virtio-net-pci DMA) is verified separately, manually, "
               "outside this project's shared default test config, since "
               "it isn't the NIC this config actually attaches"),
+    Assertion("virtio_blk_vfs_mount", r"VIRTIO-BLK VFS MOUNT OK",
+              "a real FAT32 filesystem was mounted through virtio-blk via "
+              "the same fat32_init()/read_file()/write_file() path every "
+              "other filesystem operation uses (not just raw sector I/O), "
+              "an existing file read correctly, a new file written and "
+              "read back correctly, and the original ATA-backed mount "
+              "restored afterward - proven by every test after this one "
+              "in the suite (shell launch, fork, exec) still passing"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
@@ -238,14 +262,33 @@ ASSERTIONS: list[Assertion] = [
 
 def ensure_virtio_test_disk(path: Path) -> None:
     """Creates (or recreates) the dedicated virtio-blk test disk image
-    - see DEFAULT_VIRTIO_DISK's own comment for why this is generated
-    fresh rather than committed. A plain zero-filled file is enough:
-    kernel/drivers/virtio/virtio_blk.c's own self-test writes a known
-    pattern to sector 1 before ever reading it back, so this file's
-    starting content is never actually read as meaningful data."""
+    as a real, mountable FAT32 filesystem - same tooling
+    (mformat/mcopy) as tools/build-disk-image.sh already uses for
+    disk.img's own FAT32 partition, not a new mechanism invented for
+    this. Raw, unpartitioned FAT32 starting at LBA 0 - deliberately
+    simpler than disk.img's own MBR-partitioned layout, since this
+    image only ever needs to hold one known test file, not coexist
+    with a second (ext2) filesystem the way disk.img's own two
+    partitions do."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        f.truncate(VIRTIO_TEST_DISK_SIZE_BYTES)
+    if path.exists():
+        path.unlink()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        with open(path, "wb") as f:
+            f.truncate(VIRTIO_TEST_DISK_SIZE_BYTES)
+
+        subprocess.run(["mformat", "-i", str(path), "-F", "::"],
+                        check=True, capture_output=True)
+
+        test_file = tmp / VIRTIO_FAT32_TEST_FILENAME
+        test_file.write_bytes(VIRTIO_FAT32_TEST_CONTENT)
+        subprocess.run(
+            ["mcopy", "-i", str(path), str(test_file),
+             f"::{VIRTIO_FAT32_TEST_FILENAME}"],
+            check=True, capture_output=True,
+        )
 
 
 def boot_and_capture(

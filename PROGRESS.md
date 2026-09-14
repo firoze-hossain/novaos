@@ -4241,31 +4241,138 @@ IRQ handler (mirroring Phase 43's approach) is real, separate,
 smaller-scoped follow-up work. Legacy transport only, matching
 virtio-blk's own choice, for the same reasons.
 
-## Phase 46 and beyond
+## Phase 46: virtio-blk wired into the VFS as a real, mountable block device
+
+**Status: Complete.** The harder half of Phase 42's own deferred scope
+- not just raw sector I/O against virtio-blk (already proven), but a
+real filesystem genuinely mounted, read, and written through it, via
+the exact same code path every other filesystem operation in this
+kernel already uses. Deliberately treated as its own, separately-
+scoped phase given the blast radius - `fat32.c`, `ext2.c`, and
+`partition.c` are the most heavily-tested, most depended-upon code in
+this kernel, and every existing self-test that reads or writes a file
+depends on this working correctly.
+
+### What was built
+
+`kernel/drivers/blockdev.h`/`blockdev.c`: the same architectural shape
+`kernel/net/net.c`'s own `active_nic` dispatch already uses for NICs,
+applied here to storage - `blockdev_read_sectors()`/
+`blockdev_write_sectors()`, defaulting to `BLOCKDEV_ATA` (preserving
+every existing call site's exact prior behavior with zero functional
+change unless something explicitly switches it). Every direct
+`ata_read_sectors()`/`ata_write_sectors()` call in `fat32.c`, `ext2.c`,
+and `partition.c` - 21 call sites across the three files, counted
+precisely by grepping the actual source, not estimated - was replaced
+with the equivalent `blockdev_` call.
+
+Deliberately **not** auto-preferring virtio-blk the way `net.c`
+prefers virtio-net when both are present - a real, considered
+difference from the Phase 45 NIC pattern, not an inconsistency: this
+project's own test config attaches ATA (with real FAT32/ext2
+filesystems) and virtio-blk (a separate, differently-purposed disk)
+*simultaneously*, always. For NICs, only one is meant to be "the
+network," so preferring the more capable one is correct; for storage,
+which device holds *this specific filesystem* is a genuinely different
+question a "just prefer the better one" heuristic would get wrong -
+auto-preferring virtio-blk here would have mounted the wrong,
+unformatted disk as this kernel's primary filesystem.
+
+### Two real gaps found during implementation, not in the original plan
+
+Replacing the read/write calls alone wasn't sufficient, and both gaps
+were caught by tracing the actual code and by a real compile error,
+not discovered later as bugs:
+
+1. `ata.c` has its own internal partition-offset state, added to every
+   LBA *inside* `ata_read_sectors()`/`write_sectors()` themselves - and
+   `fat32.c`/`ext2.c` were each pushing their own copy into it via
+   `ata_set_partition_offset()`, repeatedly, before nearly every
+   operation (not just once at mount time), because the two
+   filesystems share that one piece of ATA-level state and would
+   otherwise silently use whichever filesystem's offset was set most
+   recently. Left unaddressed, virtio-blk would have silently ignored
+   any non-zero partition offset entirely. Fixed by moving offset
+   application into `blockdev.c` itself, applied uniformly for both
+   backends, with every `ata_set_partition_offset()` call site renamed
+   to `blockdev_set_partition_offset()` - same call sites, same
+   frequency, preserving the exact re-assert-before-each-operation
+   pattern the original code already relied on. `ata_is_present()`
+   (called directly by `fat32.c`'s own mount function, not through a
+   read/write call) needed the same treatment.
+2. `fat32.c` also used `ATA_SECTOR_SIZE` directly as a buffer-sizing
+   constant in four places, unrelated to any function call - caught
+   immediately by a real compile error after removing `ata.h`'s
+   include, not silently miscompiled. Fixed with a device-agnostic
+   `BLOCKDEV_SECTOR_SIZE` in the new abstraction instead of reaching
+   back into a specific backend's own header for a constant this
+   abstraction is exactly the right place to own.
+
+### Verified in stages, the highest-stakes checkpoint in this project's own history
+
+After the abstraction alone (before any new demonstration code): the
+full, unmodified 57-assertion suite re-run three times, all passing -
+confirming the rename-and-refactor itself introduced zero behavioral
+change with `BLOCKDEV_ATA` as the default.
+
+The demonstration itself (`kernel/init/main.c`, gated on
+`virtio_blk_is_present()`): the dedicated virtio-blk test disk
+(`tools/python/test_runner.py`'s own `ensure_virtio_test_disk()`,
+rewritten this phase to format a *real* FAT32 filesystem via
+`mformat`/`mcopy` - the same tooling `tools/build-disk-image.sh`
+already uses for `disk.img`'s own FAT32 partition, not a new mechanism
+- containing one known test file, superseding Phase 42's own raw-
+pattern self-test) is mounted, an existing file read back and verified
+byte-for-byte, a new file written and read back and verified, and -
+the single most important step in this entire phase - the original
+ATA device selection and exact partition offset are explicitly saved
+beforehand and restored via a real re-mount afterward, not just
+flipping a selector back. `fat32.c` holds exactly one mounted
+filesystem's worth of global state at a time (not changed by this
+phase to support simultaneous mounts - a separate, larger piece of
+work), so getting this restore step wrong would have silently broken
+every file read for the rest of boot.
+
+That restore was verified working, not just written and assumed
+correct: the complete, unmodified test suite - including everything
+that runs *after* this demonstration (the ring-3 shell itself
+launching, `SYS_EXEC` loading a real C program, `fork()`, every other
+self-test) - was re-run and confirmed passing with the demonstration
+active, three times for reliability, plus the custom bootloader path.
+58 assertions total (57 prior + 1 new), all passing together,
+repeatably, on a completely fresh clone.
+
+### Known limitations
+
+Simultaneous dual mounts (ATA's own filesystems and a virtio-blk-
+backed one, both live at once) remain unsupported - `fat32.c`'s global
+mount state would need to become per-instance (a struct passed around
+instead of file-scoped statics), a real, separate, larger refactor.
+Raw, unpartitioned FAT32 only for the virtio-blk test image (no MBR/
+GPT parsing exercised against virtio-blk specifically, though
+`partition.c` itself is now routed through the same abstraction and
+would work if a partitioned virtio-blk image were used). ext2 was not
+demonstrated mounted via virtio-blk in this phase, only FAT32 - the
+same underlying `blockdev_` calls would apply equally, but wasn't
+separately proven.
+
+## Phase 47 and beyond
 
 Not started. Candidates: the real SMP prerequisites named in Phase
 44's own entry (Local APIC/IO-APIC drivers, AP bootstrap, per-CPU
 state, kernel-wide locking audit) - each substantial enough to be its
-own, separately-scoped phase, not one combined effort; **wiring
-virtio-blk into the VFS as a real, mountable block device** - a real,
-substantial, separately-scoped piece of its own: `fat32.c`/`ext2.c`/
-`partition.c` call `ata_read_sectors`/`ata_write_sectors` directly at
-roughly 18 call sites across those three files, with no existing block-
-device abstraction the way `net.c`'s own NIC dispatch already has one
-for networking - introducing that abstraction (the same architectural
-shape, applied to storage) and replacing those 18 call sites is the
-real prerequisite, not yet attempted, deliberately not rushed into the
-same pass as this phase's own, already-substantial virtio-net work;
-giving virtio-net its own IRQ handler; migrating `timer_init`/
-`vfs_init`/`net_init` to driver registration too; extending
-`process_fork()` to duplicate `open_files[]` entries by owner pid,
-unlocking real cross-process pipe use and a genuine shell `|`
-operator; signals; real UID/GID and file-ownership permissions; a
-versioned, single-source-of-truth syscall ABI header (`kernel/arch/
-x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
-hand-synchronized copies); a build-time check that `kernel_end` covers
-every section in the final binary (Phase 38's own "Known
-limitations"); wiring tools/python's two scripts into a CI workflow;
-making RTL8139 transmission interrupt-driven too; a full ring-3
-compositor/Store port; TCP retransmission/windowing and a sockets-style
-syscall API for TCP.
+own, separately-scoped phase, not one combined effort; simultaneous
+multi-mount support (ATA and virtio-blk both live at once), building
+on this phase's own blockdev abstraction; giving virtio-net its own
+IRQ handler; migrating `timer_init`/`vfs_init`/`net_init` to driver
+registration too; extending `process_fork()` to duplicate
+`open_files[]` entries by owner pid, unlocking real cross-process pipe
+use and a genuine shell `|` operator; signals; real UID/GID and
+file-ownership permissions; a versioned, single-source-of-truth
+syscall ABI header (`kernel/arch/x86/cpu/syscall.h` and `userland/
+libc/include/novasys.h` are still two, hand-synchronized copies); a
+build-time check that `kernel_end` covers every section in the final
+binary (Phase 38's own "Known limitations"); wiring tools/python's two
+scripts into a CI workflow; making RTL8139 transmission interrupt-
+driven too; a full ring-3 compositor/Store port; TCP retransmission/
+windowing and a sockets-style syscall API for TCP.

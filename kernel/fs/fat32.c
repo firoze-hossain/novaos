@@ -2,7 +2,7 @@
  * fat32.c - read-only FAT32 driver (root directory, 8.3 names only)
  */
 #include "fat32.h"
-#include "../drivers/ata/ata.h"
+#include "../drivers/blockdev.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -74,8 +74,8 @@ static uint32_t root_cluster;
 static uint8_t num_fats;
 static uint32_t fat_size_32; /* sectors per FAT copy */
 
-static uint8_t cluster_buf[MAX_CLUSTER_SECTORS * ATA_SECTOR_SIZE];
-static uint8_t fat_sector_buf[ATA_SECTOR_SIZE];
+static uint8_t cluster_buf[MAX_CLUSTER_SECTORS * BLOCKDEV_SECTOR_SIZE];
+static uint8_t fat_sector_buf[BLOCKDEV_SECTOR_SIZE];
 
 static uint32_t cluster_to_lba(uint32_t cluster) {
     return data_start_lba + (cluster - 2) * sectors_per_cluster;
@@ -86,7 +86,7 @@ static uint32_t fat_next_cluster(uint32_t cluster) {
     uint32_t fat_sector = fat_start_lba + (fat_offset / bytes_per_sector);
     uint32_t ent_offset = fat_offset % bytes_per_sector;
 
-    if (!ata_read_sectors(fat_sector, 1, fat_sector_buf)) {
+    if (!blockdev_read_sectors(fat_sector, 1, fat_sector_buf)) {
         return FAT32_END_OF_CHAIN;
     }
 
@@ -107,7 +107,7 @@ static bool fat_set_next_cluster(uint32_t cluster, uint32_t value) {
     for (uint8_t copy = 0; copy < num_fats; copy++) {
         uint32_t fat_sector = fat_start_lba + copy * fat_size_32 + sector_in_fat;
 
-        if (!ata_read_sectors(fat_sector, 1, fat_sector_buf)) {
+        if (!blockdev_read_sectors(fat_sector, 1, fat_sector_buf)) {
             return false;
         }
 
@@ -116,7 +116,7 @@ static bool fat_set_next_cluster(uint32_t cluster, uint32_t value) {
         uint32_t new_value = (existing & 0xF0000000u) | (value & 0x0FFFFFFFu);
         memcpy(&fat_sector_buf[ent_offset], &new_value, sizeof(new_value));
 
-        if (!ata_write_sectors(fat_sector, 1, fat_sector_buf)) {
+        if (!blockdev_write_sectors(fat_sector, 1, fat_sector_buf)) {
             return false;
         }
     }
@@ -231,16 +231,16 @@ static void from_fat_8_3(const uint8_t raw[11], char* out) {
 }
 
 bool fat32_init(void) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     mounted = false;
 
-    if (!ata_is_present()) {
+    if (!blockdev_is_present()) {
         kernel_log("[ .. ] FAT32: no ATA drive, skipping mount\n");
         return false;
     }
 
-    uint8_t boot_sector[ATA_SECTOR_SIZE];
-    if (!ata_read_sectors(0, 1, boot_sector)) {
+    uint8_t boot_sector[BLOCKDEV_SECTOR_SIZE];
+    if (!blockdev_read_sectors(0, 1, boot_sector)) {
         kernel_log("[FAULT] FAT32: failed to read boot sector\n");
         return false;
     }
@@ -252,7 +252,7 @@ bool fat32_init(void) {
      * reserved and fat_size_32 is used instead) plus root_entry_count
      * == 0 (FAT32 has no fixed-size root directory region - the root
      * is just another cluster chain, pointed to by root_cluster). */
-    if (bpb.bytes_per_sector != ATA_SECTOR_SIZE || bpb.fat_size_16 != 0 ||
+    if (bpb.bytes_per_sector != BLOCKDEV_SECTOR_SIZE || bpb.fat_size_16 != 0 ||
         bpb.fat_size_32 == 0 || bpb.root_entry_count != 0) {
         kernel_log("[ .. ] FAT32: boot sector doesn't look like FAT32, "
                    "skipping mount\n");
@@ -296,7 +296,7 @@ static bool walk_root(const uint8_t want_name[11],
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!ata_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -342,7 +342,7 @@ static bool walk_root(const uint8_t want_name[11],
 }
 
 void fat32_list_root(fat32_list_callback_t callback) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return;
     }
@@ -350,7 +350,7 @@ void fat32_list_root(fat32_list_callback_t callback) {
 }
 
 int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return -1;
     }
@@ -376,7 +376,7 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
 
     while (remaining > 0 && cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!ata_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             break;
         }
 
@@ -402,7 +402,7 @@ static bool find_existing_entry_location(const uint8_t want_name[11],
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!ata_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -444,7 +444,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!ata_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -477,7 +477,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
         return false; /* out of disk space */
     }
     memset(cluster_buf, 0, (size_t)sectors_per_cluster * bytes_per_sector);
-    if (!ata_write_sectors(cluster_to_lba(new_cluster), sectors_per_cluster,
+    if (!blockdev_write_sectors(cluster_to_lba(new_cluster), sectors_per_cluster,
                             cluster_buf)) {
         return false;
     }
@@ -491,7 +491,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
 }
 
 bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return false;
     }
@@ -532,7 +532,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
             memset(cluster_buf + chunk, 0, cluster_bytes - chunk);
         }
 
-        if (!ata_write_sectors(cluster_to_lba(cluster), sectors_per_cluster,
+        if (!blockdev_write_sectors(cluster_to_lba(cluster), sectors_per_cluster,
                                 cluster_buf)) {
             free_cluster_chain(first_cluster);
             return false;
@@ -550,7 +550,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
         return false;
     }
 
-    if (!ata_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
+    if (!blockdev_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
                            cluster_buf)) {
         free_cluster_chain(first_cluster);
         return false;
@@ -566,7 +566,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
 
     memcpy(&cluster_buf[dir_offset], &entry, sizeof(entry));
 
-    if (!ata_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
+    if (!blockdev_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
                             cluster_buf)) {
         free_cluster_chain(first_cluster);
         return false;
@@ -576,7 +576,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
 }
 
 bool fat32_delete_file(const char* filename) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return false;
     }
@@ -589,7 +589,7 @@ bool fat32_delete_file(const char* filename) {
         return false;
     }
 
-    if (!ata_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
+    if (!blockdev_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
                            cluster_buf)) {
         return false;
     }
@@ -600,7 +600,7 @@ bool fat32_delete_file(const char* filename) {
         ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
 
     cluster_buf[dir_offset] = 0xE5; /* mark deleted */
-    if (!ata_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
+    if (!blockdev_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
                             cluster_buf)) {
         return false;
     }
