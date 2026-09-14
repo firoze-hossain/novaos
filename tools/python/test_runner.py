@@ -222,6 +222,15 @@ ASSERTIONS: list[Assertion] = [
               "count and Local APIC address - the genuine first "
               "prerequisite for SMP (CPU topology discovery), not SMP "
               "support itself"),
+    Assertion("virtio_net_selftest",
+              r"Kernel-side Rust virtio-net self-test.*layout=pass",
+              "the virtio-net virtqueue layout math and RX buffer post/"
+              "poll/recycle logic are correct, verified against a "
+              "synthetic in-memory queue - real hardware (an actual "
+              "Ethernet frame sent and received through QEMU "
+              "virtio-net-pci DMA) is verified separately, manually, "
+              "outside this project's shared default test config, since "
+              "it isn't the NIC this config actually attaches"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

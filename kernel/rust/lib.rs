@@ -29,6 +29,7 @@ mod spinlock;
 mod virtio_blk;
 mod net_irq;
 mod acpi;
+mod virtio_net;
 
 use core::panic::PanicInfo;
 
