@@ -2,7 +2,7 @@
  * ext2.c - minimal read-only ext2 driver (see ext2.h for exact scope)
  */
 #include "ext2.h"
-#include "../drivers/ata/ata.h"
+#include "../drivers/blockdev.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -112,7 +112,7 @@ bool ext2_is_mounted(void) {
 static bool read_block(uint32_t block_num, void* buffer) {
     uint32_t sectors_per_block = block_size / 512;
     uint32_t lba = block_num * sectors_per_block;
-    return ata_read_sectors(lba, (uint8_t)sectors_per_block, buffer);
+    return blockdev_read_sectors(lba, (uint8_t)sectors_per_block, buffer);
 }
 
 static bool read_inode(uint32_t inode_num, ext2_inode_t* out) {
@@ -154,7 +154,7 @@ static bool read_inode(uint32_t inode_num, ext2_inode_t* out) {
 static bool write_block(uint32_t block_num, const void* buffer) {
     uint32_t sectors_per_block = block_size / 512;
     uint32_t lba = block_num * sectors_per_block;
-    return ata_write_sectors(lba, (uint8_t)sectors_per_block, buffer);
+    return blockdev_write_sectors(lba, (uint8_t)sectors_per_block, buffer);
 }
 
 static bool read_bgd0(ext2_bgd_t* out) {
@@ -181,7 +181,7 @@ static bool write_superblock(void) {
     uint8_t sb_sector_buf[1024];
     memset(sb_sector_buf, 0, sizeof(sb_sector_buf));
     memcpy(sb_sector_buf, &sb, sizeof(sb));
-    return ata_write_sectors(2, 2, sb_sector_buf);
+    return blockdev_write_sectors(2, 2, sb_sector_buf);
 }
 
 /* Finds a free bit in the bitmap block, marks it used, and writes the
@@ -463,13 +463,13 @@ static bool find_in_root(const char* filename, uint32_t* out_inode) {
 }
 
 bool ext2_init(void) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     mounted = false;
 
     /* The superblock always lives at byte offset 1024 regardless of
      * block size - LBA 2, 2 sectors (1024 bytes / 512). */
     uint8_t sb_buf[1024];
-    if (!ata_read_sectors(2, 2, sb_buf)) {
+    if (!blockdev_read_sectors(2, 2, sb_buf)) {
         return false;
     }
     memcpy(&sb, sb_buf, sizeof(sb));
@@ -501,7 +501,7 @@ bool ext2_init(void) {
 }
 
 int ext2_read_file(const char* filename, void* buf, uint32_t buf_size) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return -1;
     }
@@ -520,7 +520,7 @@ int ext2_read_file(const char* filename, void* buf, uint32_t buf_size) {
 }
 
 bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
-    ata_set_partition_offset(partition_offset);
+    blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
         return false;
     }

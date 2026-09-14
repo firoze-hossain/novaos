@@ -2,7 +2,7 @@
  * partition.c - MBR/GPT partition table parsing (see partition.h)
  */
 #include "partition.h"
-#include "../drivers/ata/ata.h"
+#include "../drivers/blockdev.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -50,7 +50,7 @@ static bool mbr_entry_plausible(const uint8_t* entry, uint8_t* out_type,
 
 static bool try_parse_gpt(partition_table_t* out) {
     uint8_t header_buf[512];
-    if (!ata_read_sectors(1, 1, header_buf)) {
+    if (!blockdev_read_sectors(1, 1, header_buf)) {
         return false;
     }
 
@@ -83,7 +83,7 @@ static bool try_parse_gpt(partition_table_t* out) {
                                      hdr.size_of_partition_entry;
 
         if (sector_idx != last_loaded_sector) {
-            if (!ata_read_sectors(
+            if (!blockdev_read_sectors(
                     (uint32_t)hdr.partition_entry_lba + sector_idx, 1,
                     entry_sector)) {
                 break;
@@ -124,7 +124,7 @@ bool partition_read_table(partition_table_t* out) {
     out->count = 0;
 
     uint8_t sector0[512];
-    if (!ata_read_sectors(0, 1, sector0)) {
+    if (!blockdev_read_sectors(0, 1, sector0)) {
         return false;
     }
     if (sector0[MBR_SIGNATURE_OFFSET] != 0x55 ||
