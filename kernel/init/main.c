@@ -971,31 +971,15 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     const char* sandbox_caps[] = {"HELLO.TXT"};
     const uint32_t sandbox_hosts[] = {NET_GATEWAY_IP};
 
-    /* Phase 47: a known test account for sandbox_demo_task's own
-     * SYS_LOGIN/SYS_GETUID self-test (kernel/task/sandbox_demo.c) to
-     * authenticate against from real ring-3 code - created here,
-     * kernel-side, specifically because there is no syscall to create
-     * an account at all (see process.h's own comment on why: an
-     * unrestricted "create any account" syscall would be a real
-     * security hole on a kernel with no permission enforcement yet).
-     * uid 500/gid 500 deliberately not 0 (root) or a value any other
-     * test/task uses, so a mix-up would be obviously wrong rather
-     * than silently plausible. */
-    {
-        extern bool rust_users_add(const uint8_t* username_ptr,
-                                    uint32_t username_len, uint32_t uid,
-                                    uint32_t gid, const uint8_t* password_ptr,
-                                    uint32_t password_len);
-        static const char test_username[] = "ring3test";
-        static const char test_password[] = "ring3-correct-password";
-        bool added = rust_users_add(
-            (const uint8_t*)test_username, sizeof(test_username) - 1, 500,
-            500, (const uint8_t*)test_password, sizeof(test_password) - 1);
-        kernel_log("[ %s ] Created test user account 'ring3test' (uid 500) "
-                   "for sandbox_demo_task's own SYS_LOGIN self-test\n",
-                   added ? "OK" : "FAIL");
-    }
-
+    /* Phase 48: sandbox_demo_task's own SYS_LOGIN/SYS_GETUID self-test
+     * (kernel/task/sandbox_demo.c) now authenticates against the real
+     * account this project's own tools/fixtures/USERS.CFG persists -
+     * loaded above, in firstrun_check_and_run()'s own "returning user"
+     * branch (userscfg_load()), replacing Phase 47's own kernel-side
+     * hardcoded test-account creation. A strictly stronger test:
+     * proves the full pipeline (a real file on disk -> vfs_read_file
+     * -> userscfg_load -> rust_users_load -> rust_users_authenticate)
+     * rather than only the in-memory add/authenticate calls. */
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
                                    1, sandbox_hosts, 1, true);
     process_create_user_task("unprivileged", unprivileged_demo_task);

@@ -326,33 +326,35 @@ void sandbox_demo_task(void) {
         sys_write("[sandbox] FAIL: SYS_FORK failed.\n");
     }
 
-    /* Phase 47: SYS_LOGIN/SYS_GETUID, exercised through the real
-     * ring-3 syscall path - proves the syscall-dispatch layer around
-     * process_login()/kernel/rust/users.rs works correctly (the Rust
-     * user database has its own, separate, more thorough direct-call
-     * self-test - see kernel_main()). Authenticates against a real,
-     * known test account created kernel-side before this task ever
-     * ran (see kernel_main()'s own comment on why account creation
-     * itself isn't a syscall). Three checks, not one: this process
-     * starts as uid 0 (every sandboxed task does - see process.h's
-     * own comment); a wrong password must fail *and* leave the uid
-     * unchanged; the correct password must succeed and actually
-     * change the uid to the test account's real value (500), not just
-     * return success without the identity actually changing. */
+    /* Phase 48: authenticates against the real account persisted in
+     * tools/fixtures/USERS.CFG (loaded at boot via
+     * firstrun_check_and_run()'s own userscfg_load() call), not a
+     * kernel-side hardcoded test account (Phase 47's original
+     * approach) - proves the full persistence pipeline (a real file
+     * on disk -> vfs_read_file -> userscfg_load -> rust_users_load ->
+     * rust_users_authenticate), not just the in-memory add/
+     * authenticate calls kernel/rust/users.rs's own self-test already
+     * covers. Three checks, not one: this process starts as uid 0
+     * (every sandboxed task does - see process.h's own comment); a
+     * wrong password must fail *and* leave the uid unchanged; the
+     * correct password must succeed and actually change the uid to
+     * this fixture account's real value (700), not just return
+     * success without the identity actually changing. */
     unsigned int uid_before = sys_getuid();
 
-    int wrong_login = sys_login("ring3test", "wrong-password-entirely");
+    int wrong_login = sys_login("persisted", "wrong-password-entirely");
     unsigned int uid_after_wrong = sys_getuid();
 
-    int right_login = sys_login("ring3test", "ring3-correct-password");
+    int right_login = sys_login("persisted", "persisted-pw");
     unsigned int uid_after_right = sys_getuid();
 
     if (uid_before == 0 && wrong_login == -1 && uid_after_wrong == 0 &&
-        right_login == 0 && uid_after_right == 500) {
+        right_login == 0 && uid_after_right == 700) {
         sys_write("[sandbox] PASS: SYS_LOGIN/SYS_GETUID - started as uid 0, "
                   "a wrong password was correctly rejected (uid unchanged), "
-                  "the correct password succeeded and this process is now "
-                  "uid 500.\n");
+                  "the correct password (against the real account "
+                  "persisted in USERS.CFG) succeeded and this process is "
+                  "now uid 700.\n");
     } else {
         sys_write("[sandbox] FAIL: SYS_LOGIN/SYS_GETUID behaved "
                   "unexpectedly.\n");

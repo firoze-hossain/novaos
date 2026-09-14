@@ -7,8 +7,16 @@
 #include "../../kernel/drivers/keyboard/keyboard.h"
 #include "../../kernel/fs/vfs.h"
 #include "../../kernel/config/sysconfig.h"
+#include "../../kernel/config/userscfg.h"
 #include "../../kernel/lib/string.h"
 #include "../../kernel/include/kernel.h"
+
+/* kernel/rust/users.rs's exported account-creation function - see
+ * that file's own doc comment for the full contract. */
+extern bool rust_users_add(const uint8_t* username_ptr, uint32_t username_len,
+                            uint32_t uid, uint32_t gid,
+                            const uint8_t* password_ptr,
+                            uint32_t password_len);
 
 static char g_hostname[SYSCONFIG_HOSTNAME_MAX] = "novaos";
 static char g_username[SYSCONFIG_USERNAME_MAX] = "user";
@@ -48,6 +56,35 @@ static void read_line_echo(char* out, int max_len) {
     out[len] = '\0';
 }
 
+/* Phase 48: same structure as read_line_echo() above, but shows '*'
+ * for every typed character instead of the character itself - the
+ * familiar password-prompt convention. Doesn't make the stored
+ * credential itself any more secure (see kernel/rust/users.rs's own
+ * documented limitation: FNV-1a is not a cryptographic hash) - this
+ * only avoids the separate, basic problem of the password appearing
+ * in plain text on screen while being typed. */
+static void read_line_noecho(char* out, int max_len) {
+    int len = 0;
+    for (;;) {
+        char c = keyboard_get_char();
+        if (c == '\n') {
+            vga_putchar('\n');
+            break;
+        } else if (c == '\b') {
+            if (len > 0) {
+                len--;
+                vga_putchar('\b');
+                vga_putchar(' ');
+                vga_putchar('\b');
+            }
+        } else if (len < max_len - 1 && c >= 32 && c < 127) {
+            out[len++] = c;
+            vga_putchar('*');
+        }
+    }
+    out[len] = '\0';
+}
+
 void firstrun_check_and_run(void) {
     sysconfig_t cfg;
     if (sysconfig_load(&cfg)) {
@@ -71,6 +108,23 @@ void firstrun_check_and_run(void) {
 
         kernel_log("[ OK ] First-run check: returning user '%s' on '%s'\n",
                    g_username, g_hostname);
+
+        /* Phase 48: a returning user also means real, previously-
+         * created accounts (see the first-boot branch below) should
+         * exist in kernel/rust/users.rs's own database - load them
+         * now, the same "returning user -> load, don't re-create"
+         * shape sysconfig_load() just above already established for
+         * SYSTEM.CFG. A false return here (no USERS.CFG on disk,
+         * despite a real SYSTEM.CFG existing) is a real, benign case
+         * - e.g. a SYSTEM.CFG written before this phase existed at
+         * all - so it's only logged, not treated as an error. */
+        if (userscfg_load()) {
+            kernel_log("[ OK ] First-run check: USERS.CFG loaded - "
+                       "accounts restored\n");
+        } else {
+            kernel_log("[ .. ] First-run check: no USERS.CFG found - "
+                       "no accounts loaded\n");
+        }
         return;
     }
 
@@ -100,6 +154,33 @@ void firstrun_check_and_run(void) {
     read_line_echo(username_buf, sizeof(username_buf));
     if (username_buf[0] == '\0') {
         strcpy(username_buf, "user");
+    }
+
+    /* Phase 48: the first account this wizard ever creates - uid 0
+     * (root), matching Unix's own "the machine's first, owning
+     * account is the admin" convention (see process.h's own comment
+     * on process_t's uid/gid for why uid 0 specifically means root
+     * throughout this kernel). A blank password is accepted rather
+     * than rejected/re-prompted - a deliberate, honest simplification
+     * for this first pass, not a security recommendation; a future
+     * "require a non-empty password" check is real, separate,
+     * smaller-scoped follow-up work. */
+    char password_buf[64];
+    vga_puts("Choose a password: ");
+    read_line_noecho(password_buf, sizeof(password_buf));
+
+    bool user_added = rust_users_add(
+        (const uint8_t*)username_buf, (uint32_t)strlen(username_buf), 0, 0,
+        (const uint8_t*)password_buf, (uint32_t)strlen(password_buf));
+    if (user_added) {
+        if (!userscfg_save()) {
+            vga_puts("[WARN] Could not save the account to disk - it "
+                     "won't persist to the next boot.\n");
+            kernel_log("[WARN] First-run wizard: userscfg_save failed\n");
+        }
+    } else {
+        vga_puts("[WARN] Could not create the account.\n");
+        kernel_log("[WARN] First-run wizard: rust_users_add failed\n");
     }
 
     sysconfig_t new_cfg;
