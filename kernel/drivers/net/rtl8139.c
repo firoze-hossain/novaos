@@ -1,9 +1,21 @@
 /*
- * rtl8139.c - Realtek RTL8139 PCI NIC driver (polling PIO/DMA, no IRQ)
+ * rtl8139.c - Realtek RTL8139 PCI NIC driver
+ *
+ * Phase 43: reception is genuinely interrupt-driven (see
+ * rtl8139_irq_handler() and PROGRESS.md) - the hardware ring buffer
+ * itself is only ever touched (rtl8139_receive(), below, unchanged by
+ * this phase) once the IRQ handler has actually signaled that a
+ * packet arrived, not on every idle-loop tick regardless. Transmission
+ * still busy-waits on TSD's own completion bit directly (see
+ * rtl8139_send()) - a real, deliberate, smaller scope limit for this
+ * phase, not an oversight: TX completion happens once per packet
+ * *sent*, not continuously while idle, so it doesn't have the "wastes
+ * CPU even when doing nothing" property reception did.
  */
 #include "rtl8139.h"
 #include "../pci/pci.h"
 #include "../../arch/x86/io.h"
+#include "../../arch/x86/cpu/irq.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
 
@@ -29,6 +41,13 @@
 #define CMD_RX_ENABLE 0x08
 #define CMD_TX_ENABLE 0x04
 #define CMD_BUF_EMPTY 0x01
+
+/* ISR/IMR share the same bit layout (IMR masks which ISR bits
+ * actually raise the line) - only ROK is enabled by this driver (see
+ * rtl8139_init()); the rest are read and acked alongside it in
+ * rtl8139_irq_handler() below purely so a bit this driver doesn't act
+ * on can never stay latched and hold the interrupt line asserted. */
+#define ISR_ROK 0x0001 /* Receive OK - a packet is ready */
 
 #define RCR_ACCEPT_ALL      0x0F /* AAP|APM|AM|AB - see rtl8139_init() */
 
@@ -69,6 +88,34 @@ typedef struct {
 } rtl_location_t;
 
 static rtl_location_t g_location;
+
+/* kernel/rust/net_irq.rs's exported signal - see that file's own doc
+ * comment for the full design. */
+extern void rust_net_rx_signal(void);
+
+/* Phase 43: this driver's IRQ handler - the actual fix for the
+ * "polling PIO/DMA, no IRQ" gap this file's own header comment used
+ * to describe as a known, deliberate limitation. Reads ISR once,
+ * signals net_poll() if ROK is set, then ACKs by writing the *read*
+ * value straight back (RTL8139's own "write 1 to clear" convention,
+ * covering every bit that came in, not just the one this driver acts
+ * on) - required, not optional: an unacked, still-latched ISR bit
+ * holds the interrupt line asserted forever, which on a PIC-based
+ * (not APIC/level-triggered-aware in the way this driver needs to
+ * care about) setup means this exact IRQ never fires again, silently
+ * regressing straight back to "the NIC looks connected but nothing
+ * ever arrives" - a failure mode a self-test that only checks "did a
+ * packet get through once" wouldn't catch on its own, which is
+ * exactly why this ACKs unconditionally rather than only acking the
+ * bit it specifically handled. */
+static void rtl8139_irq_handler(registers_t* regs) {
+    (void)regs;
+    uint16_t isr = inw((uint16_t)(io_base + REG_ISR));
+    if (isr & ISR_ROK) {
+        rust_net_rx_signal();
+    }
+    outw((uint16_t)(io_base + REG_ISR), isr);
+}
 
 static void find_rtl8139(const pci_device_t* dev) {
     if (g_location.found) {
@@ -128,7 +175,22 @@ void rtl8139_init(void) {
      * (see rtl8139.h). */
     outl((uint16_t)(io_base + REG_RBSTART), (uint32_t)rx_buffer);
 
-    outw((uint16_t)(io_base + REG_IMR), 0x0000); /* polled, not interrupt-driven */
+    /* Phase 43: genuinely interrupt-driven reception, not polled - the
+     * PCI "Interrupt Line" config register (offset 0x3C) tells us
+     * which of the 16 legacy IRQ lines the BIOS/firmware actually
+     * routed this specific device to, rather than this driver
+     * assuming a fixed number (which would be wrong on real hardware,
+     * where PCI IRQ routing is not fixed the way it happens to be
+     * stable across this project's own QEMU test config) - the
+     * correct, portable way to find it, the same reasoning
+     * pci_enumerate() itself already documents for other config-space
+     * reads. */
+    uint8_t irq_line = pci_config_read8(g_location.bus, g_location.device,
+                                         g_location.function, 0x3C);
+    register_irq_handler(irq_line, rtl8139_irq_handler);
+    outw((uint16_t)(io_base + REG_IMR), ISR_ROK); /* interrupt-driven,
+                                                      not polled - see
+                                                      PROGRESS.md */
 
     /* Accept everything (promiscuous-ish: AAP|APM|AM|AB) rather than
      * the tighter unicast+broadcast filtering NE2000 uses - simpler

@@ -209,6 +209,12 @@ ASSERTIONS: list[Assertion] = [
     Assertion("virtio_blk_write_readback", r"VIRTIO-BLK WRITE\.READBACK OK",
               "a 512-byte sector written via a real virtio-blk device (real "
               "hardware DMA, not just the layout math) read back identical"),
+    Assertion("net_irq_selftest",
+              r"Kernel-side Rust net IRQ signal self-test.*"
+              r"signal-then-check=pass",
+              "the RTL8139 RX-pending signal/check-and-clear primitive is "
+              "correct, backing genuinely interrupt-driven reception instead "
+              "of polling NIC hardware on every idle tick"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

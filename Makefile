@@ -171,7 +171,7 @@ $(RUST_SYSROOT_MARKER):
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
