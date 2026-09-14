@@ -49,7 +49,37 @@ struct UserRecord {
     uid: u32,
     gid: u32,
     password_hash: u32,
+    /// Phase 49: consecutive failed authentication attempts since the
+    /// last success - the genuine "session concept" half of a real
+    /// login screen, not just the credential check itself. Reset to 0
+    /// on any successful authentication; once it reaches
+    /// LOCKOUT_THRESHOLD, further attempts are rejected outright, even
+    /// with the correct password, until either a successful login
+    /// clears it or the system reboots.
+    ///
+    /// Deliberately NOT part of the on-disk USERS.CFG format (see
+    /// rust_users_save()/load() below, both untouched by this field) -
+    /// a real, honest simplification: this counter resets on every
+    /// reboot, which a determined attacker could exploit by rebooting
+    /// between attempts. A persistent lockout counter is real,
+    /// separate follow-up work; this is still a genuine improvement
+    /// over no rate-limiting at all within a single boot session, and
+    /// changing the on-disk format at all would risk this project's
+    /// own already-verified tools/fixtures/USERS.CFG fixture for a
+    /// property (persistent lockout) not actually being asked for.
+    failed_attempts: u32,
 }
+
+/// After this many consecutive failed attempts against one account
+/// (within a single boot - see failed_attempts' own doc comment),
+/// authentication is refused outright, even with the correct
+/// password. Chosen high enough that no existing self-test's own
+/// intentional wrong-password checks (kernel/rust/users.rs's own
+/// rust_users_selftest, kernel/task/sandbox_demo.c's real ring-3
+/// test) could ever accidentally trigger it - each makes exactly one
+/// wrong-password attempt against any given account, nowhere near
+/// this threshold.
+const LOCKOUT_THRESHOLD: u32 = 5;
 
 impl UserRecord {
     const fn empty() -> Self {
@@ -60,6 +90,7 @@ impl UserRecord {
             uid: 0,
             gid: 0,
             password_hash: 0,
+            failed_attempts: 0,
         }
     }
 }
@@ -149,7 +180,13 @@ pub unsafe extern "C" fn rust_users_add(
 /// *or* wrong password - deliberately not distinguished in the return
 /// value, the same reasoning real login prompts use: revealing
 /// "username exists but password is wrong" vs. "no such username" at
-/// all makes username enumeration trivial for an attacker).
+/// all makes username enumeration trivial for an attacker) - and also
+/// `false`, even for the *correct* password, once an account has
+/// LOCKOUT_THRESHOLD consecutive failures (see UserRecord's own
+/// failed_attempts field doc comment) - deliberately not distinguished
+/// from a plain wrong-password result either, the same reasoning:
+/// revealing "this account is locked" is itself information a
+/// generic failure message shouldn't leak.
 ///
 /// # Safety
 /// `username_ptr`/`password_ptr` must be valid for reads of
@@ -169,13 +206,21 @@ pub unsafe extern "C" fn rust_users_authenticate(
         core::slice::from_raw_parts(password_ptr, password_len as usize);
     let attempt_hash = fnv1a_hash(password);
 
-    for record in users().iter() {
+    for record in users().iter_mut() {
         if username_matches(record, name) {
+            if record.failed_attempts >= LOCKOUT_THRESHOLD {
+                return false; // locked out - not even the correct
+                              // password is accepted until a reboot
+                              // (see failed_attempts' own doc comment)
+            }
             if record.password_hash == attempt_hash {
+                record.failed_attempts = 0; // a success clears any
+                                             // prior failures
                 core::ptr::write(out_uid, record.uid);
                 core::ptr::write(out_gid, record.gid);
                 return true;
             }
+            record.failed_attempts += 1;
             return false; // right username, wrong password
         }
     }
@@ -289,7 +334,10 @@ pub unsafe extern "C" fn rust_users_load(data: *const u8, data_len: u32) -> bool
 /// serializes the database, wipes it, reloads from the serialized
 /// bytes, and confirms authentication still works identically after
 /// that round trip - proving USERS.CFG persistence itself is correct,
-/// not just the in-memory add/authenticate logic.
+/// not just the in-memory add/authenticate logic. Also confirms
+/// Phase 49's own lockout behavior: after LOCKOUT_THRESHOLD consecutive
+/// wrong-password attempts against a (separate) account, even that
+/// account's genuinely correct password is rejected.
 #[no_mangle]
 pub extern "C" fn rust_users_selftest() -> i32 {
     let mut code = 0;
@@ -388,6 +436,57 @@ pub extern "C" fn rust_users_selftest() -> i32 {
         };
     if !after_reload_ok || uid2 != 42 || gid2 != 43 {
         code |= 32;
+    }
+
+    // Phase 49: lockout verification - a separate account from
+    // "selftest" above, specifically so this segment's own repeated
+    // wrong-password attempts can't interact with (or be confused
+    // with) the earlier, single wrong-password check. Exactly
+    // LOCKOUT_THRESHOLD consecutive wrong attempts, then confirms the
+    // *correct* password is still rejected - proving this isn't just
+    // "wrong passwords keep failing" (which would be true regardless
+    // of any lockout logic) but that the account is genuinely locked.
+    let lock_username = b"locktest";
+    let lock_password = b"lock-correct-password";
+    let lock_wrong = b"lock-wrong-password";
+    unsafe {
+        rust_users_add(
+            lock_username.as_ptr(),
+            lock_username.len() as u32,
+            99,
+            99,
+            lock_password.as_ptr(),
+            lock_password.len() as u32,
+        );
+    }
+
+    let mut lock_uid = 0u32;
+    let mut lock_gid = 0u32;
+    for _ in 0..LOCKOUT_THRESHOLD {
+        unsafe {
+            rust_users_authenticate(
+                lock_username.as_ptr(),
+                lock_username.len() as u32,
+                lock_wrong.as_ptr(),
+                lock_wrong.len() as u32,
+                &mut lock_uid,
+                &mut lock_gid,
+            );
+        }
+    }
+    let correct_after_lockout = unsafe {
+        rust_users_authenticate(
+            lock_username.as_ptr(),
+            lock_username.len() as u32,
+            lock_password.as_ptr(),
+            lock_password.len() as u32,
+            &mut lock_uid,
+            &mut lock_gid,
+        )
+    };
+    if correct_after_lockout {
+        code |= 64; // the correct password must still be rejected -
+                    // the account is locked, not just "recently wrong"
     }
 
     // Leave the database empty for whatever real code runs after this

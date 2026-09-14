@@ -100,6 +100,42 @@ static void read_line(char* buf, int buf_size) {
     buf[len] = '\0';
 }
 
+/* Phase 49: same structure as read_line() above, but shows '*' for
+ * every typed character instead of the character itself - the
+ * familiar password-prompt convention, matching
+ * kernel/config's own userland/shell/firstrun.c's own
+ * read_line_noecho() (a separate copy, not shared code - firstrun.c
+ * is kernel-side ring-0, this is ring-3 userland; they use different
+ * underlying primitives - keyboard_get_char() there,
+ * sys_read_key()/sys_yield() here - so there's nothing to actually
+ * share beyond the shape). Doesn't make the stored credential itself
+ * any more secure (see kernel/rust/users.rs's own documented
+ * limitation: FNV-1a is not a cryptographic hash) - this only avoids
+ * the separate, basic problem of the password appearing in plain text
+ * on screen while being typed. */
+static void read_line_noecho(char* buf, int buf_size) {
+    int len = 0;
+    for (;;) {
+        int c = read_char_blocking();
+        if (c == '\n' || c == '\r') {
+            putchar('\n');
+            break;
+        }
+        if (c == '\b') {
+            if (len > 0) {
+                len--;
+                sys_write("\b \b");
+            }
+            continue;
+        }
+        if (c >= 32 && c < 127 && len < buf_size - 1) {
+            buf[len++] = (char)c;
+            putchar('*');
+        }
+    }
+    buf[len] = '\0';
+}
+
 /* Splits `line` on spaces into up to MAX_TOKENS tokens - the same
  * simple, no-quoting parsing every command in this project's earlier
  * (ring-0) shell already used. Returns the token count. */
@@ -514,6 +550,49 @@ int main(int argc, char** argv, char** envp) {
     (void)argc;
     (void)argv;
     (void)envp;
+
+    /* Phase 49: a real login screen, not just the cosmetic "username"
+     * firstrun.c already greets by at boot. Loops until a real
+     * SYS_LOGIN (kernel-side, checked against kernel/rust/users.rs's
+     * own database - see process.h's own comment on why credential
+     * checking happens in the kernel, not here) succeeds - a wrong
+     * password (or an account locked out after too many consecutive
+     * failures, kernel/rust/users.rs's own Phase 49 addition) shows
+     * the same generic "Login incorrect" either way, deliberately not
+     * distinguished (see kernel/rust/users.rs's own comment on why:
+     * revealing which failure mode occurred is itself information a
+     * generic message shouldn't leak).
+     *
+     * Safe in this project's own headless test config for the same
+     * reason this file's own pre-existing command prompt already is,
+     * not a new risk: read_char_blocking() below is sys_read_key()
+     * (non-blocking) polled in a sys_yield() loop, entirely within
+     * this one ring-3 process - not a ring-0, pre-scheduler halt the
+     * way userland/shell/firstrun.c's own wizard is. Every other
+     * process (idle, the sandbox/demo tasks, coreutils-test) is
+     * independently scheduled and keeps running and completing its
+     * own self-tests regardless of whether this loop ever exits -
+     * confirmed directly, not assumed: this project's own shell,
+     * completely unmodified before this phase, already sat at its own
+     * command prompt this exact same way, forever, in every prior
+     * headless test run, without ever affecting any other assertion's
+     * pass/fail result. */
+    for (;;) {
+        char username[64];
+        char password[64];
+
+        printf("\nNovaOS login: ");
+        read_line(username, sizeof(username));
+        printf("Password: ");
+        read_line_noecho(password, sizeof(password));
+
+        if (sys_login(username, password) == 0) {
+            printf("\nLogin successful. Welcome, %s (uid %u).\n", username,
+                   sys_getuid());
+            break;
+        }
+        printf("\nLogin incorrect.\n");
+    }
 
     printf("NovaOS ring-3 shell (Phase 30) - type 'help' for commands\n");
 
