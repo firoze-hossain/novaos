@@ -237,6 +237,36 @@ static void handle_write_handle(registers_t* regs) {
                                            (const uint8_t*)buf, len);
 }
 
+/* Phase 47: SYS_LOGIN/SYS_GETUID - see syscall.h's own comment on each
+ * for the full argument/return contract. */
+static void handle_login(registers_t* regs) {
+    process_t* p = process_current();
+    const char* username = (const char*)regs->ebx;
+    const char* password = (const char*)regs->ecx;
+
+    if (p == NULL) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    bool ok = process_login(p, username, password);
+    if (ok) {
+        kernel_log("[SYSCALL] pid %d SYS_LOGIN('%s') -> success, now uid "
+                   "%d gid %d\n", p->pid, username, (int)p->uid,
+                   (int)p->gid);
+        regs->eax = 0;
+    } else {
+        kernel_log("[SECURITY] pid %d SYS_LOGIN('%s') -> rejected (wrong "
+                   "password or unknown username)\n", p->pid, username);
+        regs->eax = (uint32_t)-1;
+    }
+}
+
+static void handle_getuid(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p != NULL) ? p->uid : 0;
+}
+
 static void handle_pipe(registers_t* regs) {
     process_t* p = process_current();
     int* out = (int*)regs->ebx; /* {read_handle, write_handle} */
@@ -719,6 +749,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_WRITE_HANDLE:
             handle_write_handle(regs);
+            break;
+
+        case SYS_LOGIN:
+            handle_login(regs);
+            break;
+
+        case SYS_GETUID:
+            handle_getuid(regs);
             break;
 
         default:

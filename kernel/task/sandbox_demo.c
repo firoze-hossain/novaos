@@ -97,6 +97,24 @@ static inline int sys_write_handle(int handle, const void* buf, int len) {
     return result;
 }
 
+static inline int sys_login(const char* username, const char* password) {
+    int result = SYS_LOGIN;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(username), "c"(password)
+                       : "memory", "cc");
+    return result;
+}
+
+static inline unsigned int sys_getuid(void) {
+    unsigned int result = SYS_GETUID;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       :
+                       : "memory", "cc");
+    return result;
+}
+
 static inline void sys_exit(int exit_code) {
     /* Phase 23: SYS_EXIT now takes an exit code in EBX (previously
      * ignored) - explicitly passing 0 here rather than leaving EBX as
@@ -306,6 +324,38 @@ void sandbox_demo_task(void) {
         }
     } else {
         sys_write("[sandbox] FAIL: SYS_FORK failed.\n");
+    }
+
+    /* Phase 47: SYS_LOGIN/SYS_GETUID, exercised through the real
+     * ring-3 syscall path - proves the syscall-dispatch layer around
+     * process_login()/kernel/rust/users.rs works correctly (the Rust
+     * user database has its own, separate, more thorough direct-call
+     * self-test - see kernel_main()). Authenticates against a real,
+     * known test account created kernel-side before this task ever
+     * ran (see kernel_main()'s own comment on why account creation
+     * itself isn't a syscall). Three checks, not one: this process
+     * starts as uid 0 (every sandboxed task does - see process.h's
+     * own comment); a wrong password must fail *and* leave the uid
+     * unchanged; the correct password must succeed and actually
+     * change the uid to the test account's real value (500), not just
+     * return success without the identity actually changing. */
+    unsigned int uid_before = sys_getuid();
+
+    int wrong_login = sys_login("ring3test", "wrong-password-entirely");
+    unsigned int uid_after_wrong = sys_getuid();
+
+    int right_login = sys_login("ring3test", "ring3-correct-password");
+    unsigned int uid_after_right = sys_getuid();
+
+    if (uid_before == 0 && wrong_login == -1 && uid_after_wrong == 0 &&
+        right_login == 0 && uid_after_right == 500) {
+        sys_write("[sandbox] PASS: SYS_LOGIN/SYS_GETUID - started as uid 0, "
+                  "a wrong password was correctly rejected (uid unchanged), "
+                  "the correct password succeeded and this process is now "
+                  "uid 500.\n");
+    } else {
+        sys_write("[sandbox] FAIL: SYS_LOGIN/SYS_GETUID behaved "
+                  "unexpectedly.\n");
     }
 
     sys_exit(0);

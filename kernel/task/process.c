@@ -93,6 +93,9 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
+    p->uid = 0; /* kernel-created tasks run as root (uid 0) - trusted,
+                   internal, never the result of a login */
+    p->gid = 0;
 
     scheduler_add(p);
     return p->pid;
@@ -177,6 +180,13 @@ static process_t* create_user_task_common(const char* name,
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
+    p->uid = 0; /* kernel-created tasks (this function backs both
+                   process_create_user_task() and
+                   process_create_sandboxed_task(), both only ever
+                   called directly by kernel_main() at boot, never as
+                   the result of a login) run as root (uid 0) - see
+                   process.h's own comment on process_t's uid/gid */
+    p->gid = 0;
 
     return p;
 }
@@ -600,6 +610,21 @@ static int process_exec_internal(const char* path, const char** argv,
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
 
+    /* Real exec() semantics, deliberately different from this
+     * function's own capability handling just above (allowed_files[]/
+     * can_open_any_file/can_spawn all reset to nothing-or-an-explicit-
+     * grant on every exec, by original design) - uid/gid represent
+     * *who is running this*, which real exec() does not change, so
+     * this inherits the calling process's identity rather than
+     * resetting it. process_current() is NULL only for the very first
+     * exec at boot (kernel_main() loading the initial shell, before
+     * the scheduler has started running anything) - that one case
+     * starts as root (uid 0), matching Unix's own PID 1/init
+     * convention. */
+    process_t* caller = process_current();
+    p->uid = (caller != NULL) ? caller->uid : 0;
+    p->gid = (caller != NULL) ? caller->gid : 0;
+
     kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
                "%d arg(s)\n", path, p->pid, entry_point, argc);
 
@@ -785,10 +810,43 @@ int process_fork(registers_t* parent_regs) {
     child->can_open_any_file = parent->can_open_any_file;
     child->heap_current = parent->heap_current;
     child->heap_mapped_end = parent->heap_mapped_end;
+    child->uid = parent->uid; /* real fork() semantics - a child is
+                                  still "the same user" as its parent,
+                                  same reasoning as process_exec_internal()'s
+                                  own inheritance, see process.h's own
+                                  comment on process_t's uid/gid */
+    child->gid = parent->gid;
 
     kernel_log("[ OK ] process_fork: pid %d forked -> new pid %d\n",
                parent->pid, child->pid);
 
     scheduler_add(child);
     return child->pid;
+}
+
+void process_set_identity(process_t* p, uint32_t uid, uint32_t gid) {
+    p->uid = uid;
+    p->gid = gid;
+}
+
+/* kernel/rust/users.rs's exported authentication check - see that
+ * file's own doc comment for the full contract, including why its
+ * password hash is explicitly not a secure one. */
+extern bool rust_users_authenticate(const uint8_t* username_ptr,
+                                     uint32_t username_len,
+                                     const uint8_t* password_ptr,
+                                     uint32_t password_len, uint32_t* out_uid,
+                                     uint32_t* out_gid);
+
+bool process_login(process_t* p, const char* username, const char* password) {
+    uint32_t uid = 0;
+    uint32_t gid = 0;
+    bool ok = rust_users_authenticate(
+        (const uint8_t*)username, (uint32_t)strlen(username),
+        (const uint8_t*)password, (uint32_t)strlen(password), &uid, &gid);
+    if (!ok) {
+        return false;
+    }
+    process_set_identity(p, uid, gid);
+    return true;
 }
