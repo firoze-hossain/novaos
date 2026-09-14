@@ -3939,7 +3939,129 @@ modern/MMIO-capability path), one request at a time (no queuing), and
 not reachable from the VFS/mount path - a real virtio-blk-backed
 filesystem is real, separate, follow-up work, not attempted here.
 
-## Phase 43 and beyond
+## Phase 43: RTL8139 becomes genuinely interrupt-driven (Rust signal + C IRQ handler)
+
+**Status: Complete (scoped).** Started from a gap-analysis claim
+("every current driver polls instead of using interrupts... wastes
+CPU continuously") that turned out not to hold up uniformly under
+direct investigation - worth recording precisely, since shipping a
+fix for the wrong target would have been worse than not shipping one.
+
+### What investigation actually found
+
+`ac97_beep()` is fire-and-forget - it starts playback and returns
+immediately; there is no ongoing poll loop after that at all.
+`usb_uhci_...`'s only busy-wait is bounded to one-time control-
+transfer completion during device enumeration at boot, not continuous
+idle polling. Neither matches "wastes CPU continuously, even when
+doing nothing."
+
+The pattern that *does* match, found directly in `kernel/init/main.c`'s
+`idle_task_entry()`:
+
+```c
+for (;;) {
+    net_poll();
+    __asm__ volatile ("hlt");
+}
+```
+
+`hlt` wakes on every timer tick, so `net_poll()` - which called into
+`rtl8139_receive()`, reading the NIC's hardware command register -
+ran roughly `TIMER_FREQUENCY_HZ` times per second, forever, whether or
+not a packet had ever arrived. The code's own prior comment
+("the NE2000 driver has no IRQ... so something has to regularly check
+it") already named this as a known, deliberate gap. This phase fixes
+exactly this, for RTL8139 specifically (the NIC this project's own
+QEMU test config actually uses) - NE2000 and AC97/UHCI's own smaller,
+bounded busy-waits are left alone, since they don't have the property
+this phase exists to fix.
+
+### What was built
+
+`kernel/rust/net_irq.rs`: a `SpinLock<bool>` "packet arrived" signal -
+reusing Phase 40's `SpinLock` for exactly the case its own header
+comment anticipated (state touched from both interrupt and non-
+interrupt context), not a new primitive invented to declare victory
+over a different subsystem's IRQ integration. Deliberately a single,
+sticky flag, not a precise count - `rtl8139_receive()`'s own,
+unchanged ring-buffer-draining logic already loops correctly until
+genuinely empty; this flag's only job is "should net_poll() bother
+calling into that logic at all this tick."
+
+`kernel/drivers/net/rtl8139.c`: a real IRQ handler, registered against
+whichever IRQ line the PCI "Interrupt Line" config register (offset
+0x3C) actually reports for this device - not a hardcoded number, which
+would be wrong on real hardware even though it happens to be stable in
+this project's own QEMU test config. Unconditionally ACKs every ISR
+bit it reads back (RTL8139's "write 1 to clear" convention), not just
+the one bit (ROK) this driver acts on - an unacked, latched ISR bit
+would hold the interrupt line asserted forever, silently regressing
+straight back to "looks connected, nothing ever arrives" in a way a
+self-test that only checks "did a packet get through once" wouldn't
+catch. `rtl8139_receive()` itself is entirely unchanged - only *when*
+it gets called changed, not what it does.
+
+`kernel/net/net.c`'s `net_driver_receive()` checks the signal first
+for the RTL8139 case: nothing pending means no NIC hardware register
+is touched at all, the actual CPU-saving change. NE2000 is untouched,
+still polling exactly as before - a real, separate scope boundary.
+
+### A real bug caught and fixed correctly during testing
+
+The first version of `rust_net_irq_selftest()` assumed the signal
+"must start false." It failed - not because the signal/check-and-clear
+logic was wrong, but because the test's own assumption was: by the
+time this self-test runs (after `net_init()` and this project's own
+ping/DNS/TFTP/TCP self-tests have already exercised real network
+traffic), RTL8139's real IRQ handler may well have already signaled
+this exact flag from a real packet arriving - which is itself early
+evidence the conversion was working, not a reason to paper over the
+assumption. Fixed by having the self-test establish a known state
+first (an explicit clear) rather than assuming one it can't actually
+guarantee, and testing the logic this primitive exists to provide,
+not an unprovable claim about global timing.
+
+### Verified behavior
+
+All existing network-dependent self-tests (ping, TFTP fetch, DNS
+resolve, package install/remove, TCP HTTP fetch) continued passing
+with the NIC now genuinely interrupt-driven instead of polled -
+meaningful because every one of them would have failed if the IRQ
+handler weren't actually firing correctly, since `net_driver_receive()`
+now refuses to touch RTL8139 hardware at all unless the signal is set,
+and nothing except that handler ever sets it.
+
+Beyond "tests still pass," got direct, unambiguous proof rather than
+inferring it: a temporary diagnostic counter in the IRQ handler,
+logged once and then removed once it had proven the point, showed the
+handler genuinely fired 12 times over the course of one full test
+boot (covering ping, DNS, TFTP, and TCP activity) - not zero, and not
+inferred from correctness alone.
+
+### Known limitations
+
+RTL8139 transmission still busy-waits on TSD's own completion bit
+directly - a real, deliberate, smaller scope limit: TX completion
+happens once per packet *sent*, not continuously while idle, so it
+doesn't have the property this phase exists to fix. NE2000 (the
+fallback NIC, not exercised by this project's own QEMU test config at
+all) is untouched. AC97/UHCI's own small, bounded busy-waits are left
+as they are, having turned out not to match this phase's actual
+target on direct investigation.
+
+A burst of several packets arriving before `net_poll()` next runs
+drains one per call (`rtl8139_receive()`'s own existing behavior,
+unchanged) - the rest wait for their own, individual ROK interrupts
+(RTL8139 raises one per packet, not just "buffer non-empty"), so
+nothing is ever lost, just drained across a few more `net_poll()`
+calls instead of all at once. A real, understood, bounded trade-off,
+not a correctness gap, and one that essentially never matters in
+practice since every caller genuinely waiting on network activity
+(tcp.c/dns.c/arp.c/tftp.c/icmp.c) already calls `net_poll()` in its
+own tight loop, not just once per idle tick.
+
+## Phase 44 and beyond
 
 Not started. Candidates: migrating `timer_init`/`vfs_init`/`net_init`
 to driver registration too (their own self-test interleaving would
@@ -3954,5 +4076,6 @@ hand-synchronized copies); a build-time check that `kernel_end` covers
 every section in the final binary (Phase 38's own "Known
 limitations"); wiring tools/python's two scripts into a CI workflow;
 wiring virtio-blk into the VFS as a real, mountable block device;
-virtio-net; a full ring-3 compositor/Store port; TCP retransmission/
-windowing and a sockets-style syscall API for TCP.
+virtio-net; making RTL8139 transmission interrupt-driven too; a full
+ring-3 compositor/Store port; TCP retransmission/windowing and a
+sockets-style syscall API for TCP.

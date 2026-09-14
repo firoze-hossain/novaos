@@ -716,6 +716,24 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    (result & 4) ? "FAIL" : "pass");
     }
 
+    /* Phase 43: kernel/rust/net_irq.rs's own self-test - verifies the
+     * signal/check-and-clear pair's basic logic before RTL8139's real
+     * IRQ handler ever depends on it. See that file's own doc comment
+     * for why this can only prove the logic, not the actual interrupt-
+     * context race it exists to survive - the real network self-tests
+     * further down (PING/TFTP/DNS/TCP) are what prove *that*, now
+     * running with the NIC genuinely interrupt-driven instead of
+     * polled every idle tick. */
+    {
+        extern int rust_net_irq_selftest(void);
+        int result = rust_net_irq_selftest();
+        kernel_log("[ %s ] Kernel-side Rust net IRQ signal self-test: "
+                   "signal-then-check=%s check-actually-clears=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
     firstrun_check_and_run();
 
     process_init();
