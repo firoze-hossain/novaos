@@ -3840,7 +3840,106 @@ it's testing a genuinely different thing (stage1/stage2 boot code, not
 GRUB), and unifying it was judged out of scope for this pass rather
 than attempted and left half-done.
 
-## Phase 42 and beyond
+## Phase 42: virtio-blk (Rust virtqueue + C PCI/handshake glue)
+
+**Status: Complete (scoped).** This kernel's first virtio driver -
+directly the item named in this project's own release-readiness
+roadmap ("virtio-net/virtio-blk... dramatically simpler and faster
+than emulating real NE2000/RTL8139/ATA hardware").
+
+### Scope, deliberately
+
+Legacy/transitional PCI transport only (I/O-port BAR, matching this
+kernel's other PCI drivers - ac97.c/uhci.c neither implement MMIO-
+capability config either). Exactly one request in flight at a time -
+no queued/concurrent requests, matching how this kernel's other
+storage driver (ATA) already behaves, and letting the virtqueue reuse
+fixed descriptor slots 0/1/2 for every request rather than needing a
+free-descriptor-tracking scheme. Not wired into the VFS as a boot/
+mount device - FAT32/ext2 still mount through the existing ATA driver;
+making virtio-blk an actual, selectable boot device raises its own,
+separate design questions (which device wins if both are present?
+does VFS code need a generic block-device interface instead of calling
+ATA directly?) deliberately left for real, dedicated follow-up work.
+
+### What was built, and where each piece lives
+
+`kernel/rust/virtio_blk.rs`: the virtqueue itself - descriptor table,
+available ring, used ring, and the byte-offset arithmetic connecting
+them, following this project's own standing rule (new kernel work
+attempted in Rust first) for the same reason `kernel/rust/pipe.rs` was:
+a virtqueue is structurally the same "ring buffer, index arithmetic
+must never be off by one" shape, except here a mistake doesn't just
+corrupt kernel memory quietly - it hands a real hardware DMA engine a
+bad physical address or length.
+
+`kernel/drivers/virtio/virtio_blk.c`: PCI detection, the legacy status/
+feature handshake, and the read/write request API - kept in C
+deliberately, not as a default but because this is genuinely PCI
+config space and I/O-port glue with no benefit from being anything
+else, consistent with (not an exception to) this project's own
+"prefer Rust where it actually helps" direction. Self-registers via
+Phase 39's `DRIVER_REGISTER` mechanism (`DRIVER_PHASE_AFTER_PCI`,
+alongside UHCI/AC97) - zero `kernel/init/main.c` changes needed for
+driver *initialization* itself, only for wiring in its own self-test.
+
+`kernel/arch/x86/mm/pmm.c`: a new `pmm_alloc_contiguous(count)`, a
+real prerequisite this phase needed and built first - the virtqueue
+must live in physically-contiguous memory (up to 3 pages, for the
+256-entry queue size QEMU's virtio-blk-pci commonly reports), and the
+existing `pmm_alloc_frame()` only ever hands out one arbitrary frame
+at a time with no contiguity guarantee. A natural, small extension to
+existing C infrastructure (the same bitmap `pmm_alloc_frame()` already
+uses), not a rewrite - and a genuinely general capability, useful to
+any future DMA-capable driver, not virtio-specific.
+
+### Verified behavior, in stages
+
+The virtqueue's own byte-layout arithmetic was verified in isolation
+first, before ever trusting it against real hardware: a self-test
+(`rust_virtqueue_selftest`) checks the computed layout for two queue
+sizes against hand-computed expected values - which were themselves
+independently cross-checked in Python before being written into the
+Rust self-test, specifically to avoid writing a "self-test" whose own
+expected values were wrong.
+
+Learned directly from Phase 38's own lesson, not just remembered as a
+rule: confirmed via `nm build/novaos.bin` that every new static this
+phase introduces (Rust and C alike - the DMA request/data/status
+buffers included) lands safely inside `kernel_start`/`kernel_end`,
+checked directly rather than assumed safe because the build succeeded.
+
+Real hardware was tested manually first, deliberately outside the
+shared test infrastructure, before ever touching it: attached a real
+QEMU `virtio-blk-pci` device by hand and iterated until it worked. Hit
+one real, informative snag along the way - an initial attempt forcing
+`disable-legacy`/`disable-modern` flags produced PCI device ID
+`0x1042` (confirmed against the virtio spec's own device-ID ranges:
+`0x1040+` is specifically the *non-transitional*, modern-only range),
+which this driver correctly didn't recognize as anything it supports.
+Switched to QEMU's default transitional mode (device ID `0x1001`,
+supporting legacy) and the full handshake, plus a write-then-read-back
+of a real 512-byte sector through actual hardware DMA, succeeded -
+with the queue size QEMU actually reports (256 entries, 3 contiguous
+pages), not a toy case.
+
+Only once that manual verification succeeded was virtio-blk-pci wired
+into the shared, permanent test infrastructure: `tools/python/
+test_runner.py` gained a dedicated, freshly-generated-per-run 1MB test
+disk image (deliberately separate from `disk.img`, so a virtio-blk
+mistake can never risk the FAT32/ext2 test disk every other assertion
+depends on) and three new assertions (layout self-test, device
+presence, and the real hardware write/read-back). All 54 assertions
+(51 prior + 3 new) now pass together, repeatably.
+
+### Known limitations
+
+Exactly the scope boundaries named above: legacy transport only (no
+modern/MMIO-capability path), one request at a time (no queuing), and
+not reachable from the VFS/mount path - a real virtio-blk-backed
+filesystem is real, separate, follow-up work, not attempted here.
+
+## Phase 43 and beyond
 
 Not started. Candidates: migrating `timer_init`/`vfs_init`/`net_init`
 to driver registration too (their own self-test interleaving would
@@ -3853,6 +3952,7 @@ versioned, single-source-of-truth syscall ABI header (`kernel/arch/
 x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
 hand-synchronized copies); a build-time check that `kernel_end` covers
 every section in the final binary (Phase 38's own "Known
-limitations"); wiring tools/python's two scripts into a CI workflow; a
-full ring-3 compositor/Store port; virtio-net/virtio-blk; TCP
-retransmission/windowing and a sockets-style syscall API for TCP.
+limitations"); wiring tools/python's two scripts into a CI workflow;
+wiring virtio-blk into the VFS as a real, mountable block device;
+virtio-net; a full ring-3 compositor/Store port; TCP retransmission/
+windowing and a sockets-style syscall API for TCP.
