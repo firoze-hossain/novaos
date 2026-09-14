@@ -120,6 +120,46 @@ uint32_t pmm_alloc_frame(void) {
     return 0; /* out of memory */
 }
 
+/* Finds `count` *consecutive* free frames and marks all of them used
+ * in one call, returning the physical address of the first (always
+ * itself frame/4096-aligned, by construction - every frame is). Added
+ * specifically for kernel/drivers/virtio/virtio_blk.c's virtqueue,
+ * which the virtio spec requires to live in one physically-contiguous
+ * region rather than one pmm_alloc_frame() frame at a time (a real,
+ * general need any future DMA-capable driver would also have, not
+ * something specific to virtio) - simple linear scan for a run of
+ * `count` clear bits, the same style pmm_alloc_frame() above already
+ * uses, extended to look for a run instead of a single bit. Returns 0
+ * (this allocator's existing, established "out of memory" sentinel -
+ * frame 0 is permanently reserved, so this is never itself a valid
+ * result) if no run of that length exists, even if `count` total free
+ * frames exist scattered non-contiguously - this allocator does not
+ * compact or move anything to create one. */
+uint32_t pmm_alloc_contiguous(uint32_t count) {
+    if (count == 0) {
+        return 0;
+    }
+    uint32_t run_start = 0;
+    uint32_t run_len = 0;
+    for (uint32_t f = 0; f < total_frames; f++) {
+        if (bitmap_test(f)) {
+            run_len = 0;
+            continue;
+        }
+        if (run_len == 0) {
+            run_start = f;
+        }
+        run_len++;
+        if (run_len == count) {
+            for (uint32_t i = run_start; i < run_start + count; i++) {
+                bitmap_set(i);
+            }
+            return run_start * PMM_FRAME_SIZE;
+        }
+    }
+    return 0; /* no sufficiently long free run exists */
+}
+
 void pmm_free_frame(uint32_t phys_addr) {
     uint32_t frame = phys_addr / PMM_FRAME_SIZE;
     if (frame < MAX_TRACKED_FRAMES) {

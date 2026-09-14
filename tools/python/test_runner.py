@@ -64,6 +64,23 @@ AUDIO_FLAGS = [
 ]
 USB_FLAGS = ["-device", "piix3-usb-uhci", "-device", "usb-kbd"]
 
+# Phase 42: a small, dedicated disk image for kernel/drivers/virtio/
+# virtio_blk.c's own self-test - deliberately separate from disk.img
+# (the FAT32/ext2 test disk every other assertion above depends on),
+# so a virtio-blk read/write mistake can never risk corrupting
+# anything the rest of this suite relies on. Generated fresh by this
+# script itself (see ensure_virtio_test_disk() below), not committed
+# as a binary - its content doesn't matter at all before boot (this
+# driver's own self-test writes a known pattern and reads it back;
+# nothing before that ever reads this file's prior contents), so
+# there's nothing to keep in sync the way tools/fixtures/SYSTEM.CFG's
+# binary fixture needs to be.
+DEFAULT_VIRTIO_DISK = REPO_ROOT / "build" / "virtio-blk-test.img"
+VIRTIO_TEST_DISK_SIZE_BYTES = 1024 * 1024  # 1MB - far more than the
+# single 512-byte sector this driver's own self-test actually touches
+# (see kernel/init/main.c's own comment on why sector 1), generous
+# headroom for this to grow without needing to revisit the size.
+
 
 @dataclass
 class Assertion:
@@ -182,9 +199,31 @@ ASSERTIONS: list[Assertion] = [
               "the UHCI driver ran via the self-registration mechanism"),
     Assertion("driver_ac97_registered", r"Driver .AC97 audio. initializing",
               "the AC97 driver ran via the self-registration mechanism"),
+    Assertion("virtio_blk_selftest_layout",
+              r"Kernel-side Rust virtqueue layout self-test.*"
+              r"small-queue-layout=pass",
+              "the virtio-blk virtqueue's byte-layout arithmetic is correct, "
+              "checked against independently hand-computed values"),
+    Assertion("virtio_blk_present", r"virtio-blk at PCI",
+              "a virtio-blk device was found and the legacy handshake completed"),
+    Assertion("virtio_blk_write_readback", r"VIRTIO-BLK WRITE\.READBACK OK",
+              "a 512-byte sector written via a real virtio-blk device (real "
+              "hardware DMA, not just the layout math) read back identical"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
+
+
+def ensure_virtio_test_disk(path: Path) -> None:
+    """Creates (or recreates) the dedicated virtio-blk test disk image
+    - see DEFAULT_VIRTIO_DISK's own comment for why this is generated
+    fresh rather than committed. A plain zero-filled file is enough:
+    kernel/drivers/virtio/virtio_blk.c's own self-test writes a known
+    pattern to sector 1 before ever reading it back, so this file's
+    starting content is never actually read as meaningful data."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        f.truncate(VIRTIO_TEST_DISK_SIZE_BYTES)
 
 
 def boot_and_capture(
@@ -192,6 +231,7 @@ def boot_and_capture(
     disk_path: Path,
     log_path: Path,
     timeout_seconds: int,
+    virtio_disk_path: Path,
 ) -> None:
     """Boots NovaOS headlessly under QEMU, capturing serial output to
     `log_path` - the same invocation shape as the Makefile's own
@@ -206,6 +246,12 @@ def boot_and_capture(
     if log_path.exists():
         log_path.unlink()
 
+    ensure_virtio_test_disk(virtio_disk_path)
+    virtio_flags = [
+        "-drive", f"file={virtio_disk_path},if=none,id=vblk0",
+        "-device", "virtio-blk-pci,drive=vblk0",
+    ]
+
     cmd = (
         [qemu_bin]
         + QEMU_BASE_FLAGS
@@ -214,6 +260,7 @@ def boot_and_capture(
         + NET_FLAGS
         + AUDIO_FLAGS
         + USB_FLAGS
+        + virtio_flags
         + ["-cdrom", str(iso_path), "-display", "none",
            "-serial", f"file:{log_path}"]
     )
@@ -277,11 +324,16 @@ def main() -> int:
                               "rather than checking an existing one")
     parser.add_argument("--iso", type=Path, default=DEFAULT_ISO)
     parser.add_argument("--disk", type=Path, default=DEFAULT_DISK)
+    parser.add_argument("--virtio-disk", type=Path, default=DEFAULT_VIRTIO_DISK,
+                         help="path to the dedicated virtio-blk test disk "
+                              "image (created fresh each run; default: "
+                              "%(default)s)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     args = parser.parse_args()
 
     if args.boot:
-        boot_and_capture(args.iso, args.disk, args.log, args.timeout)
+        boot_and_capture(args.iso, args.disk, args.log, args.timeout,
+                          args.virtio_disk)
 
     ok = run_checks(args.log)
     return 0 if ok else 1

@@ -26,6 +26,7 @@
 
 mod pipe;
 mod spinlock;
+mod virtio_blk;
 
 use core::panic::PanicInfo;
 

@@ -25,6 +25,14 @@ void pmm_init(const multiboot_info_t* mbi, bool magic_valid);
  * means failure. */
 uint32_t pmm_alloc_frame(void);
 
+/* See pmm.c's own comment for the full rationale (virtio's virtqueue,
+ * and any future DMA-capable driver, needs physically-contiguous
+ * memory, not one arbitrary frame at a time). Does not compact or
+ * move anything to create a run - returns 0 if no single run of
+ * `count` consecutive free frames exists, even if that many free
+ * frames exist scattered non-contiguously elsewhere. */
+uint32_t pmm_alloc_contiguous(uint32_t count);
+
 void pmm_free_frame(uint32_t phys_addr);
 
 typedef struct pmm_stats {

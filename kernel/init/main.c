@@ -16,6 +16,7 @@
 #include "../../userland/pkg/pkgmgr.h"
 #include "../drivers/pci/pci.h"
 #include "../drivers/sound/ac97.h"
+#include "../drivers/virtio/virtio_blk.h"
 #include "../net/net.h"
 #include "../net/dns.h"
 #include "../net/tcp.h"
@@ -339,6 +340,43 @@ void kernel_late_init(void) {
         ac97_beep();
     }
 
+    /* Self-test (Phase 42): if a virtio-blk device is present, write a
+     * known, distinctive pattern to a sector and read it back,
+     * verifying an exact byte-for-byte match - the same "write it,
+     * read it back, compare" standard this project's own ext2 driver
+     * self-test already holds itself to (see the "EXT2 WRITE.READBACK
+     * OK" check earlier in this function), applied here to prove the
+     * legacy virtio handshake, virtqueue setup, and real hardware DMA
+     * request/completion cycle all actually work end to end - not
+     * just that the driver's own internal layout arithmetic is
+     * correct (rust_virtqueue_selftest(), above, already covers that
+     * in isolation). Sector 1, not 0: this is a small, dedicated test
+     * disk image (see TESTING.md) that nothing else on this system
+     * reads or writes, so which sector is used doesn't matter beyond
+     * being consistent between the write and the read-back. */
+    if (virtio_blk_is_present()) {
+        static uint8_t write_pattern[512];
+        for (int i = 0; i < 512; i++) {
+            write_pattern[i] = (uint8_t)(i ^ 0xA5);
+        }
+
+        static uint8_t readback[512];
+        bool wrote = virtio_blk_write_sector(1, write_pattern);
+        bool read = wrote && virtio_blk_read_sector(1, readback);
+        bool matches = read && memcmp(write_pattern, readback,
+                                       sizeof(write_pattern)) == 0;
+
+        if (matches) {
+            kernel_log("[ OK ] VIRTIO-BLK WRITE.READBACK OK: a 512-byte "
+                       "sector written via a real virtio-blk device read "
+                       "back byte-for-byte identical\n");
+        } else {
+            kernel_log("[FAULT] VIRTIO-BLK WRITE.READBACK: wrote=%d "
+                       "read=%d matches=%d\n", (int)wrote, (int)read,
+                       (int)matches);
+        }
+    }
+
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS
      * proxy (10.0.2.3) - the same self-contained-test principle as
      * the gateway ping and TFTP fetch self-tests above, extended to a
@@ -651,6 +689,27 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         kernel_log("[ %s ] Kernel-side Rust spinlock self-test: "
                    "basic-protection=%s interrupt-save-restore=%s "
                    "nested-lock-interrupt-handling=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
+    /* Phase 42: kernel/rust/virtio_blk.rs's own layout self-test -
+     * verifies the legacy virtqueue byte-offset arithmetic against
+     * hand-computed values (themselves independently cross-checked -
+     * see PROGRESS.md) before this driver ever trusts it against real
+     * hardware DMA. The real, hardware-backed read/write/readback test
+     * runs later, once virtio_blk_init() (Phase 39's driver
+     * self-registration, DRIVER_PHASE_AFTER_PCI) has actually found
+     * and initialized a device - see that test, further down in this
+     * function, for the actual end-to-end proof. */
+    {
+        extern int rust_virtqueue_selftest(void);
+        int result = rust_virtqueue_selftest();
+        kernel_log("[ %s ] Kernel-side Rust virtqueue layout self-test: "
+                   "small-queue-layout=%s large-queue-layout=%s "
+                   "pages-needed=%s\n",
                    result == 0 ? "OK" : "FAIL",
                    (result & 1) ? "FAIL" : "pass",
                    (result & 2) ? "FAIL" : "pass",
