@@ -260,13 +260,20 @@ ASSERTIONS: list[Assertion] = [
               "the UID/GID user database's add/authenticate/serialize/"
               "load round trip is correct, including that a persisted-"
               "then-reloaded account still authenticates identically"),
+    Assertion("userscfg_loaded",
+              r"First-run check: USERS\.CFG loaded - accounts restored",
+              "direct, standalone evidence that userscfg_load() actually "
+              "read and parsed tools/fixtures/USERS.CFG from disk at "
+              "boot, not just inferred from the later login test's own "
+              "success"),
     Assertion("sandbox_login_passed",
               r"PASS: SYS_LOGIN/SYS_GETUID",
               "from real ring-3 code: a sandboxed process started as uid "
               "0, a wrong password was correctly rejected leaving its uid "
-              "unchanged, and the correct password succeeded and actually "
-              "changed the process's own uid to the authenticated "
-              "account's real value"),
+              "unchanged, and the correct password - checked against the "
+              "real account persisted in tools/fixtures/USERS.CFG, loaded "
+              "at boot via vfs_read_file - succeeded and actually changed "
+              "the process's own uid to that account's real value"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
