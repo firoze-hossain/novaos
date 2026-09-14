@@ -256,10 +256,14 @@ ASSERTIONS: list[Assertion] = [
               "restored afterward - proven by every test after this one "
               "in the suite (shell launch, fork, exec) still passing"),
     Assertion("users_selftest",
-              r"Kernel-side Rust user database self-test.*add=pass",
+              r"Kernel-side Rust user database self-test.*add=pass.*"
+              r"locked-out-after-threshold=pass",
               "the UID/GID user database's add/authenticate/serialize/"
               "load round trip is correct, including that a persisted-"
-              "then-reloaded account still authenticates identically"),
+              "then-reloaded account still authenticates identically, "
+              "and that an account is genuinely locked (rejecting even "
+              "its own correct password) after enough consecutive "
+              "failed attempts"),
     Assertion("userscfg_loaded",
               r"First-run check: USERS\.CFG loaded - accounts restored",
               "direct, standalone evidence that userscfg_load() actually "

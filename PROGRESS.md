@@ -4566,14 +4566,122 @@ creation - `SYS_LOGIN` remains otherwise only exercised by the
 automated self-test, for the same headless-test-suite reason Phase
 47's own entry named.
 
-## Phase 49 and beyond
+## Phase 49: a real interactive login screen - and a correction to this project's own earlier stated concern
 
-Not started. Candidates: a real interactive login prompt in
-`userland/ring3-shell/shell.c`, done deliberately with the headless-
-test-suite risk both this phase's and Phase 47's own entries named in
-mind; a `useradd`-equivalent way to create additional accounts after
-first boot; a real, salted, deliberately-slow password hash; the real
-SMP prerequisites named in Phase 44's own entry (Local APIC/IO-APIC
+**Status: Complete.** Closes the last open half of the "real login
+screen / session concept" row this project's own release-readiness
+document has carried since Phase 47: `SYS_LOGIN`/`SYS_GETUID` were
+real and working, but nothing in the boot sequence or the shell
+actually called them outside an automated test.
+
+### A real correction to this project's own prior claim, investigated directly rather than continuing to defer around it
+
+Both `PROGRESS.md` (Phase 47's entry) and the release-readiness
+document stated that an interactive login prompt would risk "silently
+stranding the automated test suite" in this project's headless test
+config. That claim was investigated directly before writing any new
+code, not simply repeated - and found to rest on the wrong mental
+model. The concern was accurate for `userland/shell/firstrun.c`'s own
+wizard, which genuinely does block in ring-0, before the scheduler has
+started anything else - there, a stuck prompt really would stall the
+entire machine. It does not describe what an interactive prompt inside
+the ring-3 shell process actually does: `read_char_blocking()`
+(already used by the shell's own pre-existing command prompt, entirely
+unchanged by this phase) polls the already-non-blocking `SYS_READ_KEY`
+and calls `sys_yield()` when nothing's available - a purely
+*cooperative* wait scoped to one process, not a kernel-wide halt.
+Confirmed empirically, not just reasoned about, before relying on it:
+this project's own shell, completely unmodified, was already sitting
+at its own command prompt this exact same way, forever, in every prior
+headless test run - and every other independently-scheduled process
+(idle, the sandbox/demo tasks, coreutils-test) kept running and
+completing its own self-tests regardless, exactly as it does now with
+a login prompt placed in front of that same command prompt.
+
+### What was built
+
+`userland/ring3-shell/shell.c` gained a real login loop at the very
+start of `main()`, before the shell becomes usable at all: prompts for
+a username and password (a new `read_line_noecho()`, masking input
+with `*` - the familiar convention; doesn't make the underlying hash
+any more secure, which remains `users.rs`'s own documented limitation),
+calls the real `SYS_LOGIN`, and loops back to the prompt on any
+failure. A wrong password and a locked-out account both show the same
+generic "Login incorrect" - deliberately not distinguished, the same
+anti-enumeration reasoning `kernel/rust/users.rs`'s own authenticate
+function already documented for wrong-password vs. unknown-username.
+
+`kernel/rust/users.rs` gained the genuine "session concept" half of
+this row, and the one piece of this phase that actually fit Rust's own
+shape (the shell-side prompt loop is inherently ring-3 UI glue,
+consistent with `shell.c`'s own, entirely-C codebase - not force-fit
+into Rust for its own sake): a bounded, per-account failed-login-
+attempt counter. After `LOCKOUT_THRESHOLD` (5) consecutive failures,
+even that account's genuinely correct password is rejected outright.
+Deliberately **not** persisted to disk - an honest, stated
+simplification (a determined attacker could reset it by rebooting),
+chosen specifically to avoid changing `USERS.CFG`'s on-disk format (and
+risking Phase 48's own already-verified fixture) for a property
+(persistent lockout) not actually asked for by this phase's own scope.
+
+### A real, separate bug found while regenerating the test fixture
+
+`userland/ring3-shell/shell.c` does not get rebuilt by `make` at all -
+`tools/fixtures/SHELL.ELF` is a static, manually-regenerated fixture
+(`userland/ring3-shell/build.sh`), the same pattern `tools/fixtures/
+USERS.CFG` (Phase 48) already established, just discovered here for
+the first time rather than by design. The first post-edit test run
+appeared to pass cleanly - but was silently exercising the *old*,
+pre-change `SHELL.ELF`, not the new login code at all, since nothing
+had rebuilt the fixture yet. Caught before it became a false "it
+works" claim: rebuilding via `build.sh` and re-running confirmed the
+genuinely new behavior, with the login prompt now visibly present in
+the boot log.
+
+### Verified in two separate ways
+
+Automated: the *real*, rebuilt `SHELL.ELF` was re-run against the full
+test suite three times - all 61 assertions pass, both boot paths,
+confirming directly (not just theorized) that the login prompt does
+not strand anything else.
+
+Manual, real keystrokes via QEMU's monitor (`sendkey`) - the same
+"verify against real behavior, not just logic" discipline this
+project's own virtio phases established. A real, separate debugging
+find along the way: the first attempts sent no visible effect at all,
+traced to `-device usb-kbd` apparently absorbing/rerouting the
+injected key events - this kernel's keyboard driver is PS/2-only
+(`kernel/drivers/keyboard/keyboard.c`'s own header), so keys routed to
+a USB device were invisible to it. Removing the USB keyboard device
+from the manual test's own QEMU invocation (not from the shipped
+config - real hardware users won't hit this, it was a manual-testing
+artifact) fixed it immediately. With that corrected, the full sequence
+was confirmed directly in the boot log: a wrong password against the
+real "persisted" account rejected, the prompt re-appearing; the
+correct password succeeding (`SYS_LOGIN('persisted') -> success, now
+uid 700 gid 700`); "Login successful. Welcome, persisted (uid 700)."
+printed; and the shell then genuinely usable - `help` producing its
+real, full command listing afterward, not a stuck or broken state.
+
+### Known limitations
+
+Lockout state is in-memory only, resetting on reboot (see above) - a
+real, separate persistent-lockout mechanism is follow-up work. No
+`useradd`-equivalent still exists (Phase 47/48's own limitation,
+unchanged) - only the one account created at first boot (or the
+project's own fixture account) can log in. No rate-limiting on how
+fast login *attempts themselves* can be retried beyond the lockout
+threshold - a fast automated guesser could still make its 5 attempts
+quickly. Password hashing remains FNV-1a, explicitly not
+cryptographically secure, per Phase 47's own original, unchanged
+documented limitation.
+
+## Phase 50 and beyond
+
+Not started. Candidates: a persistent (disk-backed) lockout counter; a
+`useradd`-equivalent way to create additional accounts after first
+boot; a real, salted, deliberately-slow password hash; the real SMP
+prerequisites named in Phase 44's own entry (Local APIC/IO-APIC
 drivers, AP bootstrap, per-CPU state, kernel-wide locking audit) - each
 substantial enough to be its own, separately-scoped phase, not one
 combined effort; simultaneous multi-mount support (ATA and virtio-blk

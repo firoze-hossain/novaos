@@ -912,26 +912,29 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         }
     }
 
-    /* Phase 47: kernel/rust/users.rs's own self-test - verifies the
+    /* Phase 47/49: kernel/rust/users.rs's own self-test - verifies the
      * add/authenticate/serialize/load round trip before any syscall
-     * or process code depends on it. See that file's own doc comment
-     * for the real, external constraint (FAT32's on-disk format has
-     * no ownership fields at all) that bounds this phase's scope to
-     * process-level identity, not file-level permissions. */
+     * or process code depends on it, plus (Phase 49) the lockout
+     * behavior a real login screen's own "session concept" needs. See
+     * that file's own doc comment for the real, external constraint
+     * (FAT32's on-disk format has no ownership fields at all) that
+     * bounds this phase's scope to process-level identity, not
+     * file-level permissions. */
     {
         extern int rust_users_selftest(void);
         int result = rust_users_selftest();
         kernel_log("[ %s ] Kernel-side Rust user database self-test: "
                    "add=%s right-password=%s wrong-password-rejected=%s "
                    "unknown-user-rejected=%s serialize=%s "
-                   "persistence-round-trip=%s\n",
+                   "persistence-round-trip=%s locked-out-after-threshold=%s\n",
                    result == 0 ? "OK" : "FAIL",
                    (result & 1) ? "FAIL" : "pass",
                    (result & 2) ? "FAIL" : "pass",
                    (result & 4) ? "FAIL" : "pass",
                    (result & 8) ? "FAIL" : "pass",
                    (result & 16) ? "FAIL" : "pass",
-                   (result & 32) ? "FAIL" : "pass");
+                   (result & 32) ? "FAIL" : "pass",
+                   (result & 64) ? "FAIL" : "pass");
     }
 
     firstrun_check_and_run();
