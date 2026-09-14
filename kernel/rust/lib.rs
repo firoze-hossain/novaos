@@ -30,6 +30,7 @@ mod virtio_blk;
 mod net_irq;
 mod acpi;
 mod virtio_net;
+mod users;
 
 use core::panic::PanicInfo;
 

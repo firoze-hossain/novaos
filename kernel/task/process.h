@@ -107,6 +107,25 @@ typedef struct process {
      * moved" convention real brk()/sbrk() use). */
     uint32_t heap_current;
     uint32_t heap_mapped_end;
+
+    /* Phase 47: real process identity - UID 0 is "root" by
+     * convention (matching Unix), the same convention any future
+     * permission-checking code should rely on. Set only via
+     * process_set_identity() (kernel-side, e.g. the initial boot
+     * identity) or a successful SYS_LOGIN (ring-3, via real password
+     * authentication against kernel/rust/users.rs's own database) -
+     * never settable directly by an unprivileged syscall the way a
+     * bare "setuid(any value)" would be, which would make this
+     * meaningless as an identity check. Propagates across both
+     * fork() (a child is still "the same user," matching real Unix)
+     * and exec() (deliberately different from this kernel's existing,
+     * separate capability model - allowed_files[]/allowed_hosts[]/
+     * can_spawn reset to nothing on exec, by original design; uid/gid
+     * represent *who is running this*, which does not change just
+     * because a new program was loaded, matching real exec()
+     * semantics - see process.c's own comments at each call site). */
+    uint32_t uid;
+    uint32_t gid;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -228,5 +247,24 @@ void process_exit_current(int exit_code);
 
 process_t* process_current(void);
 process_t* process_table_entry(int index);
+
+/* Phase 47: sets a process's uid/gid directly - kernel-side only
+ * (there is no syscall wrapper for this, deliberately; see
+ * process.h's own comment on process_t's uid/gid fields for why an
+ * unrestricted "set my own uid to anything" syscall would defeat the
+ * point of having an identity at all). Used for the initial boot
+ * identity (root, uid 0) and by process_login() below on successful
+ * authentication - not intended for arbitrary runtime use. */
+void process_set_identity(process_t* p, uint32_t uid, uint32_t gid);
+
+/* Phase 47: the SYS_LOGIN syscall's actual implementation - verifies
+ * `username`/`password` against kernel/rust/users.rs's own database
+ * and, only on a real match, calls process_set_identity() on `p`
+ * (the calling process). Returns true on success. The credential
+ * check happens here, in the kernel, specifically so no ring-3
+ * program can set its own identity without a real password - the
+ * same reasoning a real login prompt's own privilege boundary
+ * relies on. */
+bool process_login(process_t* p, const char* username, const char* password);
 
 #endif

@@ -255,6 +255,18 @@ ASSERTIONS: list[Assertion] = [
               "read back correctly, and the original ATA-backed mount "
               "restored afterward - proven by every test after this one "
               "in the suite (shell launch, fork, exec) still passing"),
+    Assertion("users_selftest",
+              r"Kernel-side Rust user database self-test.*add=pass",
+              "the UID/GID user database's add/authenticate/serialize/"
+              "load round trip is correct, including that a persisted-"
+              "then-reloaded account still authenticates identically"),
+    Assertion("sandbox_login_passed",
+              r"PASS: SYS_LOGIN/SYS_GETUID",
+              "from real ring-3 code: a sandboxed process started as uid "
+              "0, a wrong password was correctly rejected leaving its uid "
+              "unchanged, and the correct password succeeded and actually "
+              "changed the process's own uid to the authenticated "
+              "account's real value"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

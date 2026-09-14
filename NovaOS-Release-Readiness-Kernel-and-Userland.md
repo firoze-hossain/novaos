@@ -1,12 +1,13 @@
 # NovaOS: Release-Readiness Feature List (Kernel First, Then Userland)
 
-*Updated again: Phases 38-44 are now done (see below) - kernel work
-only, matching your stated priority; nothing in Part 2 (userland) has
-changed since this document was last updated, so that section is
-unmodified. Every "done" mark below reflects verified, shipped work,
-not a plan - and where an investigation changed the original claim
-itself (the scheduler bug, and which drivers actually polled
-continuously), that correction is stated plainly, not glossed over.*
+*Updated again: Phases 45-47 are now done (see below), on top of the
+38-44 update before it - kernel work only, matching your stated
+priority; nothing in Part 2 (userland) has changed since this document
+was last updated, so that section is unmodified. Every "done" mark
+below reflects verified, shipped work, not a plan - and where a real,
+external constraint bounds what a phase could honestly claim (FAT32's
+own on-disk format has no file-ownership fields at all, for instance),
+that's stated plainly as part of the "done" mark, not glossed over.*
 
 ---
 
@@ -49,13 +50,23 @@ source, not assumed from a phase number.
 - ✅ **Kernel synchronization primitives** (Phase 40) — `SpinLock<T>`
   now exists and is applied to real, already-shipped shared state. See
   1.4 below for what this does and doesn't mean for SMP itself.
-- ✅ **virtio-blk** (Phase 42) — this kernel's first virtio driver. See
-  1.2 below for exact scope (legacy transport only, not VFS-mounted).
+- ✅ **virtio-blk** (Phase 42), **wired into the VFS as a real,
+  mountable device** (Phase 46) — see 1.2 below for both, including a
+  real bug found and fixed in the second phase (a shared, silently-
+  overwritten partition-offset variable between FAT32 and ext2).
 - ✅ **RTL8139 genuinely interrupt-driven** (Phase 43) — see 1.2 below
   for the honest correction to the original "every driver polls" claim
   this same document made.
 - ✅ **ACPI CPU topology discovery** (Phase 44) — see 1.4 below; this
   is the first SMP prerequisite, not SMP itself.
+- ✅ **virtio-net** (Phase 45), this kernel's second virtio driver —
+  see 1.2 below; verified against real hardware carrying ping/DNS/
+  TFTP/TCP traffic simultaneously with virtio-blk.
+- ✅ **UID/GID and real process identity** (Phase 47) — see 1.1 below
+  for exact scope: real, working process-level identity and password
+  authentication, deliberately *not* claiming file-level ownership,
+  which FAT32's own on-disk format makes impossible without breaking
+  standard compatibility.
 
 ---
 
@@ -63,18 +74,18 @@ source, not assumed from a phase number.
 
 ### 1.1 Real users and permissions
 
-| What | Why a user notices | Best-in-class reference |
-|---|---|---|
-| **UID/GID, login, file ownership.** Currently zero permission bits exist anywhere in the kernel — no `chmod`-equivalent, no concept of "who owns this file or process" at all. | Without this, there's no real notion of privacy or protection between accounts — a dealbreaker the moment more than one person (or even one person with an admin vs. normal-use account) touches the machine. | **Linux/Unix's UID/GID + permission-bits model** — simple, proven, and the foundation everything else (sudo, ACLs, containers) builds on. Start here, not with something more elaborate. |
-| **A real login screen / session concept**, distinct from the current cosmetic "username" set once at first boot. | The single most visible "is this a real OS" signal to a new user. | **macOS's login window** is the cleanest reference for a hobby OS — simple, fast, no unnecessary complexity. |
-| **A privilege-escalation model** (`sudo`-equivalent) once real users exist. | Lets normal use stay unprivileged by default — a genuine security property, not just cosmetic. | **Linux's `sudo`** (simpler to implement than Windows' UAC prompt-and-consent flow, and gets you 90% of the value). |
+| What | Status | Why a user notices | Best-in-class reference |
+|---|---|---|---|
+| **UID/GID + real process identity.** | ✅ **Done (Phase 47), scoped to process identity.** Every `process_t` now carries real `uid`/`gid` fields, threaded through every creation path with correct, distinct semantics for each: kernel-created tasks default to root; `fork()` inherits the parent's identity unchanged (a child is still "the same user"); `exec()` also inherits from the calling process (deliberately different from this kernel's existing per-exec capability grants, which *do* reset — uid/gid represent *who's running this*, which real `exec()` doesn't change). A real `SYS_LOGIN` syscall checks credentials kernel-side against a new Rust user database and only then updates the calling process's own identity — verified from real ring-3 code, not just kernel-side: a wrong password is rejected and leaves the uid unchanged; the right one succeeds and the uid genuinely changes. **File-level ownership is a separate, real gap, not covered by this**, blocked by an external constraint found before writing any code: FAT32's own on-disk directory entry format (`fat_dirent_t`) has no uid/gid/mode field at all — adding one would be a non-standard extension breaking compatibility with every other FAT32 reader. Password hashing (FNV-1a) is explicitly *not* cryptographically secure — an honest placeholder proving the auth flow, not a real credential store. | Without this, there's no real notion of privacy or protection between accounts — a dealbreaker the moment more than one person (or even one person with an admin vs. normal-use account) touches the machine. | **Linux/Unix's UID/GID + permission-bits model** — simple, proven, and the foundation everything else (sudo, ACLs, containers) builds on. Start here, not with something more elaborate. |
+| **A real login screen / session concept**, distinct from the current cosmetic "username" set once at first boot. | ⚠️ **The mechanism exists (Phase 47); no interactive UI does yet.** `SYS_LOGIN`/`SYS_GETUID` are real, working, and verified — but nothing in the boot sequence or `userland/ring3-shell/shell.c` currently calls them outside an automated test. Deliberately not wired into interactive shell startup yet: this project's own test config boots headless, and a login prompt blocking on real keyboard input that never arrives would silently strand the automated test suite before the shell's own prompt, without an obvious failure signal. Real, separate follow-up work, done carefully with that risk in mind. | The single most visible "is this a real OS" signal to a new user. | **macOS's login window** is the cleanest reference for a hobby OS — simple, fast, no unnecessary complexity. |
+| **A privilege-escalation model** (`sudo`-equivalent) once real users exist. | ❌ **Still not started.** Real uids now exist to check (Phase 47) — but nothing anywhere in this kernel currently checks "is this process uid 0" to gate any action. The identity is now trustworthy; nothing consumes it yet. | Lets normal use stay unprivileged by default — a genuine security property, not just cosmetic. | **Linux's `sudo`** (simpler to implement than Windows' UAC prompt-and-consent flow, and gets you 90% of the value). |
 
 ### 1.2 Drivers that don't require editing kernel boot code
 
 | What | Status | Why a user notices | Best-in-class reference |
 |---|---|---|---|
 | **A driver registration table.** | ✅ **Done (Phase 39), partial scope.** `DRIVER_REGISTER(name, init_fn, phase)` places a driver into a dedicated linker section; `kernel_main()` no longer calls driver init functions by name for the ones migrated. Proven, not just claimed: a temporary demo driver was added in its own new file and confirmed to run with `kernel/init/main.c` completely unchanged. **4 of this kernel's ~10 drivers are migrated so far** — PS/2 keyboard, PS/2 mouse, UHCI, AC97. `timer_init`/`vfs_init`/`net_init` remain explicit calls, deliberately: each is interleaved with its own self-tests immediately after, and migrating those needs a real design decision (does the self-test move with it, or become separate?), not just mechanical copying. | Directly blocks "this OS works on more than the exact hardware it was tested against" — the single biggest thing standing between "runs in QEMU" and "runs on a real, different machine." | **Windows NT's HAL** is the textbook reference — it's *the* reason NT's kernel source ported across x86/MIPS/Alpha/PowerPC/ARM unchanged. |
-| **virtio-net / virtio-blk drivers.** | ✅/❌ **virtio-blk done (Phase 42), legacy transport, real hardware DMA verified. virtio-net not started.** The virtqueue itself (descriptor/available/used rings) is in Rust, matching the same "ring buffer, index arithmetic must never be off by one" reasoning as this kernel's own pipes. Proven against real QEMU hardware: a write-then-read-back of an actual 512-byte sector through real DMA succeeded with a 256-entry queue. **Not wired into the VFS** — FAT32/ext2 still mount through the existing ATA driver; a real virtio-blk-backed filesystem is separate, larger follow-up work (which device wins if both ATA and virtio-blk are present is a real, unanswered design question). | Directly relevant since you develop under QEMU — virtio is the standard, dramatically simpler way a VM talks to its host. | **Linux popularized virtio**; it's now the universal VM driver standard across every hypervisor. |
+| **virtio-net / virtio-blk drivers.** | ✅ **Both done now (Phases 42, 45, 46).** virtio-blk: legacy transport, real hardware DMA verified (Phase 42), then genuinely **wired into the VFS as a mountable device** (Phase 46) — a real FAT32 filesystem mounted, an existing file read, a new one written and read back, all through the same `fat32_init()`/`read_file()`/`write_file()` path every other filesystem operation uses, with the original ATA mount carefully saved and restored afterward (verified by re-running the *entire* test suite, including the shell launching and `fork()`/`exec()`, after the demonstration). virtio-net (Phase 45): structurally different from virtio-blk (RX buffers must be pre-posted and recycled, not a one-shot request/response) — verified against real hardware carrying ping, DNS, TFTP, and TCP traffic simultaneously with virtio-blk, in one clean boot. Neither is auto-preferred over the existing drivers when idle/unattached — this project's own test config always attaches both ATA and virtio-blk together, so auto-preferring virtio-blk would have mounted the wrong disk. | Directly relevant since you develop under QEMU — virtio is the standard, dramatically simpler way a VM talks to its host. | **Linux popularized virtio**; it's now the universal VM driver standard across every hypervisor. |
 | **IRQ-driven drivers, not polling.** | ⚠️ **Partially done (Phase 43) — and the original claim in this row turned out to be only partly accurate.** Direct investigation found `ac97_beep()` is actually fire-and-forget (no poll loop at all after starting playback) and UHCI's only busy-wait is bounded to one-time enumeration at boot — neither has the "wastes CPU continuously while idle" property this row originally claimed for *every* driver. The pattern that genuinely did match: `idle_task_entry()` called `net_poll()` on every timer tick forever, reading RTL8139's hardware register whether or not a packet had arrived. **That specific pattern is now fixed** — RTL8139 has a real IRQ handler (PCI Interrupt Line register, not hardcoded), and `net_poll()` touches no hardware at all when nothing's pending. Verified with a real, unambiguous measurement, not inference: a temporary counter showed the handler fired 12 times during one test boot. NE2000 (not exercised by this project's own test config) and RTL8139's own TX path are untouched. | Wastes CPU continuously, even when a real user is doing nothing — shows up as fan noise / battery drain / sluggishness on real hardware in a way it never does in QEMU. | **All three (Linux/Windows/macOS)** treat polling drivers as the exception, not the rule. |
 
 ### 1.3 Won't crash, won't corrupt data, tells you why when it fails
@@ -163,7 +174,10 @@ A rough shape, so "release" means something concrete:
 - ~~Fix the confirmed scheduler/`process_wait()` bug (Part 1.3)~~ ✅
   **done (Phase 38)** — turned out to be a linker script bug, not the
   scheduler; see 1.3 for the corrected account.
-- Real users/permissions, kernel side (Part 1.1) — still not started.
+- Real users/permissions, kernel side (Part 1.1) — ✅ **process-level
+  identity done (Phase 47)**; file-level ownership remains a real,
+  separate gap (blocked by FAT32's own format, not just unscheduled)
+  and an interactive login UI is still unbuilt.
 - ~~Driver registration table (Part 1.2)~~ ✅ **done (Phase 39)**,
   partial scope (4 of ~10 drivers migrated) — extending to the
   remaining drivers (`timer`/`vfs`/`net`) is real, smaller follow-up
@@ -172,7 +186,10 @@ A rough shape, so "release" means something concrete:
   see Part 2, unchanged since this document was last updated.
 
 **v1.0 ("I'd hand this to a curious friend")**
-- Login screen + `sudo`-equivalent (Part 1.1) — still not started.
+- Login screen + `sudo`-equivalent (Part 1.1) — the underlying
+  mechanism (real UID/GID, password-checked `SYS_LOGIN`) is now done
+  (Phase 47); the interactive login UI and any privilege-escalation
+  model on top of it are still not started.
 - Dynamic linking (Part 2.4) — still not started.
 - Package management with real network fetch (Part 2.2) — still not
   started.

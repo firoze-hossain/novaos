@@ -4356,23 +4356,150 @@ demonstrated mounted via virtio-blk in this phase, only FAT32 - the
 same underlying `blockdev_` calls would apply equally, but wasn't
 separately proven.
 
-## Phase 47 and beyond
+## Phase 47: UID/GID, real process identity, and password authentication
 
-Not started. Candidates: the real SMP prerequisites named in Phase
-44's own entry (Local APIC/IO-APIC drivers, AP bootstrap, per-CPU
-state, kernel-wide locking audit) - each substantial enough to be its
-own, separately-scoped phase, not one combined effort; simultaneous
-multi-mount support (ATA and virtio-blk both live at once), building
-on this phase's own blockdev abstraction; giving virtio-net its own
-IRQ handler; migrating `timer_init`/`vfs_init`/`net_init` to driver
-registration too; extending `process_fork()` to duplicate
-`open_files[]` entries by owner pid, unlocking real cross-process pipe
-use and a genuine shell `|` operator; signals; real UID/GID and
-file-ownership permissions; a versioned, single-source-of-truth
-syscall ABI header (`kernel/arch/x86/cpu/syscall.h` and `userland/
-libc/include/novasys.h` are still two, hand-synchronized copies); a
-build-time check that `kernel_end` covers every section in the final
-binary (Phase 38's own "Known limitations"); wiring tools/python's two
-scripts into a CI workflow; making RTL8139 transmission interrupt-
-driven too; a full ring-3 compositor/Store port; TCP retransmission/
-windowing and a sockets-style syscall API for TCP.
+**Status: Complete (deliberately scoped to process identity, not file
+ownership).** Directly responding to this project's own release-
+readiness roadmap: "Linux/Unix's UID/GID + permission-bits model...
+Start here, not with something more elaborate."
+
+### The real, external constraint that bounds this phase's scope
+
+Investigated before writing any code, not assumed: this kernel's only
+writable filesystem, FAT32, has no on-disk field for file ownership or
+permission bits at all. `kernel/fs/fat32.c`'s own `fat_dirent_t` is
+exactly the real, standard 32-byte FAT32 directory entry (name,
+attributes, timestamps, cluster, size) - nothing resembling a uid/gid/
+mode field exists anywhere in it. Adding one would mean a non-standard
+extension, breaking compatibility with every other real FAT32
+implementation - not attempted. This phase therefore builds real,
+working **process-level** identity - every process has a genuine UID/
+GID, checkable via a real syscall, set only through real password
+authentication - the actual foundation "everything else (sudo, ACLs,
+containers) builds on," per this project's own framing. File-level
+ownership/chmod remains a real, separate, honestly-stated gap (see
+"Known limitations" below), not silently implied to be covered by
+this phase's name.
+
+### What was built
+
+`kernel/rust/users.rs`: a fixed-capacity (8 accounts) user database -
+add, authenticate, and a full serialize/load round trip (the on-disk
+format a future USERS.CFG file would use, matching SYSTEM.CFG's own
+established "kernel reads/writes a plain file, Rust (de)serializes it"
+pattern). Password hashing is FNV-1a - stated as directly as the FAT32
+limitation above: this is explicitly **not** a secure password hash
+(no salt, fast rather than deliberately slow, no resistance to
+brute-forcing a leaked hash) - an honest, minimal placeholder proving
+the authentication *flow* is correct, not a production-grade
+credential store. A real password hash (bcrypt/scrypt/argon2, salted)
+is real, separate follow-up work.
+
+`process_t` gained real `uid`/`gid` fields, threaded through every
+creation path with the semantics each one actually needs, not a single
+blanket default: kernel-created tasks (idle, the demo/sandbox tasks -
+trusted, internal, never the result of a login) default to root (uid
+0). `fork()` inherits the parent's uid/gid unchanged - a child is
+still "the same user," the same real semantics as everything else
+`fork()` already preserves. `process_exec_internal()` also inherits
+from the *calling* process (`process_current()`) - deliberately
+different from this kernel's existing capability model
+(`allowed_files[]`/`can_open_any_file`/`can_spawn`, which *do* reset to
+nothing-or-an-explicit-grant on every exec, by original design) -
+because uid/gid represent *who is running this*, which real exec()
+does not change, unlike a per-exec capability grant. The one case with
+no caller to inherit from (the very first exec at boot, loading the
+initial shell before the scheduler has run anything) starts as root,
+matching Unix's own PID 1/init convention.
+
+Two new syscalls: `SYS_LOGIN` (username/password, kernel-side
+credential check via `process_login()`, sets the *calling* process's
+own uid/gid only on a real match) and `SYS_GETUID` (read-only, always
+succeeds). Deliberately no syscall to *create* an account at all - see
+`process.h`'s own comment: an unrestricted "create any account, as any
+uid" syscall would be a real security hole on a kernel with no
+permission enforcement yet to gate it. Account creation is kernel-side
+only for this phase.
+
+### A real, deliberate design decision: no interactive login in this delivery
+
+Investigated the actual risk before writing shell-facing code: this
+project's own default test config boots **headless**, with nothing
+providing real keyboard input. A login prompt that blocks shell
+startup waiting for real interactive input would not crash anything,
+but would leave the shell permanently stuck before its own prompt -
+silently breaking this project's own automated test suite's ability to
+verify anything the shell does afterward, without ever showing up as
+an obvious failure. Not attempted in this phase; the mechanism is
+proven instead via a fully automated, non-interactive path (see
+Verified, below) - wiring a real interactive login into
+`userland/ring3-shell/shell.c`'s own startup is real, separate,
+smaller-scoped follow-up work once done deliberately, not folded in
+here to avoid that risk.
+
+### Verified in stages
+
+The Rust module's own self-test (`rust_users_selftest`): add, correct-
+password success (with the *right* uid/gid returned), wrong-password
+rejection, unknown-username rejection, and - not just the in-memory
+logic - a full serialize/wipe/reload/authenticate-again round trip,
+proving USERS.CFG-style persistence would actually work, not just the
+add/authenticate calls in isolation.
+
+Real ring-3 verification, not just kernel-side: `kernel/task/
+sandbox_demo.c` (this project's own established home for proving
+syscalls work end-to-end from real ring-3 code, not just that they
+compile) authenticates against a real, known test account created
+kernel-side before it runs. Three checks, not one: confirmed this
+process starts as uid 0 (every sandboxed task does); confirmed a wrong
+password is rejected *and* leaves the uid unchanged (not just that it
+returns failure); confirmed the correct password succeeds and the
+process's own uid genuinely becomes 500 (the test account's real
+value), not just that the syscall returns success without the
+identity actually changing.
+
+All 60 assertions (58 prior + 2 new) pass together, repeatably, across
+three clean rebuilds and both boot paths.
+
+### Known limitations
+
+File-level ownership and permission bits (chmod, "who owns this
+file") remain unimplemented and are blocked by FAT32's own on-disk
+format, not merely unscheduled - see this phase's own scope note
+above. No interactive login exists yet (see above) - `SYS_LOGIN`/
+`SYS_GETUID` are real and fully working, but nothing in the boot
+sequence or shell currently calls them outside the automated self-
+test. Only one account can meaningfully exist right now in practice,
+since nothing yet loads/saves USERS.CFG at boot (the serialize/load
+functions are implemented and tested, but not yet wired to an actual
+file the way SYSTEM.CFG is) - real persistence across reboots is real,
+separate follow-up work. Password hashing is explicitly insecure (see
+above). No `sudo`-equivalent or any code anywhere that actually checks
+"is this process uid 0" to gate a privileged action - the identity
+now exists and is trustworthy, but nothing consumes it yet.
+
+## Phase 48 and beyond
+
+Not started. Candidates: wiring `USERS.CFG` load/save into the actual
+boot sequence (the serialize/load functions exist and are tested, just
+not yet connected to a real file); a real interactive login prompt in
+`userland/ring3-shell/shell.c`, done deliberately with the headless-
+test-suite risk this phase's own entry named in mind; a real,
+salted, deliberately-slow password hash; the real SMP prerequisites
+named in Phase 44's own entry (Local APIC/IO-APIC drivers, AP
+bootstrap, per-CPU state, kernel-wide locking audit) - each substantial
+enough to be its own, separately-scoped phase, not one combined
+effort; simultaneous multi-mount support (ATA and virtio-blk both live
+at once), building on Phase 46's own blockdev abstraction; giving
+virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
+`net_init` to driver registration too; extending `process_fork()` to
+duplicate `open_files[]` entries by owner pid, unlocking real cross-
+process pipe use and a genuine shell `|` operator; signals; a
+versioned, single-source-of-truth syscall ABI header (`kernel/arch/
+x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
+hand-synchronized copies); a build-time check that `kernel_end` covers
+every section in the final binary (Phase 38's own "Known
+limitations"); wiring tools/python's two scripts into a CI workflow;
+making RTL8139 transmission interrupt-driven too; a full ring-3
+compositor/Store port; TCP retransmission/windowing and a sockets-style
+syscall API for TCP.

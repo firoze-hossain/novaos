@@ -40,6 +40,8 @@
 #define SYS_PING_POLL 26
 #define SYS_PIPE 27
 #define SYS_WRITE_HANDLE 28
+#define SYS_LOGIN 29
+#define SYS_GETUID 30
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -104,5 +106,14 @@ int sys_ping_poll(unsigned int* out_rtt);
  * `len` - see kernel/rust/pipe.rs), or -1. */
 int sys_pipe(int out_handles[2]);
 int sys_write_handle(int handle, const void* buf, int len);
+
+/* Phase 47: SYS_LOGIN/SYS_GETUID - see kernel/arch/x86/cpu/syscall.h's
+ * own comment on each for the full argument/return contract.
+ * sys_login() returns 0 on success (the calling process's own uid/gid
+ * are updated kernel-side) or -1 on any credential mismatch.
+ * sys_getuid() always succeeds, returning the calling process's
+ * current uid. */
+int sys_login(const char* username, const char* password);
+unsigned int sys_getuid(void);
 
 #endif

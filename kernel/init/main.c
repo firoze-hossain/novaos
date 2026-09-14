@@ -912,6 +912,28 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         }
     }
 
+    /* Phase 47: kernel/rust/users.rs's own self-test - verifies the
+     * add/authenticate/serialize/load round trip before any syscall
+     * or process code depends on it. See that file's own doc comment
+     * for the real, external constraint (FAT32's on-disk format has
+     * no ownership fields at all) that bounds this phase's scope to
+     * process-level identity, not file-level permissions. */
+    {
+        extern int rust_users_selftest(void);
+        int result = rust_users_selftest();
+        kernel_log("[ %s ] Kernel-side Rust user database self-test: "
+                   "add=%s right-password=%s wrong-password-rejected=%s "
+                   "unknown-user-rejected=%s serialize=%s "
+                   "persistence-round-trip=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass",
+                   (result & 8) ? "FAIL" : "pass",
+                   (result & 16) ? "FAIL" : "pass",
+                   (result & 32) ? "FAIL" : "pass");
+    }
+
     firstrun_check_and_run();
 
     process_init();
@@ -948,6 +970,32 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     const char* sandbox_caps[] = {"HELLO.TXT"};
     const uint32_t sandbox_hosts[] = {NET_GATEWAY_IP};
+
+    /* Phase 47: a known test account for sandbox_demo_task's own
+     * SYS_LOGIN/SYS_GETUID self-test (kernel/task/sandbox_demo.c) to
+     * authenticate against from real ring-3 code - created here,
+     * kernel-side, specifically because there is no syscall to create
+     * an account at all (see process.h's own comment on why: an
+     * unrestricted "create any account" syscall would be a real
+     * security hole on a kernel with no permission enforcement yet).
+     * uid 500/gid 500 deliberately not 0 (root) or a value any other
+     * test/task uses, so a mix-up would be obviously wrong rather
+     * than silently plausible. */
+    {
+        extern bool rust_users_add(const uint8_t* username_ptr,
+                                    uint32_t username_len, uint32_t uid,
+                                    uint32_t gid, const uint8_t* password_ptr,
+                                    uint32_t password_len);
+        static const char test_username[] = "ring3test";
+        static const char test_password[] = "ring3-correct-password";
+        bool added = rust_users_add(
+            (const uint8_t*)test_username, sizeof(test_username) - 1, 500,
+            500, (const uint8_t*)test_password, sizeof(test_password) - 1);
+        kernel_log("[ %s ] Created test user account 'ring3test' (uid 500) "
+                   "for sandbox_demo_task's own SYS_LOGIN self-test\n",
+                   added ? "OK" : "FAIL");
+    }
+
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
                                    1, sandbox_hosts, 1, true);
     process_create_user_task("unprivileged", unprivileged_demo_task);

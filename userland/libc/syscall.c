@@ -210,3 +210,21 @@ int sys_write_handle(int handle, const void* buf, int len) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_login(const char* username, const char* password) {
+    int result = SYS_LOGIN;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(username), "c"(password)
+                       : "memory", "cc");
+    return result;
+}
+
+unsigned int sys_getuid(void) {
+    unsigned int result = SYS_GETUID;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       :
+                       : "memory", "cc");
+    return result;
+}

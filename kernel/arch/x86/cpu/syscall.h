@@ -247,6 +247,26 @@
  * or the pipe's read end has already been closed). */
 #define SYS_WRITE_HANDLE 28
 
+/* Phase 47: EBX = username pointer, ECX = password pointer (both
+ * NUL-terminated, read directly from the caller's own address space -
+ * the same trust model every other syscall taking a pointer argument
+ * in this kernel already uses, e.g. SYS_OPEN's filename pointer; no
+ * copy-from-user validation exists anywhere in this kernel yet). On a
+ * real match against kernel/rust/users.rs's own database, sets the
+ * *calling* process's own uid/gid (via process_login(), kernel-side -
+ * see process.h's own comment on why there is no separate, unchecked
+ * "just set my uid" syscall) and returns 0. Returns -1 on any
+ * mismatch (wrong password or unknown username - deliberately not
+ * distinguished, see kernel/rust/users.rs's own comment on why). */
+#define SYS_LOGIN 29
+
+/* No arguments. Returns the calling process's own current uid -
+ * always succeeds (a process without a real login still has *some*
+ * uid - see process.h's own comment on process_t's uid/gid for what
+ * every process starts as). The real-Unix-equivalent, read-only
+ * counterpart to SYS_LOGIN above. */
+#define SYS_GETUID 30
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
