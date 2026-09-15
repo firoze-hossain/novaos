@@ -4794,25 +4794,158 @@ general-purpose, networked, multi-user system. No password-strength
 requirements exist at the first-boot prompt (an empty password is
 still accepted, per Phase 49's own unchanged limitation).
 
-## Phase 51 and beyond
+## Phase 51: sudo - a real privilege-escalation model
 
-Not started. Candidates: a persistent (disk-backed) lockout counter; a
-`useradd`-equivalent way to create additional accounts after first
-boot; a real hardware entropy source for salt generation; the real SMP
-prerequisites named in Phase 44's own entry (Local APIC/IO-APIC
-drivers, AP bootstrap, per-CPU state, kernel-wide locking audit) - each
-substantial enough to be its own, separately-scoped phase, not one
-combined effort; simultaneous multi-mount support (ATA and virtio-blk
-both live at once), building on Phase 46's own blockdev abstraction;
-giving virtio-net its own IRQ handler; migrating `timer_init`/
-`vfs_init`/`net_init` to driver registration too; extending
-`process_fork()` to duplicate `open_files[]` entries by owner pid,
-unlocking real cross-process pipe use and a genuine shell `|`
-operator; signals; a versioned, single-source-of-truth syscall ABI
-header (`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
-novasys.h` are still two, hand-synchronized copies); a build-time
-check that `kernel_end` covers every section in the final binary
-(Phase 38's own "Known limitations"); wiring tools/python's two
-scripts into a CI workflow; making RTL8139 transmission interrupt-
-driven too; a full ring-3 compositor/Store port; TCP retransmission/
-windowing and a sockets-style syscall API for TCP.
+**Status: Complete.** Closes the last row this project's own release-
+readiness roadmap had marked "still not started" under real users/
+permissions: "nothing anywhere in this kernel currently checks 'is
+this process uid 0' to gate any action." `SYS_SUDO` is that check,
+built in Rust wherever the shape genuinely fit (the actual
+authorization decision), with real C-side glue for the syscall and
+process-state boundary.
+
+### The model, and why it's not "just check uid == 0"
+
+Real sudo re-authenticates the *calling* user's own password (not
+root's) and separately checks they're actually authorized, before
+escalating - not just "type the right magic word." This phase
+implements both halves: `kernel/rust/users.rs`'s own
+`rust_users_sudo_check(uid, password)` looks up the calling process's
+account *by its own current numeric uid* (a process only ever knows
+its own identity, not which username it corresponds to - real sudo
+resolves the same way), re-verifies the password with the same
+PBKDF2 infrastructure Phase 50 already built, and returns success only
+if the account is *also* a member of what this kernel calls the "admin
+group" (`gid == 0`, root's own gid, a deliberately simple convention
+rather than a general group-membership system this kernel has no other
+use for). A wrong password and a correct password for a non-admin
+account both fail identically - authenticated is not the same as
+authorized, and the two failure modes are deliberately not
+distinguished, the same anti-enumeration reasoning `SYS_LOGIN` already
+established.
+
+`process_sudo()` (`kernel/task/process.c`) calls the Rust check and,
+only on success, escalates the calling process to uid 0/gid 0.
+`SYS_SUDO` is the syscall wrapping it. A `sudo FILE [args]` shell
+command re-prompts for the current user's own password (masked,
+reusing Phase 49's `read_line_noecho()`) and, on success, `sys_exec()`s
+the target - which inherits the now-escalated shell's identity via
+Phase 47's own exec()-inherits-caller semantics, the same mechanism
+that already made the interactive login meaningful.
+
+### Verified three separate ways, each proving something the others couldn't
+
+1. Direct Rust-level: three checks against `rust_users_sudo_check`
+   itself - a wrong password rejected, an admin-group account's
+   correct password accepted, and the check that actually matters - a
+   *genuinely correct* password for a non-admin account still
+   rejected.
+2. Full syscall path, automated: a real ring-3 test in
+   `kernel/task/sandbox_demo.c` exercises `SYS_SUDO` through the
+   actual syscall boundary, not the Rust function directly - confirmed
+   in the boot log itself: rejection for a non-admin account (`SECURITY]
+   ... SYS_SUDO -> rejected`), rejection for a wrong admin password,
+   then genuine escalation (`SYS_SUDO -> success, now uid 0 gid 0`).
+3. Manual, real keystrokes via QEMU's monitor, the interactive shell
+   command specifically: logged in as a real admin-group account,
+   typed `sudo CAT.ELF HELLO.TXT` with a wrong password (rejected,
+   re-prompted), then the correct one - confirmed directly in the log:
+   `SYS_SUDO -> success, now uid 0 gid 0`, followed by `CAT.ELF`
+   actually being loaded and run as a new, separate process (pid 13)
+   that inherited the escalated identity.
+
+### A real, separate security boundary discovered during manual verification, not a bug in this phase
+
+The manually-spawned `CAT.ELF` process, despite running as uid 0 after
+a successful sudo, was still denied opening `HELLO.TXT` -
+`[SECURITY] ... denied SYS_OPEN('HELLO.TXT') - not in its capability
+list`. Investigated directly rather than assumed broken: this is a
+completely separate, pre-existing access-control layer from much
+earlier in this project (`allowed_files[]`, this kernel's own
+per-process capability list, independent of uid/gid entirely) doing
+exactly what it has always done - `sys_exec()`'s own default grants no
+file capabilities to a newly spawned process regardless of the
+caller's uid, and `sudo` (like the existing `run` command, which uses
+the identical `sys_exec()` call) was never in a position to change
+that. A real, honest finding worth recording precisely: this kernel
+now has *two* independent access-control mechanisms (uid/gid,
+capability lists), and `sudo` only ever escalates the first - a
+process still needs its own, separately-granted file capabilities
+regardless of whether it's root. Closing that gap (an escalated
+process automatically gaining broader file access) is real, separate,
+smaller-scoped follow-up work, not attempted here.
+
+### A real, unrelated diagnostic bug caught and fixed along the way
+
+While regenerating `tools/fixtures/USERS.CFG` with a second account, a
+temporary diagnostic print showed `rust_users_add()`'s own return value
+as `1486483713` instead of 0/1. Not assumed cosmetic: checked
+`rust_users_count()` directly first, confirmed the actual database
+state was correct (both accounts genuinely present), and isolated the
+issue specifically to printing a directly-called Rust `bool` via `%d`
+- a pattern no other real caller of this function in this codebase
+actually exercises (every other caller uses the return value in an
+`if`/boolean context, or passes it through the syscall boundary as an
+int, neither of which showed the issue). The underlying functionality
+was correct throughout; only the diagnostic's own print statement was
+misleading, fixed by using the same boolean-context pattern every real
+caller already uses.
+
+A separate, real bug was also caught and fixed earlier in this same
+phase: the self-test's own log message grew past `kernel_log()`'s
+fixed 256-byte internal buffer and was silently truncating mid-word.
+Found by inspecting raw log bytes directly rather than trusting the
+output; fixed by splitting into two log calls rather than widening a
+buffer shared by every other caller in this kernel.
+
+All 67 assertions (66 prior + 1 new) pass together, repeatably, across
+three clean rebuilds and both boot paths, plus the manual, real-
+keystroke verification above.
+
+### Known limitations
+
+Scoped, stated directly rather than left implicit: `SYS_SUDO`
+escalates the *calling shell process itself* for the rest of its own
+session, not per-command the way real sudo is - there is no "drop
+back to the original, unprivileged identity" step after the spawned
+command finishes, so every command typed in that same shell session
+after a successful sudo also runs as root. A real, separate,
+smaller-scoped follow-up (fork before escalating, so only the child
+running the target command is affected, and the parent shell's own
+identity is never touched) would close this without needing any
+change to the actual escalation decision itself. The "admin group"
+convention (`gid == 0`) is this kernel's own simple choice, not a
+general group-membership system - there is still no way to add a
+*second* admin-group account after first boot (the same `useradd`
+limitation Phase 47/48 already named). The capability-list interaction
+named above (an escalated process not automatically gaining broader
+file access) is real, separate follow-up work, not a defect in this
+phase's own, narrower scope.
+
+## Phase 52 and beyond
+
+Not started. Candidates: per-command sudo scoping (fork before
+escalating, restoring the parent shell's own identity afterward - see
+this phase's own "Known limitations"); a way to grant broader file
+capabilities to a successfully-escalated process, closing the
+capability-list interaction this phase's own manual verification
+found; a persistent (disk-backed) lockout counter; a `useradd`-
+equivalent way to create additional accounts after first boot; a real
+hardware entropy source for salt generation; the real SMP prerequisites
+named in Phase 44's own entry (Local APIC/IO-APIC drivers, AP
+bootstrap, per-CPU state, kernel-wide locking audit) - each substantial
+enough to be its own, separately-scoped phase, not one combined
+effort; simultaneous multi-mount support (ATA and virtio-blk both live
+at once), building on Phase 46's own blockdev abstraction; giving
+virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
+`net_init` to driver registration too; extending `process_fork()` to
+duplicate `open_files[]` entries by owner pid, unlocking real cross-
+process pipe use and a genuine shell `|` operator; signals; a
+versioned, single-source-of-truth syscall ABI header (`kernel/arch/
+x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
+hand-synchronized copies); a build-time check that `kernel_end` covers
+every section in the final binary (Phase 38's own "Known
+limitations"); wiring tools/python's two scripts into a CI workflow;
+making RTL8139 transmission interrupt-driven too; a full ring-3
+compositor/Store port; TCP retransmission/windowing and a sockets-style
+syscall API for TCP.

@@ -983,24 +983,42 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * that file's own doc comment for the real, external constraint
      * (FAT32's on-disk format has no ownership fields at all) that
      * bounds this phase's scope to process-level identity, not
-     * file-level permissions. */
+     * file-level permissions.
+     *
+     * Split across two kernel_log() calls, not one - found directly,
+     * not assumed: kernel_log()'s own internal buffer is a fixed 256
+     * bytes (see its own implementation, this file, above), and this
+     * self-test's full result line, once every %s is filled in,
+     * genuinely exceeds that, silently truncating mid-word with no
+     * warning. Splitting the message is the correct, low-risk fix -
+     * kernel_log() itself is used throughout this entire kernel, so
+     * widening its own shared buffer for one caller's message length
+     * was deliberately not done. */
     {
         extern int rust_users_selftest(void);
         int result = rust_users_selftest();
-        kernel_log("[ %s ] Kernel-side Rust user database self-test: "
-                   "add=%s right-password=%s wrong-password-rejected=%s "
-                   "unknown-user-rejected=%s serialize=%s "
-                   "persistence-round-trip=%s locked-out-after-threshold=%s "
-                   "different-salts-for-same-password=%s\n",
+        kernel_log("[ %s ] Kernel-side Rust user database self-test "
+                   "(1/2): add=%s right-password=%s "
+                   "wrong-password-rejected=%s unknown-user-rejected=%s "
+                   "serialize=%s persistence-round-trip=%s\n",
                    result == 0 ? "OK" : "FAIL",
                    (result & 1) ? "FAIL" : "pass",
                    (result & 2) ? "FAIL" : "pass",
                    (result & 4) ? "FAIL" : "pass",
                    (result & 8) ? "FAIL" : "pass",
                    (result & 16) ? "FAIL" : "pass",
-                   (result & 32) ? "FAIL" : "pass",
+                   (result & 32) ? "FAIL" : "pass");
+        kernel_log("[ %s ] Kernel-side Rust user database self-test "
+                   "(2/2): locked-out-after-threshold=%s "
+                   "different-salts-for-same-password=%s "
+                   "sudo-wrong-password-rejected=%s sudo-admin-accepted=%s "
+                   "sudo-non-admin-rejected=%s\n",
+                   result == 0 ? "OK" : "FAIL",
                    (result & 64) ? "FAIL" : "pass",
-                   (result & 128) ? "FAIL" : "pass");
+                   (result & 128) ? "FAIL" : "pass",
+                   (result & 256) ? "FAIL" : "pass",
+                   (result & 512) ? "FAIL" : "pass",
+                   (result & 1024) ? "FAIL" : "pass");
     }
 
     firstrun_check_and_run();

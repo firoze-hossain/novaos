@@ -115,6 +115,15 @@ static inline unsigned int sys_getuid(void) {
     return result;
 }
 
+static inline int sys_sudo(const char* password) {
+    int result = SYS_SUDO;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(password)
+                       : "memory", "cc");
+    return result;
+}
+
 static inline void sys_exit(int exit_code) {
     /* Phase 23: SYS_EXIT now takes an exit code in EBX (previously
      * ignored) - explicitly passing 0 here rather than leaving EBX as
@@ -358,6 +367,43 @@ void sandbox_demo_task(void) {
     } else {
         sys_write("[sandbox] FAIL: SYS_LOGIN/SYS_GETUID behaved "
                   "unexpectedly.\n");
+    }
+
+    /* Phase 51: SYS_SUDO, exercised through the real ring-3 syscall
+     * path against two real, distinct accounts persisted in
+     * USERS.CFG - not just kernel/rust/users.rs's own direct-call
+     * self-test. This process is currently logged in as "persisted"
+     * (uid 700, gid 700 - NOT the admin group) from the test just
+     * above; sudo with that account's own genuinely correct password
+     * must still be refused, proving authentication alone is not
+     * authorization. Then logs in as "admin" (uid 800, gid 0 - the
+     * admin group, but not already root) to prove the success path:
+     * a wrong password refused, then the correct one actually
+     * escalating this process to uid 0. */
+    int sudo_denied_non_admin = sys_sudo("persisted-pw");
+    unsigned int uid_after_denied_sudo = sys_getuid();
+
+    int admin_login = sys_login("admin", "admin-correct-password");
+    unsigned int uid_after_admin_login = sys_getuid();
+
+    int sudo_wrong_password = sys_sudo("totally-the-wrong-password");
+    unsigned int uid_after_wrong_sudo = sys_getuid();
+
+    int sudo_success = sys_sudo("admin-correct-password");
+    unsigned int uid_after_sudo = sys_getuid();
+
+    if (sudo_denied_non_admin == -1 && uid_after_denied_sudo == 700 &&
+        admin_login == 0 && uid_after_admin_login == 800 &&
+        sudo_wrong_password == -1 && uid_after_wrong_sudo == 800 &&
+        sudo_success == 0 && uid_after_sudo == 0) {
+        sys_write("[sandbox] PASS: SYS_SUDO - a non-admin account's own "
+                  "correct password was correctly refused (not in the "
+                  "admin group), a wrong password for a real admin "
+                  "account was refused, and the admin account's correct "
+                  "password succeeded, genuinely escalating this process "
+                  "to uid 0.\n");
+    } else {
+        sys_write("[sandbox] FAIL: SYS_SUDO behaved unexpectedly.\n");
     }
 
     sys_exit(0);

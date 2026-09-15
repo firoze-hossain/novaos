@@ -267,6 +267,27 @@ static void handle_getuid(registers_t* regs) {
     regs->eax = (p != NULL) ? p->uid : 0;
 }
 
+static void handle_sudo(registers_t* regs) {
+    process_t* p = process_current();
+    const char* password = (const char*)regs->ebx;
+
+    if (p == NULL) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    bool ok = process_sudo(p, password);
+    if (ok) {
+        kernel_log("[SYSCALL] pid %d SYS_SUDO -> success, now uid %d "
+                   "gid %d\n", p->pid, (int)p->uid, (int)p->gid);
+        regs->eax = 0;
+    } else {
+        kernel_log("[SECURITY] pid %d SYS_SUDO -> rejected (wrong "
+                   "password or not in the admin group)\n", p->pid);
+        regs->eax = (uint32_t)-1;
+    }
+}
+
 static void handle_pipe(registers_t* regs) {
     process_t* p = process_current();
     int* out = (int*)regs->ebx; /* {read_handle, write_handle} */
@@ -757,6 +778,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_GETUID:
             handle_getuid(regs);
+            break;
+
+        case SYS_SUDO:
+            handle_sudo(regs);
             break;
 
         default:
