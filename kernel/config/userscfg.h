@@ -24,10 +24,13 @@
  * - checked at runtime in userscfg.c (not just assumed), the same
  * "two independent copies of one number must actually agree, checked,
  * not trusted" discipline kernel/drivers/virtio/virtio_net.c already
- * uses for its own RX_BUFFER_COUNT/SIZE. 45 bytes/record (1 + 32 + 4
- * + 4 + 4) * 8 accounts = 360 - see users.rs's own RECORD_SIZE/
+ * uses for its own RX_BUFFER_COUNT/SIZE. Phase 50: 89 bytes/record
+ * (1 + 32 + 4 + 4 + 16 salt + 32 password_hash) * 8 accounts = 712 -
+ * grown from Phase 47's original 45 bytes/record (360 total) by the
+ * salt and the full 32-byte PBKDF2 output this phase adds, replacing
+ * the old 4-byte FNV-1a value - see users.rs's own RECORD_SIZE/
  * MAX_USERS for where these numbers come from. */
-#define USERSCFG_RECORDS_SIZE 360
+#define USERSCFG_RECORDS_SIZE 712
 
 /* Loads USERS.CFG, replacing whatever kernel/rust/users.rs's own
  * in-memory database currently holds. Returns false if the file

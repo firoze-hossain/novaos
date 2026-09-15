@@ -255,15 +255,40 @@ ASSERTIONS: list[Assertion] = [
               "read back correctly, and the original ATA-backed mount "
               "restored afterward - proven by every test after this one "
               "in the suite (shell launch, fork, exec) still passing"),
+    Assertion("sha256_selftest",
+              r"Kernel-side Rust SHA-256 self-test.*empty-string=pass.*"
+              r"abc=pass.*multi-block=pass",
+              "this kernel's own from-scratch SHA-256 implementation "
+              "matches three of the algorithm's standard, independently-"
+              "known-correct test vectors exactly, including one long "
+              "enough to exercise the multi-block message-schedule "
+              "expansion, not just the single-block path"),
+    Assertion("hmac_sha256_selftest",
+              r"Kernel-side Rust HMAC-SHA256 self-test.*"
+              r"rfc4231-test-case-1=pass",
+              "this kernel's own HMAC-SHA256 implementation matches "
+              "RFC 4231's own standard Test Case 1 exactly"),
+    Assertion("pbkdf2_selftest",
+              r"Kernel-side Rust PBKDF2-HMAC-SHA256 self-test.*"
+              r"iterations-1=pass.*iterations-2=pass.*"
+              r"iterations-4096=pass",
+              "this kernel's own PBKDF2-HMAC-SHA256 implementation "
+              "matches three independently-generated test vectors "
+              "exactly, including this phase's own actual production "
+              "iteration count (4096), not just toy cases"),
     Assertion("users_selftest",
               r"Kernel-side Rust user database self-test.*add=pass.*"
               r"locked-out-after-threshold=pass",
               "the UID/GID user database's add/authenticate/serialize/"
-              "load round trip is correct, including that a persisted-"
-              "then-reloaded account still authenticates identically, "
-              "and that an account is genuinely locked (rejecting even "
-              "its own correct password) after enough consecutive "
-              "failed attempts"),
+              "load round trip is correct using real, salted PBKDF2-"
+              "HMAC-SHA256 password hashing (replacing Phase 47's "
+              "original, explicitly-insecure FNV-1a), including that a "
+              "persisted-then-reloaded account still authenticates "
+              "identically, that an account is genuinely locked after "
+              "enough failed attempts, and that two accounts sharing "
+              "the same password end up with different salts and "
+              "different stored hashes - the actual, observable point "
+              "of salting at all"),
     Assertion("userscfg_loaded",
               r"First-run check: USERS\.CFG loaded - accounts restored",
               "direct, standalone evidence that userscfg_load() actually "

@@ -31,6 +31,9 @@ mod net_irq;
 mod acpi;
 mod virtio_net;
 mod users;
+mod sha256;
+mod hmac_sha256;
+mod pbkdf2;
 
 use core::panic::PanicInfo;
 
