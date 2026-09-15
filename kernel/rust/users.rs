@@ -28,18 +28,63 @@
 //! documented gap (see PROGRESS.md's own Phase 47 "Known
 //! limitations").
 //!
-//! Password hashing note, stated as directly as the FAT32 limitation
-//! above: this uses FNV-1a, a fast, well-known, NON-cryptographic
-//! hash - explicitly not a secure password hash (no salt, fast rather
-//! than deliberately slow, no resistance to brute-forcing if the
-//! stored hash were ever leaked). Chosen deliberately as an honest,
-//! minimal placeholder that proves the authentication *flow* works
-//! correctly, not as a production-grade credential store - a real
-//! password hash (bcrypt/scrypt/argon2, salted) is real, separate
-//! follow-up work, not attempted here.
+//! Password hashing note, updated by Phase 50: this now uses real
+//! PBKDF2-HMAC-SHA256 (kernel/rust/pbkdf2.rs, built on kernel/rust/
+//! hmac_sha256.rs and kernel/rust/sha256.rs, all three implemented
+//! from scratch in this same phase - no crates.io, no external
+//! dependencies exist in this freestanding kernel) with a real,
+//! per-account salt and 4096 iterations - deliberately slow, measured
+//! directly on this kernel's own hardware/emulation at roughly 50-60ms
+//! per attempt (see PROGRESS.md's own Phase 50 entry for the exact
+//! measured timing), not just assumed reasonable. Superseding this
+//! phase's own predecessor, FNV-1a (Phase 47), which was always
+//! explicitly documented as not a secure password hash at all - this
+//! is the real one that documentation promised as follow-up work.
+//!
+//! Salt derivation is honestly, not silently, bounded: this kernel
+//! has no real entropy source (confirmed directly before writing any
+//! code, not assumed - grepped the whole kernel tree; the only
+//! existing precedent, kernel/net/tcp.c's own initial sequence number,
+//! is itself explicitly documented as "not cryptographically random").
+//! The salt is derived from `timer_get_ticks()` (passed in by the C
+//! caller, since reading a hardware timer is not this Rust module's
+//! own concern) mixed with the username through SHA-256 - varying
+//! per-account and per-boot-moment, genuinely defeating precomputed
+//! rainbow-table attacks (a salt's actual job), but not
+//! unpredictable in the cryptographic sense a hardware RNG would
+//! provide. A real hardware entropy source (RDRAND, if available; a
+//! /dev/random-equivalent otherwise) is real, separate follow-up work.
+
+use crate::pbkdf2::pbkdf2_hmac_sha256;
+use crate::sha256::sha256;
 
 const MAX_USERS: usize = 8;
 const USERNAME_MAX: usize = 32;
+const SALT_LEN: usize = 16;
+const HASH_LEN: usize = 32; // PBKDF2-HMAC-SHA256's own fixed output
+                            // size - see kernel/rust/pbkdf2.rs's own
+                            // header comment on why this
+                            // implementation only supports exactly
+                            // this length
+
+/// 4096 - measured directly on this kernel's own hardware/emulation
+/// (kernel/init/main.c's own timing probe, bracketing a real call
+/// with real timer reads), not chosen from a table and assumed
+/// reasonable: roughly 50-60ms per attempt at this kernel's default
+/// 100Hz timer resolution (see PROGRESS.md's own Phase 50 entry for
+/// the exact measured tick count). Far below modern, general-purpose
+/// guidance for a networked, multi-user, high-value system (which
+/// commonly recommends 100k+ iterations) - a deliberate, honest
+/// trade-off for this kernel's own single-machine, hobby-OS context:
+/// slow enough to meaningfully matter against a fast automated
+/// guesser (thousands of times slower than the FNV-1a hash this
+/// replaces), while staying imperceptible to a real person typing
+/// their own password at the login prompt this computes it for
+/// (Phase 49). A real, general-purpose OS serving untrusted, remote,
+/// or high-value accounts would reasonably choose a much higher
+/// value; revisiting this if that ever becomes this kernel's own
+/// actual threat model is real, separate, future work.
+const PBKDF2_ITERATIONS: u32 = 4096;
 
 #[derive(Clone, Copy)]
 struct UserRecord {
@@ -48,7 +93,8 @@ struct UserRecord {
     username_len: u8,
     uid: u32,
     gid: u32,
-    password_hash: u32,
+    salt: [u8; SALT_LEN],
+    password_hash: [u8; HASH_LEN],
     /// Phase 49: consecutive failed authentication attempts since the
     /// last success - the genuine "session concept" half of a real
     /// login screen, not just the credential check itself. Reset to 0
@@ -89,7 +135,8 @@ impl UserRecord {
             username_len: 0,
             uid: 0,
             gid: 0,
-            password_hash: 0,
+            salt: [0u8; SALT_LEN],
+            password_hash: [0u8; HASH_LEN],
             failed_attempts: 0,
         }
     }
@@ -99,16 +146,34 @@ const EMPTY_USER: UserRecord = UserRecord::empty();
 static mut USERS: [UserRecord; MAX_USERS] = [EMPTY_USER; MAX_USERS];
 static mut USER_COUNT: usize = 0;
 
-/// FNV-1a, 32-bit - see this module's own header comment on why this,
-/// specifically, is not a secure password hash and isn't meant to be
-/// one.
-fn fnv1a_hash(data: &[u8]) -> u32 {
-    let mut hash: u32 = 0x811C9DC5;
-    for &byte in data {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(0x01000193);
+/// Derives this account's salt from `seed` (the C caller's own
+/// `timer_get_ticks()` reading - see this module's own header comment
+/// on why that specific source, and its honest limitation) mixed with
+/// the username through SHA-256, so two accounts created in the same
+/// tick still get different salts.
+fn derive_salt(seed: u32, username: &[u8]) -> [u8; SALT_LEN] {
+    let mut input = [0u8; 4 + USERNAME_MAX];
+    input[..4].copy_from_slice(&seed.to_le_bytes());
+    input[4..4 + username.len()].copy_from_slice(username);
+    let hash = sha256(&input[..4 + username.len()]);
+    let mut salt = [0u8; SALT_LEN];
+    salt.copy_from_slice(&hash[..SALT_LEN]);
+    salt
+}
+
+/// Compares two hashes without short-circuiting on the first
+/// mismatched byte - a real, if modest, improvement over `==` for
+/// comparing secret-derived values: a naive comparison that returns
+/// as soon as it finds a difference leaks, via how long the
+/// comparison itself takes, roughly how many leading bytes an
+/// attacker's guess got right, which a truly constant-time compare
+/// (this one) does not.
+fn constant_time_eq(a: &[u8; HASH_LEN], b: &[u8; HASH_LEN]) -> bool {
+    let mut diff: u8 = 0;
+    for i in 0..HASH_LEN {
+        diff |= a[i] ^ b[i];
     }
-    hash
+    diff == 0
 }
 
 fn username_matches(record: &UserRecord, name: &[u8]) -> bool {
@@ -132,6 +197,11 @@ unsafe fn users() -> &'static mut [UserRecord; MAX_USERS] {
 /// exhaustion failure mode, matching every other fixed-size table in
 /// this project.
 ///
+/// `salt_seed`: the C caller's own `timer_get_ticks()` reading, used
+/// to derive this account's salt (see `derive_salt`'s own doc comment)
+/// - reading a hardware timer is a C-side concern, not this Rust
+/// module's own, so the value is passed in rather than read here.
+///
 /// # Safety
 /// `username_ptr`/`password_ptr` must be valid for reads of
 /// `username_len`/`password_len` bytes respectively.
@@ -143,6 +213,7 @@ pub unsafe extern "C" fn rust_users_add(
     gid: u32,
     password_ptr: *const u8,
     password_len: u32,
+    salt_seed: u32,
 ) -> bool {
     if username_len as usize > USERNAME_MAX {
         return false;
@@ -158,6 +229,9 @@ pub unsafe extern "C" fn rust_users_add(
         }
     }
 
+    let salt = derive_salt(salt_seed, name);
+    let hash = pbkdf2_hmac_sha256(password, &salt, PBKDF2_ITERATIONS);
+
     for slot in table.iter_mut() {
         if !slot.in_use {
             slot.in_use = true;
@@ -166,7 +240,8 @@ pub unsafe extern "C" fn rust_users_add(
             slot.username_len = name.len() as u8;
             slot.uid = uid;
             slot.gid = gid;
-            slot.password_hash = fnv1a_hash(password);
+            slot.salt = salt;
+            slot.password_hash = hash;
             USER_COUNT += 1;
             return true;
         }
@@ -204,7 +279,6 @@ pub unsafe extern "C" fn rust_users_authenticate(
     let name = core::slice::from_raw_parts(username_ptr, username_len as usize);
     let password =
         core::slice::from_raw_parts(password_ptr, password_len as usize);
-    let attempt_hash = fnv1a_hash(password);
 
     for record in users().iter_mut() {
         if username_matches(record, name) {
@@ -213,7 +287,9 @@ pub unsafe extern "C" fn rust_users_authenticate(
                               // password is accepted until a reboot
                               // (see failed_attempts' own doc comment)
             }
-            if record.password_hash == attempt_hash {
+            let attempt_hash =
+                pbkdf2_hmac_sha256(password, &record.salt, PBKDF2_ITERATIONS);
+            if constant_time_eq(&record.password_hash, &attempt_hash) {
                 record.failed_attempts = 0; // a success clears any
                                              // prior failures
                 core::ptr::write(out_uid, record.uid);
@@ -236,10 +312,13 @@ pub extern "C" fn rust_users_count() -> u32 {
 /// read/write, the same "kernel reads/writes a plain file, Rust
 /// (de)serializes it" pattern SYSTEM.CFG already established):
 /// username_len(1) + username(32, zero-padded) + uid(4) + gid(4) +
-/// password_hash(4) = 45 bytes per record, MAX_USERS records back to
-/// back, no header/checksum - deliberately as simple as SYSTEM.CFG's
-/// own fixed-layout format, not a new, more elaborate scheme.
-const RECORD_SIZE: usize = 1 + USERNAME_MAX + 4 + 4 + 4;
+/// salt(16) + password_hash(32) = 89 bytes per record (grown from
+/// Phase 47's original 45 - the salt and the full 32-byte PBKDF2
+/// output this phase adds, replacing the old 4-byte FNV-1a value),
+/// MAX_USERS records back to back, no header/checksum - deliberately
+/// as simple as SYSTEM.CFG's own fixed-layout format, not a new, more
+/// elaborate scheme.
+const RECORD_SIZE: usize = 1 + USERNAME_MAX + 4 + 4 + SALT_LEN + HASH_LEN;
 
 #[no_mangle]
 pub extern "C" fn rust_users_serialized_size() -> u32 {
@@ -268,7 +347,9 @@ pub unsafe extern "C" fn rust_users_save(out: *mut u8, out_len: u32) -> i32 {
         off += 4;
         buf[off..off + 4].copy_from_slice(&record.gid.to_le_bytes());
         off += 4;
-        buf[off..off + 4].copy_from_slice(&record.password_hash.to_le_bytes());
+        buf[off..off + SALT_LEN].copy_from_slice(&record.salt);
+        off += SALT_LEN;
+        buf[off..off + HASH_LEN].copy_from_slice(&record.password_hash);
     }
     needed as i32
 }
@@ -315,8 +396,9 @@ pub unsafe extern "C" fn rust_users_load(data: *const u8, data_len: u32) -> bool
         off += 4;
         record.gid = u32::from_le_bytes(buf[off..off + 4].try_into().unwrap());
         off += 4;
-        record.password_hash =
-            u32::from_le_bytes(buf[off..off + 4].try_into().unwrap());
+        record.salt.copy_from_slice(&buf[off..off + SALT_LEN]);
+        off += SALT_LEN;
+        record.password_hash.copy_from_slice(&buf[off..off + HASH_LEN]);
         loaded[i] = record;
         count += 1;
     }
@@ -337,7 +419,12 @@ pub unsafe extern "C" fn rust_users_load(data: *const u8, data_len: u32) -> bool
 /// not just the in-memory add/authenticate logic. Also confirms
 /// Phase 49's own lockout behavior: after LOCKOUT_THRESHOLD consecutive
 /// wrong-password attempts against a (separate) account, even that
-/// account's genuinely correct password is rejected.
+/// account's genuinely correct password is rejected. Phase 50 adds one
+/// more: two different accounts given the exact same password but
+/// different salt seeds must end up with different stored hashes -
+/// the actual, observable point of salting at all, not just that
+/// authentication still works (which would be true even if salting
+/// were silently broken and every account shared one salt).
 #[no_mangle]
 pub extern "C" fn rust_users_selftest() -> i32 {
     let mut code = 0;
@@ -354,6 +441,7 @@ pub extern "C" fn rust_users_selftest() -> i32 {
             43,
             password.as_ptr(),
             password.len() as u32,
+            0x1111_1111,
         )
     };
     if !added {
@@ -457,6 +545,7 @@ pub extern "C" fn rust_users_selftest() -> i32 {
             99,
             lock_password.as_ptr(),
             lock_password.len() as u32,
+            0x2222_2222,
         );
     }
 
@@ -487,6 +576,57 @@ pub extern "C" fn rust_users_selftest() -> i32 {
     if correct_after_lockout {
         code |= 64; // the correct password must still be rejected -
                     // the account is locked, not just "recently wrong"
+    }
+
+    // Phase 50: the actual, observable point of salting - two
+    // different accounts given the exact same password but different
+    // salt seeds must end up with different stored hashes. Without
+    // this check, a self-test could pass in full (every add/
+    // authenticate call behaving correctly) even if salting were
+    // silently a no-op and every account secretly shared one fixed
+    // salt - authentication would still work identically either way,
+    // so only directly inspecting the stored hashes themselves proves
+    // salting is actually happening.
+    let salt_username_a = b"salttest_a";
+    let salt_username_b = b"salttest_b";
+    let shared_password = b"same-password-both-accounts";
+    unsafe {
+        rust_users_add(
+            salt_username_a.as_ptr(),
+            salt_username_a.len() as u32,
+            1,
+            1,
+            shared_password.as_ptr(),
+            shared_password.len() as u32,
+            0x3333_3333,
+        );
+        rust_users_add(
+            salt_username_b.as_ptr(),
+            salt_username_b.len() as u32,
+            2,
+            2,
+            shared_password.as_ptr(),
+            shared_password.len() as u32,
+            0x4444_4444,
+        );
+    }
+    let (hash_a, hash_b, salt_a, salt_b) = unsafe {
+        let table = users();
+        let record_a = table
+            .iter()
+            .find(|r| username_matches(r, salt_username_a))
+            .unwrap();
+        let hash_a = record_a.password_hash;
+        let salt_a = record_a.salt;
+        let record_b = table
+            .iter()
+            .find(|r| username_matches(r, salt_username_b))
+            .unwrap();
+        (hash_a, record_b.password_hash, salt_a, record_b.salt)
+    };
+    if salt_a == salt_b || hash_a == hash_b {
+        code |= 128; // same password, different salts, MUST produce
+                     // different salts and different stored hashes
     }
 
     // Leave the database empty for whatever real code runs after this

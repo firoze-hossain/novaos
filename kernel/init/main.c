@@ -912,6 +912,70 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         }
     }
 
+    /* Phase 50: kernel/rust/sha256.rs's own self-test - verifies this
+     * from-scratch SHA-256 implementation against three of the
+     * algorithm's own standard, independently-known-correct test
+     * vectors (including one long enough to exercise the multi-block
+     * message-schedule expansion, not just the single-block path)
+     * before kernel/rust/users.rs's own real password hashing (this
+     * same phase) is ever allowed to depend on it. */
+    {
+        extern int rust_sha256_selftest(void);
+        int result = rust_sha256_selftest();
+        kernel_log("[ %s ] Kernel-side Rust SHA-256 self-test: "
+                   "empty-string=%s abc=%s multi-block=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
+    /* Phase 50: kernel/rust/hmac_sha256.rs's own self-test - verifies
+     * against RFC 4231's own standard Test Case 1, independently
+     * cross-checked (Python's hmac module) before being hardcoded
+     * here. */
+    {
+        extern int rust_hmac_sha256_selftest(void);
+        int result = rust_hmac_sha256_selftest();
+        kernel_log("[ %s ] Kernel-side Rust HMAC-SHA256 self-test: "
+                   "rfc4231-test-case-1=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass");
+    }
+
+    /* Phase 50: kernel/rust/pbkdf2.rs's own self-test - verifies
+     * against three independently-generated test vectors (Python's
+     * own hashlib.pbkdf2_hmac, not this project's code), including
+     * this phase's own actual, chosen production iteration count
+     * (4096) - not just a toy case. */
+    {
+        extern int rust_pbkdf2_selftest(void);
+        int result = rust_pbkdf2_selftest();
+        kernel_log("[ %s ] Kernel-side Rust PBKDF2-HMAC-SHA256 "
+                   "self-test: iterations-1=%s iterations-2=%s "
+                   "iterations-4096=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
+    /* Phase 50: a direct, measured timing check, not an assumption -
+     * confirms 4096 iterations (kernel/rust/users.rs's own
+     * PBKDF2_ITERATIONS) is actually a reasonable choice on this
+     * kernel's own real timer, not just plausible in the abstract.
+     * Real login (Phase 49) computes exactly one of these per attempt
+     * - this needs to be slow enough to matter against a fast guesser,
+     * but not so slow a real, legitimate login feels broken. */
+    {
+        extern uint8_t rust_pbkdf2_timing_probe(void);
+        uint32_t ticks_before = timer_get_ticks();
+        rust_pbkdf2_timing_probe();
+        uint32_t ticks_after = timer_get_ticks();
+        kernel_log("[ .. ] PBKDF2 (4096 iterations) took %d timer tick(s)\n",
+                   (int)(ticks_after - ticks_before));
+    }
+
     /* Phase 47/49: kernel/rust/users.rs's own self-test - verifies the
      * add/authenticate/serialize/load round trip before any syscall
      * or process code depends on it, plus (Phase 49) the lockout
@@ -926,7 +990,8 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         kernel_log("[ %s ] Kernel-side Rust user database self-test: "
                    "add=%s right-password=%s wrong-password-rejected=%s "
                    "unknown-user-rejected=%s serialize=%s "
-                   "persistence-round-trip=%s locked-out-after-threshold=%s\n",
+                   "persistence-round-trip=%s locked-out-after-threshold=%s "
+                   "different-salts-for-same-password=%s\n",
                    result == 0 ? "OK" : "FAIL",
                    (result & 1) ? "FAIL" : "pass",
                    (result & 2) ? "FAIL" : "pass",
@@ -934,7 +999,8 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    (result & 8) ? "FAIL" : "pass",
                    (result & 16) ? "FAIL" : "pass",
                    (result & 32) ? "FAIL" : "pass",
-                   (result & 64) ? "FAIL" : "pass");
+                   (result & 64) ? "FAIL" : "pass",
+                   (result & 128) ? "FAIL" : "pass");
     }
 
     firstrun_check_and_run();

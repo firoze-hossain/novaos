@@ -4676,11 +4676,129 @@ quickly. Password hashing remains FNV-1a, explicitly not
 cryptographically secure, per Phase 47's own original, unchanged
 documented limitation.
 
-## Phase 50 and beyond
+## Phase 50: a real, salted, deliberately-slow password hash - implemented entirely from scratch in Rust
+
+**Status: Complete.** Replaces Phase 47's original FNV-1a password
+hash - always explicitly documented as not a secure hash at all - with
+real PBKDF2-HMAC-SHA256, salted per-account and deliberately slow.
+Requested specifically as "the next phase, fully in Rust" - and
+genuinely is: SHA-256, HMAC-SHA256, and PBKDF2 are all implemented
+from scratch in three new Rust modules, since this freestanding,
+`no_std` kernel has no crates.io or any external dependency to draw
+a real hash implementation from. The only C-side changes this phase
+needed were passing one extra `u32` parameter and updating one size
+constant - real, necessary glue, not algorithm logic.
+
+### Three layers, each independently verified before the next was built on top of it
+
+`kernel/rust/sha256.rs`: SHA-256 (FIPS 180-4) from scratch. Verified
+against three of the algorithm's own standard test vectors (the empty
+string, "abc," and a third, deliberately longer vector chosen
+specifically because it spans two 64-byte blocks once padded - the
+first two, both short enough to fit in one block, could not have
+caught a bug in the multi-block message-schedule expansion the way
+this one does). Every expected value was independently generated with
+Python's own trusted `hashlib` before being hardcoded into this
+kernel's own self-test, not typed from memory.
+
+`kernel/rust/hmac_sha256.rs`: HMAC-SHA256 (RFC 2104), built directly
+on the module above. Verified against RFC 4231's own standard Test
+Case 1, cross-checked against Python's `hmac` module byte-for-byte
+before being hardcoded.
+
+`kernel/rust/pbkdf2.rs`: PBKDF2-HMAC-SHA256 (RFC 8018), built on both.
+Deliberately implements only the single-block (`dkLen = hLen = 32`)
+case - this kernel never actually needs a longer derived key, so the
+general multi-block form was not built for its own sake. Verified
+against three vectors independently generated with Python's own
+`hashlib.pbkdf2_hmac` - iterations=1 (no accumulation loop at all),
+iterations=2 (exactly one accumulation step, catching an off-by-one
+iterations=1 alone couldn't), and iterations=4096 - this phase's own
+actual, chosen production value, not a toy case.
+
+### The iteration count was measured, not picked from a table
+
+4096 was chosen and then directly measured on this kernel's own real
+timer (`kernel/init/main.c` brackets one real PBKDF2 computation with
+real `timer_get_ticks()` reads) before being trusted as reasonable:
+consistently 5-6 ticks at this kernel's default 100Hz resolution,
+roughly 50-60ms per login attempt - imperceptible to a real person
+typing their own password, while thousands of times slower than the
+FNV-1a hash it replaces. Explicitly, honestly below general modern
+guidance for a networked, multi-user, high-value system (which often
+recommends 100k+ iterations) - a deliberate trade-off stated directly
+in `kernel/rust/users.rs`'s own `PBKDF2_ITERATIONS` doc comment for
+this kernel's actual, current context (a single-machine hobby OS, not
+a server handling untrusted remote logins), not hidden as if it were
+already a fully hardened value.
+
+### Salting, and an honest limitation this phase did not paper over
+
+This kernel has no real entropy source - confirmed directly before
+writing any code, not assumed: grepped the whole kernel tree, and the
+only existing precedent (`kernel/net/tcp.c`'s own initial sequence
+number) is itself already, honestly documented as "not
+cryptographically random." Rather than invent a new pretense of
+randomness, this phase reused that exact same honest framing: each
+account's 16-byte salt is derived (via SHA-256) from
+`timer_get_ticks()` (read C-side, passed in as `salt_seed`) mixed with
+the username - varying per-account and per-boot-moment, genuinely
+defeating precomputed rainbow-table attacks (a salt's actual job),
+while explicitly not claiming cryptographic unpredictability a real
+hardware RNG would provide.
+
+### Verified in stages, ending with a check that specifically could not have passed by accident
+
+Isolated compile checks after each of the three new modules, then
+full-suite regression after each. The riskiest step - migrating
+`kernel/rust/users.rs`'s on-disk record format itself (45 bytes/record
+grew to 89, to hold the new 16-byte salt and full 32-byte hash instead
+of the old 4-byte FNV-1a value) - was verified by first confirming the
+*expected* failure: with the format changed but the old
+`tools/fixtures/USERS.CFG` fixture still in place, `userscfg_loaded`
+and `sandbox_login_passed` failed exactly as designed (a wrong-sized
+file safely, gracefully rejected as absent, not crashed), while
+`users_selftest`'s own in-memory logic kept passing throughout -
+confirming the failure was specifically about the stale on-disk
+format, not a real logic bug. The fixture was then regenerated the
+same way Phase 48 originally built it: temporary code calling the
+real, production `rust_users_add()`/`userscfg_save()` path, booted
+once, extracted with `mcopy`, its exact byte layout verified directly
+(magic, username, uid/gid all at the expected offsets, followed by
+what a real salt and PBKDF2 hash actually look like - high-entropy
+bytes, nothing like the old 4-byte value), then the temporary code
+removed.
+
+The self-test itself gained a check that specifically could not have
+passed by an unrelated bug or by accident: two different accounts
+given the exact same password but different salt seeds must end up
+with different stored hashes. Every other check in this phase's own
+self-test (and Phase 47/49's before it) could in principle still pass
+even if salting were silently a no-op and every account secretly
+shared one fixed salt - authentication itself would behave identically
+either way. Only directly inspecting and comparing the two stored
+hashes proves salting is actually happening, not just that the rest of
+the authentication flow still works.
+
+All 64 assertions (61 prior + 3 new) pass together, repeatably, across
+three clean rebuilds and both boot paths.
+
+### Known limitations
+
+Salt derivation is honestly bounded by this kernel's own lack of a
+real entropy source (see above) - a hardware RNG (RDRAND, where
+available) is real, separate follow-up work. 4096 iterations is a
+deliberate, stated trade-off for this kernel's current, single-machine
+context, not a value that would be appropriate unchanged for a
+general-purpose, networked, multi-user system. No password-strength
+requirements exist at the first-boot prompt (an empty password is
+still accepted, per Phase 49's own unchanged limitation).
+
+## Phase 51 and beyond
 
 Not started. Candidates: a persistent (disk-backed) lockout counter; a
 `useradd`-equivalent way to create additional accounts after first
-boot; a real, salted, deliberately-slow password hash; the real SMP
+boot; a real hardware entropy source for salt generation; the real SMP
 prerequisites named in Phase 44's own entry (Local APIC/IO-APIC
 drivers, AP bootstrap, per-CPU state, kernel-wide locking audit) - each
 substantial enough to be its own, separately-scoped phase, not one

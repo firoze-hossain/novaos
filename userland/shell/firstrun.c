@@ -8,15 +8,21 @@
 #include "../../kernel/fs/vfs.h"
 #include "../../kernel/config/sysconfig.h"
 #include "../../kernel/config/userscfg.h"
+#include "../../kernel/drivers/timer/timer.h"
 #include "../../kernel/lib/string.h"
 #include "../../kernel/include/kernel.h"
 
 /* kernel/rust/users.rs's exported account-creation function - see
- * that file's own doc comment for the full contract. */
+ * that file's own doc comment for the full contract, including
+ * Phase 50's own addition (salt_seed - this driver passes
+ * timer_get_ticks(), the same "no real entropy source exists in this
+ * kernel" honest limitation kernel/net/tcp.c's own initial sequence
+ * number already documented, reused rather than a new one invented
+ * here). */
 extern bool rust_users_add(const uint8_t* username_ptr, uint32_t username_len,
                             uint32_t uid, uint32_t gid,
                             const uint8_t* password_ptr,
-                            uint32_t password_len);
+                            uint32_t password_len, uint32_t salt_seed);
 
 static char g_hostname[SYSCONFIG_HOSTNAME_MAX] = "novaos";
 static char g_username[SYSCONFIG_USERNAME_MAX] = "user";
@@ -171,7 +177,8 @@ void firstrun_check_and_run(void) {
 
     bool user_added = rust_users_add(
         (const uint8_t*)username_buf, (uint32_t)strlen(username_buf), 0, 0,
-        (const uint8_t*)password_buf, (uint32_t)strlen(password_buf));
+        (const uint8_t*)password_buf, (uint32_t)strlen(password_buf),
+        timer_get_ticks());
     if (user_added) {
         if (!userscfg_save()) {
             vga_puts("[WARN] Could not save the account to disk - it "
