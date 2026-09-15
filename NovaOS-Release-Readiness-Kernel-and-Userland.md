@@ -1,7 +1,7 @@
 # NovaOS: Release-Readiness Feature List (Kernel First, Then Userland)
 
-*Updated again: Phases 48-49 are now done (see below), on top of the
-45-47 update before that - kernel work only, matching your stated
+*Updated again: Phases 50-51 are now done (see below), on top of the
+48-49 update before that - kernel work only, matching your stated
 priority; nothing in Part 2 (userland) has changed since this document
 was last updated, so that section is unmodified. Every "done" mark
 below reflects verified, shipped work, not a plan - and where a real,
@@ -69,9 +69,12 @@ source, not assumed from a phase number.
   TFTP/TCP traffic simultaneously with virtio-blk.
 - ✅ **UID/GID and real process identity** (Phase 47), **persisted
   across reboots** (Phase 48), **with a real interactive login screen**
-  (Phase 49) — see 1.1 below for the full account, including a direct
-  correction to this document's own earlier stated concern about
-  interactive login and the headless test suite.
+  (Phase 49), **real salted PBKDF2-HMAC-SHA256 password hashing**
+  (Phase 50, replacing the original FNV-1a placeholder), **and a real
+  privilege-escalation model** (Phase 51, `sudo`) — see 1.1 below for
+  the full account, including a direct correction to this document's
+  own earlier stated concern about interactive login and the headless
+  test suite.
 
 ---
 
@@ -81,9 +84,10 @@ source, not assumed from a phase number.
 
 | What | Status | Why a user notices | Best-in-class reference |
 |---|---|---|---|
-| **UID/GID + real process identity.** | ✅ **Done (Phase 47), scoped to process identity, persisted across reboots (Phase 48).** Every `process_t` carries real `uid`/`gid` fields, threaded through every creation path with correct, distinct semantics: kernel-created tasks default to root; `fork()` and `exec()` both inherit the calling process's identity unchanged (deliberately different from this kernel's existing per-exec capability grants, which *do* reset — uid/gid represent *who's running this*, which real `exec()` doesn't change). Real accounts now survive a reboot: `USERS.CFG` (the same "kernel reads/writes a file, load validates a magic header, save overwrites" shape `SYSTEM.CFG` already established) is loaded at boot and saved when the first-boot wizard creates an account — verified end to end, not just claimed: a real, disk-persisted test account authenticates correctly from real ring-3 code after a fresh boot. **File-level ownership is a separate, real gap, not covered by this**, blocked by an external constraint found before writing any code: FAT32's own on-disk directory entry format has no uid/gid/mode field at all — adding one would be a non-standard extension breaking compatibility with every other FAT32 reader. Password hashing (FNV-1a) is explicitly *not* cryptographically secure — an honest placeholder proving the auth flow, not a real credential store. | Without this, there's no real notion of privacy or protection between accounts — a dealbreaker the moment more than one person (or even one person with an admin vs. normal-use account) touches the machine. | **Linux/Unix's UID/GID + permission-bits model** — simple, proven, and the foundation everything else (sudo, ACLs, containers) builds on. Start here, not with something more elaborate. |
+| **UID/GID + real process identity.** | ✅ **Done (Phase 47), scoped to process identity, persisted across reboots (Phase 48).** Every `process_t` carries real `uid`/`gid` fields, threaded through every creation path with correct, distinct semantics: kernel-created tasks default to root; `fork()` and `exec()` both inherit the calling process's identity unchanged (deliberately different from this kernel's existing per-exec capability grants, which *do* reset — uid/gid represent *who's running this*, which real `exec()` doesn't change). Real accounts now survive a reboot: `USERS.CFG` (the same "kernel reads/writes a file, load validates a magic header, save overwrites" shape `SYSTEM.CFG` already established) is loaded at boot and saved when the first-boot wizard creates an account — verified end to end, not just claimed: a real, disk-persisted test account authenticates correctly from real ring-3 code after a fresh boot. **File-level ownership is a separate, real gap, not covered by this**, blocked by an external constraint found before writing any code: FAT32's own on-disk directory entry format has no uid/gid/mode field at all — adding one would be a non-standard extension breaking compatibility with every other FAT32 reader. Password hashing is now real (Phase 50) — see the row below. | Without this, there's no real notion of privacy or protection between accounts — a dealbreaker the moment more than one person (or even one person with an admin vs. normal-use account) touches the machine. | **Linux/Unix's UID/GID + permission-bits model** — simple, proven, and the foundation everything else (sudo, ACLs, containers) builds on. Start here, not with something more elaborate. |
 | **A real login screen / session concept**, distinct from the current cosmetic "username" set once at first boot. | ✅ **Done (Phase 49) — including a direct correction to this document's own earlier stated concern.** A prior update of this exact document claimed an interactive login prompt would risk "silently stranding the automated test suite" in this project's headless test config. Investigated directly rather than left standing: that concern was accurate for `firstrun.c`'s own ring-0 wizard (which genuinely blocks before the scheduler starts anything else) but did not describe what a prompt *inside the ring-3 shell process* actually does — it cooperatively yields (`sys_yield()`) while polling the already non-blocking `SYS_READ_KEY`, the exact same pattern the shell's own pre-existing command prompt already used, unmodified, in every prior headless test run, without ever stranding anything. `userland/ring3-shell/shell.c` now prompts for a username and password (masked with `*`) before the shell becomes usable at all, calling the real `SYS_LOGIN`; a wrong password or a locked-out account (Phase 49 also added a bounded, in-memory failed-attempt lockout in `kernel/rust/users.rs` — the genuine "session concept" half of this row) both show the same generic "Login incorrect," deliberately not distinguished. Verified with real, scripted keystrokes via QEMU's monitor, not just reasoned about: a wrong password rejected and re-prompted; the correct password (against the real, disk-persisted account) succeeding, printing "Login successful. Welcome, persisted (uid 700)."; and the shell then genuinely usable afterward — `help` producing its full command listing, not a stuck or broken state. | The single most visible "is this a real OS" signal to a new user. | **macOS's login window** is the cleanest reference for a hobby OS — simple, fast, no unnecessary complexity. |
-| **A privilege-escalation model** (`sudo`-equivalent) once real users exist. | ❌ **Still not started.** Real, authenticated uids now exist to check (Phases 47-49) — but nothing anywhere in this kernel currently checks "is this process uid 0" to gate any action. The identity is now trustworthy and a real user can genuinely log in as it; nothing consumes that identity for privilege decisions yet. | Lets normal use stay unprivileged by default — a genuine security property, not just cosmetic. | **Linux's `sudo`** (simpler to implement than Windows' UAC prompt-and-consent flow, and gets you 90% of the value). |
+| **Real, salted, deliberately-slow password hashing** (Phase 47's original FNV-1a was explicitly documented as not secure — no salt, fast rather than slow, chosen only to prove the authentication flow). | ✅ **Done (Phase 50), fully in Rust.** SHA-256, HMAC-SHA256, and PBKDF2-HMAC-SHA256 all implemented from scratch (`kernel/rust/sha256.rs`/`hmac_sha256.rs`/`pbkdf2.rs`) — this freestanding kernel has no crates.io or any external dependency to draw a real hash implementation from. Every test vector independently generated with Python's own trusted `hashlib`/`hmac` before being hardcoded, not typed from memory. 4096 iterations, salted per-account — and *measured*, not assumed reasonable: bracketing a real computation with real `timer_get_ticks()` reads shows ~50-60ms per attempt on this kernel's own hardware/emulation, imperceptible to a real login while thousands of times slower than the hash it replaces. Honestly below general modern guidance for a networked multi-user system — a stated trade-off for this kernel's current single-machine context, not hidden as already fully hardened. Salt derivation is honestly bounded by this kernel having no real entropy source (confirmed by grepping the whole tree, not assumed) — reuses `kernel/net/tcp.c`'s own existing "not cryptographically random" honesty rather than inventing a new pretense. | Storing passwords with a fast, unsalted hash is a real, concrete security gap the moment more than a toy account exists — this is the difference between "an authentication flow that works" and "credentials worth trusting." | **Linux/Unix's own shadow password + PBKDF2/bcrypt/yescrypt evolution** — this phase's choice (PBKDF2-HMAC-SHA256) is the simplest widely-standardized member of that family, not the most modern one; a stated, deliberate trade-off for this project's current scale. |
+| **A privilege-escalation model** (`sudo`-equivalent) once real users exist. | ✅ **Done (Phase 51).** `kernel/rust/users.rs`'s own `rust_users_sudo_check()` is the actual gate this row was waiting for — it re-authenticates the *calling* process's own account (looked up by its current numeric uid, the same way real sudo resolves the calling identity) and escalates only if the password is correct *and* the account is a member of what this kernel calls the "admin group" (`gid == 0`) — a correct password for a non-admin account is refused, same as a wrong one, proving authenticated is not the same as authorized. A real `sudo FILE [args]` shell command re-prompts for the current user's own password and, on success, runs the target command with the now-escalated identity. Verified three separate ways: the Rust check directly, the full syscall path from real ring-3 code (`SYS_SUDO -> success, now uid 0 gid 0`), and real, scripted keystrokes through the actual interactive shell command. A real, separate access-control layer was found during manual verification, not caused by this phase: this kernel's own pre-existing per-process capability list (`allowed_files[]`, independent of uid/gid) still gates file access even for an escalated, uid-0 process — `sudo` only ever escalates identity, not file capabilities, the same as the existing `run` command already didn't. **Scoped, stated directly**: escalation currently applies to the calling shell process for the rest of its own session, not per-command the way real sudo is — there is no "drop back to the original identity after the command finishes" step yet. | Lets normal use stay unprivileged by default — a genuine security property, not just cosmetic. | **Linux's `sudo`** (simpler to implement than Windows' UAC prompt-and-consent flow, and gets you 90% of the value). |
 
 ### 1.2 Drivers that don't require editing kernel boot code
 
@@ -180,10 +184,10 @@ A rough shape, so "release" means something concrete:
   **done (Phase 38)** — turned out to be a linker script bug, not the
   scheduler; see 1.3 for the corrected account.
 - Real users/permissions, kernel side (Part 1.1) — ✅ **process-level
-  identity, persistence, and a real interactive login screen all done
-  (Phases 47-49)**; file-level ownership remains a real, separate gap
-  (blocked by FAT32's own format, not just unscheduled), and a
-  privilege-escalation model (`sudo`) is still unbuilt.
+  identity, persistence, a real interactive login screen, real salted
+  password hashing, and a real privilege-escalation model all done
+  (Phases 47-51)**; file-level ownership remains a real, separate gap
+  (blocked by FAT32's own format, not just unscheduled).
 - ~~Driver registration table (Part 1.2)~~ ✅ **done (Phase 39)**,
   partial scope (4 of ~10 drivers migrated) — extending to the
   remaining drivers (`timer`/`vfs`/`net`) is real, smaller follow-up
@@ -192,10 +196,12 @@ A rough shape, so "release" means something concrete:
   see Part 2, unchanged since this document was last updated.
 
 **v1.0 ("I'd hand this to a curious friend")**
-- Login screen + `sudo`-equivalent (Part 1.1) — the login screen
-  itself is now done, mechanism and interactive UI both (Phases
-  47-49); a privilege-escalation model (`sudo`) on top of it is still
-  not started.
+- ~~Login screen + `sudo`-equivalent (Part 1.1)~~ ✅ **done (Phases
+  47-51)** — real identity, persistence, interactive login, real
+  password hashing, and a real privilege-escalation model, all
+  verified. What's left under 1.1 (file-level ownership, a
+  `useradd`-equivalent, per-command sudo scoping) is real, smaller
+  follow-up work, not a blocker for this milestone.
 - Dynamic linking (Part 2.4) — still not started.
 - Package management with real network fetch (Part 2.2) — still not
   started.

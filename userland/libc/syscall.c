@@ -228,3 +228,12 @@ unsigned int sys_getuid(void) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_sudo(const char* password) {
+    int result = SYS_SUDO;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(password)
+                       : "memory", "cc");
+    return result;
+}

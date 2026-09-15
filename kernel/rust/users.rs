@@ -303,6 +303,56 @@ pub unsafe extern "C" fn rust_users_authenticate(
     false // no such username
 }
 
+/// Phase 51: the actual sudo gate - re-authenticates the account
+/// identified by `uid` (the *calling process's own* current uid,
+/// looked up by numeric ID rather than by re-typing a username, since
+/// a process genuinely only knows its own uid, not which username it
+/// corresponds to - real sudo works the same way, mapping the real
+/// calling uid back to an account) against `password`, and returns
+/// `true` only if *both* the password is correct *and* that account
+/// is a member of what this kernel calls the "admin group" - `gid ==
+/// 0`, the same numeric value as root's own gid, a deliberately
+/// simple convention rather than a general group-membership system
+/// this kernel has no other use for yet. A correct password for an
+/// account that is not in the admin group returns `false`, same as a
+/// wrong password - "authenticated but not authorized" and "not even
+/// authenticated" are deliberately not distinguished in the return
+/// value, the same anti-information-leak reasoning
+/// `rust_users_authenticate`'s own doc comment already established
+/// for wrong-password vs. unknown-username.
+///
+/// # Safety
+/// `password_ptr` must be valid for reads of `password_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rust_users_sudo_check(
+    uid: u32,
+    password_ptr: *const u8,
+    password_len: u32,
+) -> bool {
+    let password =
+        core::slice::from_raw_parts(password_ptr, password_len as usize);
+
+    for record in users().iter_mut() {
+        if record.in_use && record.uid == uid {
+            if record.failed_attempts >= LOCKOUT_THRESHOLD {
+                return false;
+            }
+            let attempt_hash =
+                pbkdf2_hmac_sha256(password, &record.salt, PBKDF2_ITERATIONS);
+            if constant_time_eq(&record.password_hash, &attempt_hash) {
+                record.failed_attempts = 0;
+                return record.gid == 0; // authenticated - but only
+                                         // authorized if also in the
+                                         // admin group
+            }
+            record.failed_attempts += 1;
+            return false;
+        }
+    }
+    false // no account with this uid - shouldn't happen for a real,
+          // already-logged-in caller, but never trusted regardless
+}
+
 #[no_mangle]
 pub extern "C" fn rust_users_count() -> u32 {
     unsafe { USER_COUNT as u32 }
@@ -424,7 +474,11 @@ pub unsafe extern "C" fn rust_users_load(data: *const u8, data_len: u32) -> bool
 /// different salt seeds must end up with different stored hashes -
 /// the actual, observable point of salting at all, not just that
 /// authentication still works (which would be true even if salting
-/// were silently broken and every account shared one salt).
+/// were silently broken and every account shared one salt). Phase 51
+/// adds direct verification of `rust_users_sudo_check` itself: a
+/// wrong password rejected, an admin-group account's correct password
+/// accepted, and - the actual point of the function - a genuinely
+/// correct password for a *non*-admin-group account still rejected.
 #[no_mangle]
 pub extern "C" fn rust_users_selftest() -> i32 {
     let mut code = 0;
@@ -627,6 +681,76 @@ pub extern "C" fn rust_users_selftest() -> i32 {
     if salt_a == salt_b || hash_a == hash_b {
         code |= 128; // same password, different salts, MUST produce
                      // different salts and different stored hashes
+    }
+
+    // Phase 51: sudo-check verification - directly exercises
+    // rust_users_sudo_check() itself, not just inferred from a later
+    // syscall/shell test. Two accounts: one in the admin group
+    // (gid == 0) and one genuinely not, both with real, different
+    // passwords - proving three things separately, not just "it
+    // returns something": a wrong password for the admin account is
+    // rejected; the admin account's own correct password is accepted;
+    // and - the check this function actually exists to make, not
+    // just password verification alone - a *correct* password for a
+    // non-admin account is still rejected, because authentication
+    // alone is not authorization.
+    let sudo_admin_username = b"sudoadmintest";
+    let sudo_admin_password = b"sudo-admin-correct-password";
+    let sudo_regular_username = b"sudoregulartest";
+    let sudo_regular_password = b"sudo-regular-correct-password";
+    unsafe {
+        rust_users_add(
+            sudo_admin_username.as_ptr(),
+            sudo_admin_username.len() as u32,
+            801,
+            0, // admin group
+            sudo_admin_password.as_ptr(),
+            sudo_admin_password.len() as u32,
+            0x5555_5555,
+        );
+        rust_users_add(
+            sudo_regular_username.as_ptr(),
+            sudo_regular_username.len() as u32,
+            802,
+            802, // NOT the admin group
+            sudo_regular_password.as_ptr(),
+            sudo_regular_password.len() as u32,
+            0x6666_6666,
+        );
+    }
+
+    let admin_wrong_password_ok = unsafe {
+        rust_users_sudo_check(801, b"totally-wrong".as_ptr(), 13)
+    };
+    if admin_wrong_password_ok {
+        code |= 256; // must NOT succeed with the wrong password, even
+                     // for an admin-group account
+    }
+
+    let admin_correct_password_ok = unsafe {
+        rust_users_sudo_check(
+            801,
+            sudo_admin_password.as_ptr(),
+            sudo_admin_password.len() as u32,
+        )
+    };
+    if !admin_correct_password_ok {
+        code |= 512; // the admin-group account's own correct
+                     // password MUST succeed
+    }
+
+    let regular_correct_password_ok = unsafe {
+        rust_users_sudo_check(
+            802,
+            sudo_regular_password.as_ptr(),
+            sudo_regular_password.len() as u32,
+        )
+    };
+    if regular_correct_password_ok {
+        code |= 1024; // the actual point of this function: a
+                      // genuinely correct password for a non-admin
+                      // account must still be rejected - authenticated
+                      // is not the same as authorized
     }
 
     // Leave the database empty for whatever real code runs after this

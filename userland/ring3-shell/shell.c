@@ -165,6 +165,8 @@ static void cmd_help(void) {
     printf("  ls              - list files in the root directory\n");
     printf("  cat FILE        - print a file's contents\n");
     printf("  run FILE [args] - load and run a real ELF executable\n");
+    printf("  sudo FILE [args] - re-authenticate, then run as root if "
+           "authorized\n");
     printf("  echo TEXT       - print TEXT\n");
     printf("  clear           - clear the screen\n");
     printf("  date            - show the current date/time\n");
@@ -220,6 +222,55 @@ static void cmd_run(int argc, char* argv[]) {
     int pid = sys_exec(argv[1], &argv[1], argc - 1);
     if (pid < 0) {
         printf("run: failed to load '%s'\n", argv[1]);
+        return;
+    }
+    int exit_code = sys_wait(pid);
+    printf("(pid %d exited with code %d)\n", pid, exit_code);
+}
+
+/* Phase 51: sudo FILE [args...] - real privilege escalation, not
+ * cosmetic. Re-prompts for the *current* user's own password (real
+ * sudo's own model: prove you're still you, not the target's own
+ * credential) and calls the real SYS_SUDO syscall, which only
+ * escalates this process if that password is correct *and* the
+ * logged-in account is a member of the admin group (gid == 0) -
+ * kernel/rust/users.rs's own rust_users_sudo_check() makes that
+ * actual decision, not this shell.
+ *
+ * A real, honestly-stated simplification from real sudo's own
+ * per-command scoping: SYS_SUDO escalates *this shell process
+ * itself*, for the rest of its own session, not just for the one
+ * command about to run - there is no "drop back to the original,
+ * unprivileged identity afterward" step. sys_exec() below spawns the
+ * target command as a new, separate process that inherits whatever
+ * identity this shell now has (Phase 47's own exec() semantics -
+ * inherit the caller, don't reset), which is what actually makes the
+ * escalation have real, visible effect on the command that runs - but
+ * it means every command typed in this same shell session after a
+ * successful sudo also runs as root, not just this one. A real,
+ * separate, smaller-scoped follow-up (saving and restoring the
+ * original identity around just the one spawned command) would close
+ * that gap without needing any change to the actual escalation
+ * decision above. */
+static void cmd_sudo(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("usage: sudo FILE [args...]\n");
+        return;
+    }
+
+    char password[64];
+    printf("[sudo] password for this account: ");
+    read_line_noecho(password, sizeof(password));
+
+    if (sys_sudo(password) != 0) {
+        printf("sudo: incorrect password, or this account is not in the "
+               "admin group.\n");
+        return;
+    }
+
+    int pid = sys_exec(argv[1], &argv[1], argc - 1);
+    if (pid < 0) {
+        printf("sudo: failed to load '%s'\n", argv[1]);
         return;
     }
     int exit_code = sys_wait(pid);
@@ -616,6 +667,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_cat(argc2, tokens);
         } else if (strcmp(tokens[0], "run") == 0) {
             cmd_run(argc2, tokens);
+        } else if (strcmp(tokens[0], "sudo") == 0) {
+            cmd_sudo(argc2, tokens);
         } else if (strcmp(tokens[0], "echo") == 0) {
             cmd_echo(argc2, tokens);
         } else if (strcmp(tokens[0], "clear") == 0) {

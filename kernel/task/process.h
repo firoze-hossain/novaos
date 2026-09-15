@@ -267,4 +267,24 @@ void process_set_identity(process_t* p, uint32_t uid, uint32_t gid);
  * relies on. */
 bool process_login(process_t* p, const char* username, const char* password);
 
+/* Phase 51: the SYS_SUDO syscall's actual implementation - the real
+ * privilege-escalation gate this kernel was missing entirely before
+ * this phase (nothing anywhere checked "is this process uid 0" to
+ * gate any action). Re-authenticates `p` (the calling process) by
+ * looking up *its own current uid* in kernel/rust/users.rs's own
+ * database (a process only knows its own numeric identity, not which
+ * username it corresponds to - real sudo works the same way) and
+ * checking `password` against that specific account. Escalates `p`
+ * to uid 0/gid 0 only if the password is correct *and* that account
+ * is a member of the "admin group" (gid == 0) - a correct password
+ * for a non-admin account is refused, the actual point of this
+ * function, not just password verification alone. Returns true only
+ * on a real escalation. Deliberately scoped to escalating the calling
+ * process itself for the rest of its own lifetime, not per-command
+ * the way real sudo is - see kernel/task/sandbox_demo.c's own comment
+ * and PROGRESS.md's Phase 51 "Known limitations" for the honest
+ * account of why, and what a closer match to real sudo's scoping
+ * would need. */
+bool process_sudo(process_t* p, const char* password);
+
 #endif

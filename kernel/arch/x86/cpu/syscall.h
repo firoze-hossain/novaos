@@ -267,6 +267,19 @@
  * counterpart to SYS_LOGIN above. */
 #define SYS_GETUID 30
 
+/* Phase 51: EBX = password pointer (NUL-terminated, the same trust
+ * model SYS_LOGIN's own pointer argument already uses). Re-
+ * authenticates the *calling* process's own account (looked up by its
+ * current uid, not a re-typed username - see process.h's own
+ * process_sudo() comment for why) and, only if the password is
+ * correct *and* that account is a member of the "admin group" (gid
+ * == 0), escalates the calling process to uid 0/gid 0 and returns 0.
+ * Returns -1 on any failure - wrong password, an account not in the
+ * admin group, or a locked-out account - deliberately not
+ * distinguished, the same anti-information-leak reasoning SYS_LOGIN
+ * already uses. */
+#define SYS_SUDO 31
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

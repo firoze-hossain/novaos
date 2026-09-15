@@ -276,19 +276,30 @@ ASSERTIONS: list[Assertion] = [
               "matches three independently-generated test vectors "
               "exactly, including this phase's own actual production "
               "iteration count (4096), not just toy cases"),
-    Assertion("users_selftest",
-              r"Kernel-side Rust user database self-test.*add=pass.*"
-              r"locked-out-after-threshold=pass",
+    Assertion("users_selftest_part1",
+              r"Kernel-side Rust user database self-test \(1/2\): "
+              r"add=pass.*persistence-round-trip=pass",
               "the UID/GID user database's add/authenticate/serialize/"
               "load round trip is correct using real, salted PBKDF2-"
               "HMAC-SHA256 password hashing (replacing Phase 47's "
-              "original, explicitly-insecure FNV-1a), including that a "
-              "persisted-then-reloaded account still authenticates "
-              "identically, that an account is genuinely locked after "
-              "enough failed attempts, and that two accounts sharing "
-              "the same password end up with different salts and "
-              "different stored hashes - the actual, observable point "
-              "of salting at all"),
+              "original, explicitly-insecure FNV-1a)"),
+    Assertion("users_selftest_part2",
+              r"Kernel-side Rust user database self-test \(2/2\): "
+              r"locked-out-after-threshold=pass.*"
+              r"different-salts-for-same-password=pass",
+              "an account is genuinely locked after enough failed "
+              "attempts, and two accounts sharing the same password end "
+              "up with different salts and different stored hashes - "
+              "the actual, observable point of salting at all"),
+    Assertion("users_sudo_check_selftest",
+              r"sudo-wrong-password-rejected=pass sudo-admin-accepted="
+              r"pass sudo-non-admin-rejected=pass",
+              "the sudo re-authentication gate itself, verified directly: "
+              "a wrong password is rejected, an admin-group account's own "
+              "correct password is accepted, and - the actual point of "
+              "the function - a genuinely correct password for a "
+              "non-admin-group account is still rejected, since being "
+              "authenticated is not the same as being authorized"),
     Assertion("userscfg_loaded",
               r"First-run check: USERS\.CFG loaded - accounts restored",
               "direct, standalone evidence that userscfg_load() actually "
@@ -303,6 +314,17 @@ ASSERTIONS: list[Assertion] = [
               "real account persisted in tools/fixtures/USERS.CFG, loaded "
               "at boot via vfs_read_file - succeeded and actually changed "
               "the process's own uid to that account's real value"),
+    Assertion("sandbox_sudo_passed",
+              r"PASS: SYS_SUDO",
+              "from real ring-3 code, through the actual syscall path (not "
+              "just the direct Rust-function self-test): a non-admin "
+              "account's own genuinely correct password was refused by "
+              "sudo (authenticated is not authorized), a wrong password "
+              "for a real admin-group account was refused, and that "
+              "account's correct password succeeded, actually escalating "
+              "the calling process to uid 0/gid 0 - the first check "
+              "anywhere in this kernel that gates a privileged action on "
+              "a process's own uid"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

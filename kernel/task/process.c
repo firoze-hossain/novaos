@@ -850,3 +850,18 @@ bool process_login(process_t* p, const char* username, const char* password) {
     process_set_identity(p, uid, gid);
     return true;
 }
+
+/* kernel/rust/users.rs's exported sudo gate - see that file's own doc
+ * comment for the full contract. */
+extern bool rust_users_sudo_check(uint32_t uid, const uint8_t* password_ptr,
+                                   uint32_t password_len);
+
+bool process_sudo(process_t* p, const char* password) {
+    bool ok = rust_users_sudo_check((uint32_t)p->uid, (const uint8_t*)password,
+                                     (uint32_t)strlen(password));
+    if (!ok) {
+        return false;
+    }
+    process_set_identity(p, 0, 0);
+    return true;
+}

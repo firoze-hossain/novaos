@@ -42,6 +42,7 @@
 #define SYS_WRITE_HANDLE 28
 #define SYS_LOGIN 29
 #define SYS_GETUID 30
+#define SYS_SUDO 31
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -115,5 +116,12 @@ int sys_write_handle(int handle, const void* buf, int len);
  * current uid. */
 int sys_login(const char* username, const char* password);
 unsigned int sys_getuid(void);
+
+/* Phase 51: SYS_SUDO - see kernel/arch/x86/cpu/syscall.h's own
+ * comment for the full contract. Returns 0 on success (the calling
+ * process's own uid/gid become 0/0) or -1 on any failure - wrong
+ * password, not in the admin group, or locked out, deliberately not
+ * distinguished. */
+int sys_sudo(const char* password);
 
 #endif
