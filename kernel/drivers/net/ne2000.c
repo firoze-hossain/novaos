@@ -1,9 +1,31 @@
 /*
- * ne2000.c - NE2000 ISA NIC driver (polling PIO, no IRQ)
+ * ne2000.c - NE2000 ISA NIC driver
+ *
+ * Phase 52: reception is genuinely interrupt-driven (see
+ * ne2000_irq_handler() and PROGRESS.md) - the same shape RTL8139's
+ * own Phase 43 conversion already proved, reusing kernel/rust/
+ * net_irq.rs's own RX_PENDING signal directly rather than a second,
+ * parallel one (safe because kernel/net/net.c's own active_nic
+ * dispatch guarantees RTL8139 and NE2000 are never both active at
+ * once). Transmission remains a hardware-register busy-poll,
+ * deliberately - see rtl8139.c's own rtl8139_send() comment (the same
+ * kernel, the same real, investigated reason: this kernel's own int
+ * 0x80 syscall gate keeps interrupts disabled for a syscall's entire
+ * duration, so an interrupt-signal-based wait would deadlock for any
+ * TX reached through a syscall) applies identically here, not
+ * re-investigated from scratch for a second driver with the exact
+ * same architecture.
  *
  * Fixed at the QEMU default I/O base for `-device ne2k_isa` (0x300) -
  * no PCI enumeration or config-space probing, matching the ATA
  * driver's "one fixed device, keep it simple" precedent from Phase 3.
+ * The IRQ line (Phase 52) is fixed the same way, at QEMU's own
+ * documented default of 9 for this exact device - confirmed directly
+ * (not assumed) against QEMU's own mailing list archives and source
+ * (`hw/net/ne2000-isa.c`'s own `DEFINE_PROP_UINT32("irq", ...,  9)`),
+ * the same "one fixed device" reasoning as the I/O base itself; a real
+ * ISA card's IRQ is set by jumpers, and QEMU's own default stands in
+ * for that here.
  *
  * The NE2000's onboard 8KB/16KB buffer memory is organized into 256-
  * byte "pages" and accessed only through a remote DMA mechanism (set
@@ -17,6 +39,7 @@
  */
 #include "ne2000.h"
 #include "../../arch/x86/io.h"
+#include "../../arch/x86/cpu/irq.h"
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
 
@@ -74,6 +97,42 @@ static void select_page(uint8_t page01) {
     uint8_t cr = inb(REG_CR);
     cr = (uint8_t)((cr & ~CR_PS0) | (page01 ? CR_PS0 : 0));
     outb(REG_CR, cr);
+}
+
+/* kernel/rust/net_irq.rs's exported RX signal - see that file's own
+ * doc comment, and this file's own header comment on why NE2000
+ * reuses the exact same signal RTL8139 does rather than a second,
+ * parallel one. */
+extern void rust_net_rx_signal(void);
+
+/* Phase 52: this driver's IRQ handler - deliberately NOT the same
+ * "ack the whole ISR value" shape RTL8139's own rtl8139_irq_handler()
+ * uses (Phase 43), despite the superficial similarity - a real,
+ * confirmed bug was found here, not assumed: RTL8139's own TX
+ * completion is signaled through a completely separate register
+ * (TSD, per descriptor), so acking every ISR bit that came in is safe
+ * there - nothing else ever reads RTL8139's own ISR concurrently.
+ * NE2000 is architecturally different: ne2000_send()'s own, unchanged
+ * busy-poll waits on RDC and PTX/TXE *in this exact same ISR
+ * register*. Acking the whole register here, the way the first
+ * version of this handler did, could race with and silently clear
+ * one of those bits before ne2000_send()'s own poll ever observes it
+ * - confirmed directly, not theorized: comparing this exact change
+ * against an unmodified baseline kernel showed a real, reproducible
+ * hang in SYS_NET_SEND that the baseline never had, isolating the
+ * regression to this handler specifically. Acks only the PRX bit this
+ * handler actually acts on, leaving RDC/PTX/TXE (if set) untouched for
+ * ne2000_send()'s own code to see and clear itself - the DP8390's own
+ * "write 1 to clear" convention applies per-bit, not only to the
+ * whole register at once, so this is still a fully valid ack, just a
+ * more precise one. */
+static void ne2000_irq_handler(registers_t* regs) {
+    (void)regs;
+    uint8_t isr = inb(REG_ISR);
+    if (isr & ISR_PRX) {
+        rust_net_rx_signal();
+        outb(REG_ISR, ISR_PRX);
+    }
 }
 
 void ne2000_init(void) {
@@ -134,7 +193,14 @@ void ne2000_init(void) {
     select_page(0);
 
     outb(REG_ISR, 0xFF);
-    outb(REG_IMR, 0x00); /* polled, not interrupt-driven */
+    /* Phase 52: IRQ 9 - QEMU's own documented, fixed default for
+     * `-device ne2k_isa` (see this file's own header comment) - not
+     * discoverable via PCI config space the way RTL8139's own IRQ
+     * line is, since this is an ISA device. Only PRX (Packet
+     * Received) is enabled - TX remains a busy-poll, deliberately
+     * (see this file's own header comment on why). */
+    register_irq_handler(9, ne2000_irq_handler);
+    outb(REG_IMR, ISR_PRX);
     outb(REG_CR, CR_STA);
 
     present = true;
