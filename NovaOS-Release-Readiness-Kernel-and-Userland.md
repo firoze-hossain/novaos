@@ -1,18 +1,19 @@
 # NovaOS: Release-Readiness Feature List (Kernel First, Then Userland)
 
-*Updated again: Phases 50-51 are now done (see below), on top of the
-48-49 update before that - kernel work only, matching your stated
-priority; nothing in Part 2 (userland) has changed since this document
-was last updated, so that section is unmodified. Every "done" mark
-below reflects verified, shipped work, not a plan - and where a real,
+*Updated again: Phase 52 is now done (see below), on top of the 50-51
+update before that - kernel work only, matching your stated priority;
+nothing in Part 2 (userland) has changed since this document was last
+updated, so that section is unmodified. Every "done" mark below
+reflects verified, shipped work, not a plan - and where a real,
 external constraint bounds what a phase could honestly claim (FAT32's
-own on-disk format has no file-ownership fields at all, for instance),
-that's stated plainly as part of the "done" mark, not glossed over.
-Phase 49's own entry includes a direct correction to a concern this
-very document stated in its own prior update (that an interactive
-login prompt would risk stranding the headless test suite) - found to
-be based on the wrong mental model once actually investigated; see 1.1
-below for the honest account.*
+own on-disk format has no file-ownership fields at all, for instance;
+this kernel's own syscall gate keeping interrupts disabled for a
+syscall's entire duration, for another), that's stated plainly as part
+of the "done" mark, not glossed over. Phase 49's own entry includes a
+direct correction to a concern this very document stated in its own
+prior update (that an interactive login prompt would risk stranding
+the headless test suite) - found to be based on the wrong mental model
+once actually investigated; see 1.1 below for the honest account.*
 
 ---
 
@@ -59,9 +60,13 @@ source, not assumed from a phase number.
   mountable device** (Phase 46) — see 1.2 below for both, including a
   real bug found and fixed in the second phase (a shared, silently-
   overwritten partition-offset variable between FAT32 and ext2).
-- ✅ **RTL8139 genuinely interrupt-driven** (Phase 43) — see 1.2 below
-  for the honest correction to the original "every driver polls" claim
-  this same document made.
+- ✅ **RTL8139 genuinely interrupt-driven** (Phase 43), **and IRQ-driven
+  drivers completed** (Phase 52: NE2000 receive converted too, and a
+  real architectural boundary on TX found and honestly documented, not
+  worked around) — see 1.2 below for the honest correction to the
+  original "every driver polls" claim this same document made, and the
+  full account of what Phase 52 closed vs. what it correctly left
+  alone.
 - ✅ **ACPI CPU topology discovery** (Phase 44) — see 1.4 below; this
   is the first SMP prerequisite, not SMP itself.
 - ✅ **virtio-net** (Phase 45), this kernel's second virtio driver —
@@ -95,7 +100,7 @@ source, not assumed from a phase number.
 |---|---|---|---|
 | **A driver registration table.** | ✅ **Done (Phase 39), partial scope.** `DRIVER_REGISTER(name, init_fn, phase)` places a driver into a dedicated linker section; `kernel_main()` no longer calls driver init functions by name for the ones migrated. Proven, not just claimed: a temporary demo driver was added in its own new file and confirmed to run with `kernel/init/main.c` completely unchanged. **4 of this kernel's ~10 drivers are migrated so far** — PS/2 keyboard, PS/2 mouse, UHCI, AC97. `timer_init`/`vfs_init`/`net_init` remain explicit calls, deliberately: each is interleaved with its own self-tests immediately after, and migrating those needs a real design decision (does the self-test move with it, or become separate?), not just mechanical copying. | Directly blocks "this OS works on more than the exact hardware it was tested against" — the single biggest thing standing between "runs in QEMU" and "runs on a real, different machine." | **Windows NT's HAL** is the textbook reference — it's *the* reason NT's kernel source ported across x86/MIPS/Alpha/PowerPC/ARM unchanged. |
 | **virtio-net / virtio-blk drivers.** | ✅ **Both done now (Phases 42, 45, 46).** virtio-blk: legacy transport, real hardware DMA verified (Phase 42), then genuinely **wired into the VFS as a mountable device** (Phase 46) — a real FAT32 filesystem mounted, an existing file read, a new one written and read back, all through the same `fat32_init()`/`read_file()`/`write_file()` path every other filesystem operation uses, with the original ATA mount carefully saved and restored afterward (verified by re-running the *entire* test suite, including the shell launching and `fork()`/`exec()`, after the demonstration). virtio-net (Phase 45): structurally different from virtio-blk (RX buffers must be pre-posted and recycled, not a one-shot request/response) — verified against real hardware carrying ping, DNS, TFTP, and TCP traffic simultaneously with virtio-blk, in one clean boot. Neither is auto-preferred over the existing drivers when idle/unattached — this project's own test config always attaches both ATA and virtio-blk together, so auto-preferring virtio-blk would have mounted the wrong disk. | Directly relevant since you develop under QEMU — virtio is the standard, dramatically simpler way a VM talks to its host. | **Linux popularized virtio**; it's now the universal VM driver standard across every hypervisor. |
-| **IRQ-driven drivers, not polling.** | ⚠️ **Partially done (Phase 43) — and the original claim in this row turned out to be only partly accurate.** Direct investigation found `ac97_beep()` is actually fire-and-forget (no poll loop at all after starting playback) and UHCI's only busy-wait is bounded to one-time enumeration at boot — neither has the "wastes CPU continuously while idle" property this row originally claimed for *every* driver. The pattern that genuinely did match: `idle_task_entry()` called `net_poll()` on every timer tick forever, reading RTL8139's hardware register whether or not a packet had arrived. **That specific pattern is now fixed** — RTL8139 has a real IRQ handler (PCI Interrupt Line register, not hardcoded), and `net_poll()` touches no hardware at all when nothing's pending. Verified with a real, unambiguous measurement, not inference: a temporary counter showed the handler fired 12 times during one test boot. NE2000 (not exercised by this project's own test config) and RTL8139's own TX path are untouched. | Wastes CPU continuously, even when a real user is doing nothing — shows up as fan noise / battery drain / sluggishness on real hardware in a way it never does in QEMU. | **All three (Linux/Windows/macOS)** treat polling drivers as the exception, not the rule. |
+| **IRQ-driven drivers, not polling.** | ✅ **Done (Phases 43, 52), with an honest, investigated boundary on TX - not a blanket "fully IRQ-driven" claim.** Phase 43 already found the original row only partly accurate (AC97/UHCI never had the "wastes CPU while idle" property at all). Phase 52 closed the remaining, real gaps: **NE2000 receive** is now genuinely interrupt-driven, the same shape RTL8139's own Phase 43 conversion proved, reusing its exact signal (safe since only one NIC is ever active at a time). A real bug was found and fixed the same way the RTL8139 conversion originally was verified - by direct comparison against an unmodified baseline: NE2000's TX completion shares the *same* hardware register RX uses (unlike RTL8139, where they're separate), so the first version of this driver's IRQ handler could race with and silently clear a bit the existing TX code was waiting to see. Confirmed and fixed by booting an unmodified baseline (worked correctly) against the modified version (hung), isolating the exact regression, not guessing. **RTL8139's own TX path, and NE2000's, remain hardware-register busy-polls** - not an oversight, a real architectural boundary found by direct investigation: this kernel's `int 0x80` syscall gate is an interrupt gate, keeping interrupts disabled for a syscall's entire duration, so an interrupt-signal-based wait (which was built, tried, and does work correctly for every boot-time network operation - ping/DNS/TFTP/TCP all verified passing) deadlocks permanently the one time it's reached through a syscall (`SYS_NET_SEND`). Reverted cleanly rather than shipped broken; the signal infrastructure itself was kept, tested, and documented as ready for a future phase that first answers whether this kernel's scheduler safely tolerates being preempted mid-syscall. | Wastes CPU continuously, even when a real user is doing nothing — shows up as fan noise / battery drain / sluggishness on real hardware in a way it never does in QEMU. | **All three (Linux/Windows/macOS)** treat polling drivers as the exception, not the rule. |
 
 ### 1.3 Won't crash, won't corrupt data, tells you why when it fails
 

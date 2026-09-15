@@ -4922,30 +4922,146 @@ named above (an escalated process not automatically gaining broader
 file access) is real, separate follow-up work, not a defect in this
 phase's own, narrower scope.
 
-## Phase 52 and beyond
+## Phase 52: IRQ-driven drivers, completed - NE2000 receive, and a real architectural limit on TX found and correctly not worked around
 
-Not started. Candidates: per-command sudo scoping (fork before
-escalating, restoring the parent shell's own identity afterward - see
-this phase's own "Known limitations"); a way to grant broader file
-capabilities to a successfully-escalated process, closing the
-capability-list interaction this phase's own manual verification
-found; a persistent (disk-backed) lockout counter; a `useradd`-
-equivalent way to create additional accounts after first boot; a real
-hardware entropy source for salt generation; the real SMP prerequisites
-named in Phase 44's own entry (Local APIC/IO-APIC drivers, AP
-bootstrap, per-CPU state, kernel-wide locking audit) - each substantial
-enough to be its own, separately-scoped phase, not one combined
-effort; simultaneous multi-mount support (ATA and virtio-blk both live
-at once), building on Phase 46's own blockdev abstraction; giving
-virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
-`net_init` to driver registration too; extending `process_fork()` to
-duplicate `open_files[]` entries by owner pid, unlocking real cross-
-process pipe use and a genuine shell `|` operator; signals; a
-versioned, single-source-of-truth syscall ABI header (`kernel/arch/
-x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
-hand-synchronized copies); a build-time check that `kernel_end` covers
-every section in the final binary (Phase 38's own "Known
-limitations"); wiring tools/python's two scripts into a CI workflow;
-making RTL8139 transmission interrupt-driven too; a full ring-3
-compositor/Store port; TCP retransmission/windowing and a sockets-style
-syscall API for TCP.
+**Status: Complete, with an honest, investigated boundary, not a claim
+of "fully done."** Closes the remaining, real parts of "IRQ-driven
+drivers, not polling" - Phase 43's own entry had already found the
+original claim only partly accurate (AC97/UHCI never had the problem
+at all); this phase investigated what was left (RTL8139's own TX path,
+and NE2000 entirely, both named in the original row) and completed
+what was genuinely safe to complete.
+
+### RTL8139 TX: attempted, found genuinely unsafe, correctly reverted - not a wasted detour
+
+Extended `kernel/rust/net_irq.rs` with a `TX_COMPLETE` signal
+(identical shape to the already-proven `RX_PENDING`), enabled RTL8139's
+own TOK interrupt, and replaced `rtl8139_send()`'s hardware-register
+busy-wait with an `hlt`-gated wait on the new signal. The full boot-time
+network self-tests (ping/DNS/TFTP/TCP - all reached from kernel-side
+code with interrupts already enabled, never through a syscall) passed
+correctly. But `kernel/task/sandbox_demo.c`'s own real ring-3
+`SYS_NET_SEND` test hung indefinitely.
+
+Investigated directly rather than assumed broken: found this kernel's
+own `int 0x80` syscall gate (`kernel/arch/x86/cpu/syscall.c`'s own
+`idt_set_gate()` call, flags `0xEE`) is an *interrupt* gate, not a trap
+gate - the same "clear IF for the handler's entire duration" convention
+`kernel/arch/x86/cpu/isr.c`'s own exception gates already use, just
+extended to ring 3. `hlt` (or any interrupt-signal-based wait) can
+never wake while IF is clear, so any TX reached through a syscall would
+deadlock permanently, not just wait long. Confirmed precisely by the
+evidence itself, not by inspection alone: PING/DNS/TFTP/TCP all
+succeeded (never went through a syscall), while `SYS_NET_SEND`
+specifically hung (the one path that does).
+
+Temporarily re-enabling interrupts for just this wait, inside a
+syscall handler, was considered and deliberately not attempted - it
+would need its own, separate, careful investigation of whether this
+kernel's scheduler safely tolerates being preempted mid-syscall (a
+real, non-trivial question this project has not yet answered for any
+other syscall handler either), not something to assume safe under time
+pressure. Reverted cleanly to the original, hardware-register busy-poll
+- which works correctly regardless of caller context, since it never
+depends on IF at all. `kernel/rust/net_irq.rs`'s own `TX_COMPLETE`
+signal, and its own self-test, were kept (both fully working, on their
+own terms) as real, tested, but currently-unused infrastructure for a
+future phase that answers the scheduler-safety question properly -
+documented as exactly that, not left as if TX were interrupt-driven
+when it isn't.
+
+### NE2000: converted, with a second real bug found via baseline comparison and fixed
+
+Confirmed directly (not assumed from the file's own header comment)
+that NE2000's underlying hardware - the DP8390, the same real
+controller RTL8139 is API-compatible with in spirit - genuinely has
+ISR/IMR registers, the same as RTL8139. Confirmed QEMU's own default
+IRQ for `-device ne2k_isa` (9) directly from QEMU's own mailing list
+archives and source, not guessed - a fixed, reliable value, the ISA
+equivalent of PCI's own discoverable Interrupt Line register.
+
+Reused `kernel/rust/net_irq.rs`'s own `RX_PENDING` signal directly
+(not a second, parallel one) - safe because `kernel/net/net.c`'s own
+`active_nic` dispatch guarantees RTL8139 and NE2000 are never both
+active at once. `kernel/net/net.c`'s own NE2000 receive case gated on
+the same signal RTL8139's own Phase 43 case already uses.
+
+A second real bug, found the same way the first one was - by
+comparing behavior against an unmodified baseline rather than
+theorizing: the first version of `ne2000_irq_handler()` acked the
+*entire* ISR register on every receive interrupt, copying RTL8139's
+own pattern without checking whether it actually applied. It doesn't:
+RTL8139's own TX completion lives in a completely separate register
+(TSD, per descriptor) untouched by its own RX handler, but NE2000's TX
+completion (RDC/PTX/TXE) lives in this exact same ISR register RX
+uses. Acking the whole register could race with and silently clear a
+bit `ne2000_send()`'s own, unchanged busy-poll was waiting to see.
+Confirmed precisely, not theorized: built and ran a completely
+unmodified baseline kernel with NE2000 first, watched it complete
+`SYS_NET_SEND` successfully, then re-tested this project's own
+modified version and watched the identical scenario hang - isolating
+the regression to this exact handler, not "networking is broken
+somehow." Fixed by acking only the PRX bit this handler actually acts
+on, leaving RDC/PTX/TXE (if set) untouched for `ne2000_send()`'s own
+code to observe and clear itself.
+
+### Verified in stages, on real hardware, both before and after the fix
+
+Automated: the full 67-assertion suite (unmodified network config,
+RTL8139 active) passed unchanged throughout - confirming the RTL8139
+revert and the shared `net_irq.rs` extension introduced no regression
+to the path every other assertion depends on.
+
+Manual, real hardware, NE2000 specifically (not exercised by this
+project's own automated test config at all - the same "verify outside
+shared infrastructure first" discipline Phase 45's virtio-net work
+already established): the *broken* version was booted first and shown
+hanging at exactly `SYS_NET_SEND`, confirmed via a clean, unmodified
+baseline that the hang was new, not pre-existing; then, after the fix,
+the identical scenario re-run and confirmed genuinely fixed - PING,
+TFTP, DNS, TCP, and the real ring-3 `SYS_NET_SEND` syscall test all
+succeeding, the full boot sequence completing all the way through
+`SYS_SUDO`, not stopping partway.
+
+### Known limitations
+
+RTL8139's TX path remains a hardware-register busy-poll - a real,
+investigated architectural boundary (syscall-context interrupts stay
+disabled), not an oversight; see above for the exact reasoning and
+what a real fix would need. NE2000's own TX path is the same,
+unconverted for the identical reason (this kernel's own syscall gate
+applies identically regardless of which NIC driver is active).
+virtio-net's own RX path remains polled too (Phase 45's own,
+previously-documented limitation, a different technology - not a PIC-
+based IRQ line at all - genuinely out of this specific row's original
+four named drivers, not revisited here).
+
+## Phase 53 and beyond
+
+Not started. Candidates: whether this kernel's own scheduler safely
+tolerates being preempted mid-syscall - a real, separate question this
+phase found but deliberately did not answer, worth investigating on
+its own terms since it would unlock genuinely interrupt-driven TX for
+both RTL8139 and NE2000 using the `TX_COMPLETE` signal already built
+and tested; per-command sudo scoping (fork before escalating,
+restoring the parent shell's own identity afterward - see Phase 51's
+own "Known limitations"); a way to grant broader file capabilities to
+a successfully-escalated process; a persistent (disk-backed) lockout
+counter; a `useradd`-equivalent way to create additional accounts
+after first boot; a real hardware entropy source for salt generation;
+the real SMP prerequisites named in Phase 44's own entry (Local
+APIC/IO-APIC drivers, AP bootstrap, per-CPU state, kernel-wide locking
+audit) - each substantial enough to be its own, separately-scoped
+phase, not one combined effort; simultaneous multi-mount support (ATA
+and virtio-blk both live at once), building on Phase 46's own blockdev
+abstraction; giving virtio-net its own IRQ handler; migrating
+`timer_init`/`vfs_init`/`net_init` to driver registration too;
+extending `process_fork()` to duplicate `open_files[]` entries by owner
+pid, unlocking real cross-process pipe use and a genuine shell `|`
+operator; signals; a versioned, single-source-of-truth syscall ABI
+header (`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
+novasys.h` are still two, hand-synchronized copies); a build-time check
+that `kernel_end` covers every section in the final binary (Phase 38's
+own "Known limitations"); wiring tools/python's two scripts into a CI
+workflow; a full ring-3 compositor/Store port; TCP retransmission/
+windowing and a sockets-style syscall API for TCP.

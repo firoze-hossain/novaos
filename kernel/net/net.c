@@ -140,6 +140,18 @@ uint16_t net_driver_receive(void* buffer) {
              * not just once per idle tick. */
             return rtl8139_receive(buffer);
         case NIC_NE2000:
+            /* Phase 52: the same signal, the same reasoning, reused
+             * rather than duplicated - safe because active_nic
+             * guarantees RTL8139 and NE2000 are never both the active
+             * device at once, so there's no real scenario where one
+             * driver's own IRQ could set a flag the other driver
+             * wrongly consumes. ne2000_receive() below is otherwise
+             * entirely unchanged - this flag only decides whether to
+             * bother calling into it at all this tick, the identical
+             * shape as the RTL8139 case just above. */
+            if (!rust_net_rx_check_and_clear()) {
+                return 0;
+            }
             return ne2000_receive(buffer);
         default:
             return 0;

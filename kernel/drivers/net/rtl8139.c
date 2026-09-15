@@ -43,11 +43,14 @@
 #define CMD_BUF_EMPTY 0x01
 
 /* ISR/IMR share the same bit layout (IMR masks which ISR bits
- * actually raise the line) - only ROK is enabled by this driver (see
- * rtl8139_init()); the rest are read and acked alongside it in
- * rtl8139_irq_handler() below purely so a bit this driver doesn't act
- * on can never stay latched and hold the interrupt line asserted. */
+ * actually raise the line) - ROK and (Phase 52) TOK are enabled by
+ * this driver (see rtl8139_init()); the rest are read and acked
+ * alongside them in rtl8139_irq_handler() below purely so a bit this
+ * driver doesn't act on can never stay latched and hold the interrupt
+ * line asserted. */
 #define ISR_ROK 0x0001 /* Receive OK - a packet is ready */
+#define ISR_TOK 0x0004 /* Transmit OK - a submitted frame finished
+                           sending (Phase 52) */
 
 #define RCR_ACCEPT_ALL      0x0F /* AAP|APM|AM|AB - see rtl8139_init() */
 
@@ -89,8 +92,15 @@ typedef struct {
 
 static rtl_location_t g_location;
 
-/* kernel/rust/net_irq.rs's exported signal - see that file's own doc
- * comment for the full design. */
+/* kernel/rust/net_irq.rs's exported RX signal - see that file's own
+ * doc comment for the full design. TX_COMPLETE (that same file) was
+ * built and is independently self-tested, but is deliberately not
+ * wired into this driver's own IRQ handler or IMR - see
+ * rtl8139_send()'s own comment for the real, investigated reason
+ * (this kernel's syscall gate keeps interrupts disabled for a
+ * syscall's entire duration, so a wait based on this signal would
+ * deadlock for any TX reached through a syscall). Real, separate
+ * follow-up work for a future phase, not claimed done here. */
 extern void rust_net_rx_signal(void);
 
 /* Phase 43: this driver's IRQ handler - the actual fix for the
@@ -188,9 +198,14 @@ void rtl8139_init(void) {
     uint8_t irq_line = pci_config_read8(g_location.bus, g_location.device,
                                          g_location.function, 0x3C);
     register_irq_handler(irq_line, rtl8139_irq_handler);
-    outw((uint16_t)(io_base + REG_IMR), ISR_ROK); /* interrupt-driven,
-                                                      not polled - see
-                                                      PROGRESS.md */
+    outw((uint16_t)(io_base + REG_IMR), ISR_ROK); /* interrupt-driven
+                                                       for RX; TX
+                                                       remains a
+                                                       hardware-register
+                                                       busy-poll - see
+                                                       rtl8139_send()'s
+                                                       own Phase 52
+                                                       comment on why */
 
     /* Accept everything (promiscuous-ish: AAP|APM|AM|AB) rather than
      * the tighter unicast+broadcast filtering NE2000 uses - simpler
@@ -245,6 +260,33 @@ bool rtl8139_send(const void* frame, uint16_t length) {
      * the OWN bit for the card to take over the descriptor. */
     outl((uint16_t)(io_base + REG_TSD0 + (uint32_t)slot * 4), tx_length);
 
+    /* Phase 52 investigated converting this to the same IRQ-signal
+     * wait rtl8139_receive() already uses (see kernel/rust/net_irq.rs's
+     * own TX_COMPLETE addition) - and found a real, precise reason it
+     * cannot work unconditionally: this kernel's own int 0x80 gate
+     * (kernel/arch/x86/cpu/syscall.c's own idt_set_gate() call, flags
+     * 0xEE) is an *interrupt* gate, not a trap gate - it clears IF for
+     * the syscall handler's entire duration, the same "so a second
+     * interrupt can't interrupt us while we're still deciding what to
+     * do" reasoning kernel/arch/x86/cpu/isr.c's own exception gates
+     * already use. `hlt` (or any interrupt-signal-based wait) can
+     * never wake while IF is clear, so any TX call reached through a
+     * syscall (SYS_NET_SEND, exercised directly by kernel/task/
+     * sandbox_demo.c's own real ring-3 test) would deadlock - proven
+     * directly, not theorized: this exact busy-wait was actually
+     * replaced with the IRQ-signal wait, and the full boot-time
+     * network self-tests (ping/DNS/TFTP/TCP - all reached from
+     * kernel-side code with interrupts already enabled, never through
+     * a syscall) passed correctly, while the sandbox's own syscall-
+     * reached send hung indefinitely. Temporarily re-enabling
+     * interrupts for just this wait, inside a syscall handler, would
+     * need its own careful investigation of whether this kernel's
+     * scheduler safely tolerates being preempted mid-syscall - a real,
+     * separate, larger question, deliberately not answered by
+     * assumption here. Reverted to the original, hardware-register
+     * busy-poll, which works correctly regardless of caller context
+     * since it never depends on IF at all - see PROGRESS.md's own
+     * Phase 52 entry for the full account. */
     uint32_t spins = 0;
     while (!(inl((uint16_t)(io_base + REG_TSD0 + (uint32_t)slot * 4)) &
              0x8000)) { /* TOK - Transmit OK */
