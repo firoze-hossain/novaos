@@ -100,4 +100,27 @@ bool blockdev_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer);
 bool blockdev_write_sectors(uint32_t lba, uint8_t sector_count,
                              const void* buffer);
 
+/* Phase 53: absolute variants for kernel/rust/journal.rs's own on-disk
+ * journal storage. The journal region lives in its own disk partition
+ * (see tools/build-disk-image.sh), physically separate from whichever
+ * filesystem partition (FAT32's, currently the only one with a
+ * journal) is "active" via blockdev_set_partition_offset() at any
+ * given moment - the journal's own reads/writes to its own storage
+ * area must never be shifted by whatever offset a filesystem driver
+ * happens to have set most recently, or a journal commit would land
+ * in the wrong place on disk entirely. See journal.rs's own header
+ * comment for the full reasoning on why the journal needs this at
+ * all, while the writes it *replays* to their real target filesystem
+ * locations (checkpointing) deliberately go through the ordinary,
+ * offset-relative functions above instead.
+ *
+ * Otherwise identical to the offset-relative versions - same device
+ * dispatch, same virtio-blk per-sector looping - this is a pure "skip
+ * the += partition_offset step" variant, not a separate code path;
+ * see blockdev.c's own dispatch_read()/dispatch_write() helpers. */
+bool blockdev_read_sectors_absolute(uint32_t lba, uint8_t sector_count,
+                                     void* buffer);
+bool blockdev_write_sectors_absolute(uint32_t lba, uint8_t sector_count,
+                                      const void* buffer);
+
 #endif

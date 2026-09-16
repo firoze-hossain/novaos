@@ -912,6 +912,91 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         }
     }
 
+    /* Phase 53: kernel/rust/journal.rs's own self-test - verifies both
+     * halves of this phase's actual crash-safety claim directly
+     * against the real, already-configured journal partition (set up
+     * by vfs_init(), before this point in boot) - see that module's
+     * own rust_journal_selftest() doc comment for exactly what each
+     * half proves: that a transaction durably committed but not yet
+     * checkpointed (the state a real power loss in that window leaves
+     * behind) is completed by recovery, and that a transaction never
+     * durably committed at all is discarded cleanly, never partially
+     * applied. Skipped (not a failure) if no journal partition was
+     * found on this disk (an older disk image, or one built before
+     * this phase) - the same "not present, not broken" distinction
+     * this project's own self-tests already make elsewhere (e.g. the
+     * virtio-blk block just above, skipped entirely when no such
+     * device is attached). Deliberately placed after that block, not
+     * before: rust_journal_configure() (called from vfs_init(), tying
+     * this module's journal region to whichever device was active at
+     * the time) must see the *original* ATA-backed device, and this
+     * ordering means the virtio-blk block's own temporary device
+     * switch has already been fully restored by the time this runs -
+     * not that it would matter either way, since kernel/rust/
+     * journal.rs's own device-match check (see its
+     * journal_region_usable()) refuses to treat the journal region as
+     * usable against a mismatched device regardless of ordering. */
+    {
+        extern int rust_journal_selftest(void);
+        int result = rust_journal_selftest();
+        if (result < 0) {
+            kernel_log("[ .. ] Journal self-test: skipped (no journal "
+                       "partition configured on this disk)\n");
+        } else {
+            kernel_log("[ %s ] Journal self-test: recovers-a-durably-"
+                       "committed-but-uncheckpointed-transaction=%s "
+                       "leaves-an-uncommitted-transaction-untouched=%s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       (result & 1) ? "FAIL" : "pass",
+                       (result & 2) ? "FAIL" : "pass");
+        }
+    }
+
+    /* Phase 53: a real, end-to-end regression check that wrapping
+     * fat32_write_file()/fat32_delete_file() in a journaled
+     * transaction (this phase's own change to kernel/fs/fat32.c)
+     * didn't change their observable behavior for the ordinary,
+     * no-crash case - the exact risk a control-flow refactor this size
+     * (every early `return false` in both functions became a
+     * `goto done`) actually carries. Writes a new file, reads it back
+     * byte-for-byte, deletes it, and confirms it's really gone -
+     * against the real, ATA-backed mount every other self-test in this
+     * file already depends on (not virtio-blk's temporary one above,
+     * already restored by this point). */
+    if (vfs_is_mounted()) {
+        static const char content[] =
+            "Phase 53: written through a journaled transaction.\n";
+        bool wrote = vfs_write_file("JOURNTST.TXT", content,
+                                     sizeof(content) - 1);
+
+        static char readback[128];
+        int n = wrote ? vfs_read_file("JOURNTST.TXT", readback,
+                                       sizeof(readback))
+                      : -1;
+        bool read_ok = wrote && (n == (int)sizeof(content) - 1) &&
+                       (memcmp(readback, content, (size_t)n) == 0);
+
+        bool deleted = read_ok && vfs_delete_file("JOURNTST.TXT");
+        int n2 = deleted ? vfs_read_file("JOURNTST.TXT", readback,
+                                          sizeof(readback))
+                         : -1;
+        bool really_gone = deleted && (n2 < 0);
+
+        if (wrote && read_ok && deleted && really_gone) {
+            kernel_log("[ OK ] Journaled FAT32 write/delete regression "
+                       "check: a new file was created, read back "
+                       "byte-for-byte, deleted, and confirmed gone - all "
+                       "through the same journaled transaction path this "
+                       "phase added\n");
+        } else {
+            kernel_log("[FAULT] Journaled FAT32 write/delete regression "
+                       "check: wrote=%d read_ok=%d deleted=%d "
+                       "really_gone=%d\n",
+                       (int)wrote, (int)read_ok, (int)deleted,
+                       (int)really_gone);
+        }
+    }
+
     /* Phase 50: kernel/rust/sha256.rs's own self-test - verifies this
      * from-scratch SHA-256 implementation against three of the
      * algorithm's own standard, independently-known-correct test

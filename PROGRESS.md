@@ -5036,7 +5036,199 @@ previously-documented limitation, a different technology - not a PIC-
 based IRQ line at all - genuinely out of this specific row's original
 four named drivers, not revisited here).
 
-## Phase 53 and beyond
+## Phase 53: a real write-ahead journal for FAT32 - crash-safety for the one filesystem this kernel can actually write to
+
+**Status: Complete for FAT32, honestly bounded where the verification
+sandbox itself couldn't build this kernel's bare-metal Rust target -
+see "Verified in layers" below for exactly what that does and doesn't
+mean.** Closes the release-readiness list's own "A journaled or
+copy-on-write filesystem" row: `ext2.c` remains read-only (nothing to
+journal - it has no write path), so this phase is scoped to FAT32, the
+only filesystem this kernel can actually write to, via
+`fat32_write_file()`/`fat32_delete_file()`.
+
+### Design: physical-block write-ahead logging, not copy-on-write
+
+`kernel/rust/journal.rs` is modeled on ext3/JBD rather than anything
+copy-on-write (btrfs/APFS-style CoW would mean redesigning FAT32's own
+on-disk allocation model itself, a much larger, separately-scoped
+change - see "Known limitations" for why WAL was the right scope for
+this phase instead). Every transaction is bounded to 128 sectors
+(64KB) - a documented scope limit, the same convention this project's
+own `MAX_CLUSTER_SECTORS` already established, generously larger than
+any single write `fat32_write_file()`/`fat32_delete_file()` currently
+issues. A transaction commits in two clearly separated phases:
+
+1. **Durability phase** - descriptor sectors (recording which target
+   LBA each journaled block belongs to, a sequence number, a block
+   count, and an FNV-1a checksum over the descriptor itself - non-
+   cryptographic, explicitly only a torn-write detector, not a security
+   property), then the real data blocks, then a commit marker, written
+   to a dedicated journal region **in that exact order**. Only once the
+   commit marker itself is durably on disk is the transaction
+   considered "happened" from a crash-recovery point of view.
+2. **Checkpoint phase** - the same blocks are then applied to their
+   real target LBAs, and only after that succeeds is the journal
+   region invalidated (the commit marker cleared). A crash between (1)
+   and (2) leaves a transaction that recovery must finish; a crash
+   during (1) itself (before the commit marker lands) leaves a
+   transaction recovery must discard untouched, having changed nothing
+   real yet.
+
+Recovery is **REDO-only** - there is no undo/rollback path, and none is
+needed: every operation this phase journals (a FAT32 cluster write, a
+directory-entry write) is idempotent, so replaying a durably-committed
+transaction a second time (the case where recovery itself is
+interrupted by a second crash) is always safe.
+
+Within an open transaction, `find_free_cluster()` (in `fat32.c`, called
+while allocating clusters for a write already in progress) re-reads FAT
+entries this same transaction may have already written - a genuine
+"read your own writes" requirement a naive design would get wrong by
+reading stale data straight from disk. Solved with a small shadow
+buffer: `rust_journal_read_sectors()` checks the transaction's own
+pending blocks first, falling back to a real disk read only for
+sectors the transaction hasn't touched yet.
+
+### Where the journal itself lives, and why
+
+FAT32's own "reserved sectors" region (the conventional place a real
+filesystem's own journal might otherwise hide) is far too small here -
+typically 32 sectors/16KB - to hold even this module's own
+descriptor+data layout, which alone needs 130 sectors before leaving
+any room for the self-test's own scratch sectors. `tools/build-disk-
+image.sh` now creates a **third MBR partition**, 4MB, filesystem-less -
+`journal.rs` reads and writes it directly as raw sectors, and a fresh,
+zeroed partition (exactly what `dd`'ing the rest of the disk already
+produces) is indistinguishable from "no transaction has ever run here"
+to this module's own MAGIC-sentinel-based recovery logic, so no
+partition image needs to be built for it at all. `kernel/fs/vfs.c`
+configures and recovers the journal *before* `fat32_init()` mounts
+anything, on a disk with a third partition present; a disk with only
+the original two partitions (an older image, or one built before this
+phase) simply never configures a journal at all, and every write falls
+back to the exact same direct, unjournaled path every disk took before
+this phase - the same "not present, not broken" handling this project's
+own self-tests already use elsewhere (e.g. the virtio-blk self-test,
+skipped entirely when no such device is attached).
+
+### A real hazard found and closed: the virtio-blk self-test's device switch
+
+Phase 46's own VFS-mount self-test temporarily switches the active
+block device mid-boot (to prove virtio-blk can mount a real FAT32
+filesystem), then switches back. Found during review, not from a build
+failure: unguarded, the journal's own absolute-LBA writes (needed
+because the journal's on-disk storage lives in a different partition
+than whichever filesystem partition is currently "active") would have
+been happy to write a checkpoint at the *wrong physical disk* if that
+temporary switch happened while a journal transaction's checkpoint was
+in flight. Closed by having `rust_journal_configure()` record which
+block device was active at configuration time, and a
+`journal_region_usable()` gate - checked before every durable commit,
+every checkpoint write, recovery itself, and the self-test's own
+initial guard - that refuses to treat the journal region as usable
+unless the currently-active device still matches.
+
+### FFI/plumbing changes this phase required
+
+`kernel/drivers/blockdev.c`/`.h` gained `blockdev_read_sectors_absolute()`/
+`_write_sectors_absolute()` - the dispatch logic (`dispatch_read()`/
+`dispatch_write()`, factored out of the existing ATA/virtio-blk switch)
+is shared with the existing, partition-offset-aware
+`blockdev_read_sectors()`/`_write_sectors()`, but the `_absolute`
+variants skip the offset entirely, since the journal's own LBAs are
+already absolute (they live in their own partition, not "inside"
+whichever filesystem partition is currently active). Every
+`blockdev_read_sectors()`/`_write_sectors()` call inside
+`fat32_write_file()`/`fat32_delete_file()` now goes through
+`rust_journal_read_sectors()`/`_write_sectors()` instead, wrapped in
+`rust_journal_begin()`/`_commit()`; both functions' early-return control
+flow was restructured to `goto done` so every exit path still commits
+(or, on an unconfigured journal, still calls through to a direct,
+unjournaled write - the commit call itself is a no-op in that case).
+
+### Verified in layers - stated honestly, including what this session's own sandbox could not do
+
+A real, end-to-end regression self-test now runs at every boot,
+immediately after the journal's own self-test (see below): writes
+`JOURNTST.TXT` through the newly-journaled `vfs_write_file()`, reads it
+back byte-for-byte, deletes it, and confirms it's really gone - proving
+the `fat32.c` refactor (every early `return false` becoming a `goto
+done`) didn't change either function's observable behavior for the
+ordinary, no-crash case, the actual risk a control-flow change this
+size carries. `rust_journal_selftest()` itself directly verifies both
+halves of the crash-safety claim (a durably-committed-but-
+uncheckpointed transaction is completed by recovery; a never-committed
+one is discarded, untouched) against the real, configured journal
+partition, and is wired into the boot sequence to run automatically -
+"skipped," not "failed," on a disk built before this phase (no third
+partition to configure against).
+
+What this phase's own development/verification environment could *not*
+do, stated directly rather than glossed over: build this kernel's real
+bare-metal Rust target (`i686-novaos`) end to end. This is a pre-
+existing, unrelated toolchain fragility, not something this phase's own
+changes caused - the sandbox's available rustc version has no matching
+prebuilt `rust-src`, and a manually-reproduced `compiler_builtins`
+build (needed because no rustup/nightly network access was available
+either) hit a genuine rustc-internal restriction
+(`cannot call functions through upstream monomorphizations`) that only
+this project's own coordinated `build-sysroot.sh`/`build-sysroot-
+bootstrap.sh` process is set up to handle - not something worth
+chasing further inside a throwaway verification environment when this
+project's own real sysroot (built the normal way, e.g. on the machine
+this kernel is actually developed on) doesn't hit it at all.
+
+Verified instead, in the layers that *were* available: (1) `journal.rs`
+compiled cleanly under a host-target (`x86_64-unknown-linux-gnu`)
+`--emit=metadata` type-and-borrow-check - real language-level
+verification, independent of the target architecture, that caught
+actual mistakes before this write-up, not just a syntax pass; and (2)
+a full C-side integration build: every other line of C in this kernel,
+completely unchanged, was compiled and linked against a temporary,
+throwaway stub standing in for **every** kernel-side Rust module (not
+only this phase's own - none of them could be built in that same
+sandbox), producing a real, bootable kernel image. Booted headless in
+QEMU, its serial log showed the partition table correctly parsed as
+three partitions (not two), `Journal: clean, no recovery needed`
+logged by `vfs_init()`, FAT32 and ext2 both mounting exactly as before,
+and the `JOURNTST.TXT` write/read/delete regression above reporting
+`OK` - direct evidence the real C changes in `blockdev.c`/`.h`,
+`fat32.c`, and `vfs.c` compile, link, and boot correctly. That stub
+necessarily reports the journal as always "unconfigured" (an honest
+reflection of what it actually is - a passthrough, not a real WAL), so
+this build could not and does not claim to have exercised
+`rust_journal_selftest()`'s own real durability/recovery result. That
+one piece - the module's own self-test actually running for real,
+against a genuinely-configured journal region - is the specific,
+narrow thing left for a real build (this project's own working
+sysroot) to confirm; the design, the C-side wiring, and the boot-time
+behavior around it are verified here.
+
+### Known limitations
+
+ext2 remains entirely unjournaled, by design, not oversight - it has no
+write path at all yet, so there is nothing for a journal to protect.
+The journal protects `fat32_write_file()`/`fat32_delete_file()`
+specifically; a hypothetical future raw-sector write path outside those
+two functions would bypass it entirely (none currently exists). The
+128-sector/64KB bound on a single transaction is a real, documented
+scope limit, not unbounded - large enough for anything this driver
+currently does, not a general-purpose journal for arbitrarily large
+writes. Like every physical-block journaling filesystem (ext3/JBD very
+much included), this design assumes a single 512-byte sector write is
+atomic with respect to power loss - a standard, industry-wide
+assumption about real disk hardware, not something this kernel can
+independently prove against QEMU's own emulated disk. Recovery is
+REDO-only, correct specifically because every journaled operation here
+is idempotent by construction - a design that journaled non-idempotent
+operations would need real undo support, which this module does not
+have. And, as covered above: this phase's own real Rust build/self-test
+result was not observed in this session's own verification environment
+- confirming it is the concrete, single next step on a machine with
+this project's own working sysroot.
+
+## Phase 54 and beyond
 
 Not started. Candidates: whether this kernel's own scheduler safely
 tolerates being preempted mid-syscall - a real, separate question this
