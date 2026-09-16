@@ -121,8 +121,10 @@ ASSERTIONS: list[Assertion] = [
               "the FAT32 partition was found and mounted"),
     Assertion("fat32_file_read", r"FILE READ OK: HELLO\.TXT",
               "a real file was read back correctly from FAT32"),
-    Assertion("mbr_partition_table", r"Partition table found \(MBR\): 2 partition",
-              "the MBR partition table was parsed correctly"),
+    Assertion("mbr_partition_table", r"Partition table found \(MBR\): 3 partition",
+              "the MBR partition table was parsed correctly (Phase 53 "
+              "added a third partition - FAT32's write-ahead journal - "
+              "alongside the original FAT32 and ext2 partitions)"),
     Assertion("ext2_mounted", r"ext2 mounted: block_size=4096",
               "the ext2 partition was found and mounted"),
     Assertion("ext2_file_read", r"EXT2 FILE READ OK: EXT2TEST\.TXT",

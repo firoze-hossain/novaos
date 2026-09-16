@@ -35,8 +35,14 @@ bool blockdev_is_present(void) {
     }
 }
 
-bool blockdev_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
-    lba += partition_offset;
+/* Phase 53: factored out of blockdev_read_sectors() so
+ * blockdev_read_sectors_absolute() (kernel/rust/journal.rs's own
+ * on-disk storage I/O - see blockdev.h's comment on why it needs to
+ * skip partition_offset entirely) shares the exact same per-device
+ * dispatch logic rather than duplicating it. Takes an already-final
+ * LBA - callers decide whether that means "+ partition_offset" or
+ * not. */
+static bool dispatch_read(uint32_t lba, uint8_t sector_count, void* buffer) {
     switch (active_device) {
         case BLOCKDEV_ATA:
             return ata_read_sectors(lba, sector_count, buffer);
@@ -55,9 +61,8 @@ bool blockdev_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
     }
 }
 
-bool blockdev_write_sectors(uint32_t lba, uint8_t sector_count,
-                             const void* buffer) {
-    lba += partition_offset;
+static bool dispatch_write(uint32_t lba, uint8_t sector_count,
+                            const void* buffer) {
     switch (active_device) {
         case BLOCKDEV_ATA:
             return ata_write_sectors(lba, sector_count, buffer);
@@ -74,4 +79,23 @@ bool blockdev_write_sectors(uint32_t lba, uint8_t sector_count,
         default:
             return false;
     }
+}
+
+bool blockdev_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
+    return dispatch_read(lba + partition_offset, sector_count, buffer);
+}
+
+bool blockdev_write_sectors(uint32_t lba, uint8_t sector_count,
+                             const void* buffer) {
+    return dispatch_write(lba + partition_offset, sector_count, buffer);
+}
+
+bool blockdev_read_sectors_absolute(uint32_t lba, uint8_t sector_count,
+                                     void* buffer) {
+    return dispatch_read(lba, sector_count, buffer);
+}
+
+bool blockdev_write_sectors_absolute(uint32_t lba, uint8_t sector_count,
+                                      const void* buffer) {
+    return dispatch_write(lba, sector_count, buffer);
 }

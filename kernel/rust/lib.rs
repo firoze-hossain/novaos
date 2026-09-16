@@ -34,6 +34,7 @@ mod users;
 mod sha256;
 mod hmac_sha256;
 mod pbkdf2;
+mod journal;
 
 use core::panic::PanicInfo;
 

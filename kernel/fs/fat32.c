@@ -6,6 +6,30 @@
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
+/* Phase 53: kernel/rust/journal.rs's own read/write-through-a-
+ * transaction entry points. Every blockdev_read_sectors()/
+ * blockdev_write_sectors() call site in this file becomes a pure
+ * rename to these - the same "every call site becomes a pure rename"
+ * shape kernel/drivers/blockdev.h's own header comment documents for
+ * its own migration from raw ata_* calls. Outside a transaction
+ * (rust_journal_begin() never called, or already fully committed),
+ * these behave *exactly* like the blockdev_* functions they replace -
+ * a direct, unbuffered passthrough - so every read-only call site
+ * (fat32_init()'s boot-sector read, fat32_read_file(),
+ * fat32_list_root()'s walk_root()) is unaffected in practice; renamed
+ * anyway, uniformly, rather than leaving a mix of both names in this
+ * file for no functional reason. See journal.rs's own header comment
+ * for the full design and why fat32_write_file()/fat32_delete_file()
+ * specifically are the two call sites that open a real transaction
+ * around every sector write (and read - see that same header comment
+ * on why reads must be transaction-aware too) they perform. */
+extern void rust_journal_begin(void);
+extern bool rust_journal_commit(void);
+extern bool rust_journal_read_sectors(uint32_t lba, uint8_t sector_count,
+                                       void* buffer);
+extern bool rust_journal_write_sectors(uint32_t lba, uint8_t sector_count,
+                                        const void* buffer);
+
 #define FAT_ATTR_VOLUME_ID 0x08
 #define FAT_ATTR_DIRECTORY 0x10
 #define FAT_ATTR_LFN       0x0F /* READ_ONLY|HIDDEN|SYSTEM|VOLUME_ID */
@@ -86,7 +110,7 @@ static uint32_t fat_next_cluster(uint32_t cluster) {
     uint32_t fat_sector = fat_start_lba + (fat_offset / bytes_per_sector);
     uint32_t ent_offset = fat_offset % bytes_per_sector;
 
-    if (!blockdev_read_sectors(fat_sector, 1, fat_sector_buf)) {
+    if (!rust_journal_read_sectors(fat_sector, 1, fat_sector_buf)) {
         return FAT32_END_OF_CHAIN;
     }
 
@@ -107,7 +131,7 @@ static bool fat_set_next_cluster(uint32_t cluster, uint32_t value) {
     for (uint8_t copy = 0; copy < num_fats; copy++) {
         uint32_t fat_sector = fat_start_lba + copy * fat_size_32 + sector_in_fat;
 
-        if (!blockdev_read_sectors(fat_sector, 1, fat_sector_buf)) {
+        if (!rust_journal_read_sectors(fat_sector, 1, fat_sector_buf)) {
             return false;
         }
 
@@ -116,7 +140,7 @@ static bool fat_set_next_cluster(uint32_t cluster, uint32_t value) {
         uint32_t new_value = (existing & 0xF0000000u) | (value & 0x0FFFFFFFu);
         memcpy(&fat_sector_buf[ent_offset], &new_value, sizeof(new_value));
 
-        if (!blockdev_write_sectors(fat_sector, 1, fat_sector_buf)) {
+        if (!rust_journal_write_sectors(fat_sector, 1, fat_sector_buf)) {
             return false;
         }
     }
@@ -240,7 +264,7 @@ bool fat32_init(void) {
     }
 
     uint8_t boot_sector[BLOCKDEV_SECTOR_SIZE];
-    if (!blockdev_read_sectors(0, 1, boot_sector)) {
+    if (!rust_journal_read_sectors(0, 1, boot_sector)) {
         kernel_log("[FAULT] FAT32: failed to read boot sector\n");
         return false;
     }
@@ -296,7 +320,7 @@ static bool walk_root(const uint8_t want_name[11],
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!rust_journal_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -376,7 +400,7 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
 
     while (remaining > 0 && cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!rust_journal_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             break;
         }
 
@@ -402,7 +426,7 @@ static bool find_existing_entry_location(const uint8_t want_name[11],
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!rust_journal_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -444,7 +468,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
 
     while (cluster < FAT32_END_OF_CHAIN) {
         uint32_t lba = cluster_to_lba(cluster);
-        if (!blockdev_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+        if (!rust_journal_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
             return false;
         }
 
@@ -477,7 +501,7 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
         return false; /* out of disk space */
     }
     memset(cluster_buf, 0, (size_t)sectors_per_cluster * bytes_per_sector);
-    if (!blockdev_write_sectors(cluster_to_lba(new_cluster), sectors_per_cluster,
+    if (!rust_journal_write_sectors(cluster_to_lba(new_cluster), sectors_per_cluster,
                             cluster_buf)) {
         return false;
     }
@@ -502,8 +526,26 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
     uint32_t existing_cluster, existing_offset;
     if (find_existing_entry_location(raw_name, &existing_cluster,
                                       &existing_offset)) {
-        return false; /* already exists - no overwrite; delete first */
+        return false; /* already exists - no overwrite; delete first -
+                          not part of any transaction below, since
+                          nothing has been written yet at this point */
     }
+
+    /* Phase 53: every sector write from here through this function's
+     * single exit point (the `done` label below) happens inside one
+     * journaled transaction - however many FAT-table updates, data-
+     * cluster writes, and directory-cluster extensions this call
+     * ends up needing, a crash at any point leaves the filesystem
+     * looking like this call either fully happened or didn't happen
+     * at all. See kernel/rust/journal.rs's own header comment for the
+     * full design. Committed unconditionally at `done` (success or
+     * failure) rather than only on success - see that same header
+     * comment on why a failed operation's own cleanup writes
+     * (free_cluster_chain() below) deserve the identical power-loss
+     * protection a successful one gets, and why this is *not* the
+     * same thing as "undo": this is a redo log, not a rollback log. */
+    rust_journal_begin();
+    bool result = false;
 
     uint32_t cluster_bytes = (uint32_t)sectors_per_cluster * bytes_per_sector;
     uint32_t clusters_needed = (size == 0)
@@ -514,65 +556,78 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
     if (first_cluster == 0) {
         kernel_log("[FAULT] fat32_write_file: out of disk space for '%s'\n",
                    filename);
-        return false;
+        goto done;
     }
 
     /* Write the data across the allocated chain, one cluster at a
      * time, zero-padding the tail of the final cluster. */
-    const uint8_t* src = (const uint8_t*)data;
-    uint32_t remaining = size;
-    uint32_t cluster = first_cluster;
+    {
+        const uint8_t* src = (const uint8_t*)data;
+        uint32_t remaining = size;
+        uint32_t cluster = first_cluster;
 
-    while (cluster < FAT32_END_OF_CHAIN) {
-        uint32_t chunk = (remaining < cluster_bytes) ? remaining : cluster_bytes;
-        if (chunk > 0) {
-            memcpy(cluster_buf, src, chunk);
-        }
-        if (chunk < cluster_bytes) {
-            memset(cluster_buf + chunk, 0, cluster_bytes - chunk);
-        }
+        while (cluster < FAT32_END_OF_CHAIN) {
+            uint32_t chunk = (remaining < cluster_bytes) ? remaining : cluster_bytes;
+            if (chunk > 0) {
+                memcpy(cluster_buf, src, chunk);
+            }
+            if (chunk < cluster_bytes) {
+                memset(cluster_buf + chunk, 0, cluster_bytes - chunk);
+            }
 
-        if (!blockdev_write_sectors(cluster_to_lba(cluster), sectors_per_cluster,
-                                cluster_buf)) {
-            free_cluster_chain(first_cluster);
-            return false;
-        }
+            if (!rust_journal_write_sectors(cluster_to_lba(cluster),
+                                             sectors_per_cluster, cluster_buf)) {
+                free_cluster_chain(first_cluster);
+                goto done;
+            }
 
-        src += chunk;
-        remaining -= chunk;
-        cluster = fat_next_cluster(cluster);
+            src += chunk;
+            remaining -= chunk;
+            cluster = fat_next_cluster(cluster);
+        }
     }
 
     /* Now claim a directory entry slot and fill it in. */
-    uint32_t dir_cluster, dir_offset;
-    if (!find_free_slot(&dir_cluster, &dir_offset)) {
-        free_cluster_chain(first_cluster);
-        return false;
+    {
+        uint32_t dir_cluster, dir_offset;
+        if (!find_free_slot(&dir_cluster, &dir_offset)) {
+            free_cluster_chain(first_cluster);
+            goto done;
+        }
+
+        if (!rust_journal_read_sectors(cluster_to_lba(dir_cluster),
+                                        sectors_per_cluster, cluster_buf)) {
+            free_cluster_chain(first_cluster);
+            goto done;
+        }
+
+        fat_dirent_t entry;
+        memset(&entry, 0, sizeof(entry));
+        memcpy(entry.name, raw_name, 11);
+        entry.attr = 0; /* plain archive/data file */
+        entry.first_cluster_hi = (uint16_t)(first_cluster >> 16);
+        entry.first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
+        entry.file_size = size;
+
+        memcpy(&cluster_buf[dir_offset], &entry, sizeof(entry));
+
+        if (!rust_journal_write_sectors(cluster_to_lba(dir_cluster),
+                                         sectors_per_cluster, cluster_buf)) {
+            free_cluster_chain(first_cluster);
+            goto done;
+        }
     }
 
-    if (!blockdev_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
-                           cluster_buf)) {
-        free_cluster_chain(first_cluster);
-        return false;
-    }
+    result = true;
 
-    fat_dirent_t entry;
-    memset(&entry, 0, sizeof(entry));
-    memcpy(entry.name, raw_name, 11);
-    entry.attr = 0; /* plain archive/data file */
-    entry.first_cluster_hi = (uint16_t)(first_cluster >> 16);
-    entry.first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
-    entry.file_size = size;
-
-    memcpy(&cluster_buf[dir_offset], &entry, sizeof(entry));
-
-    if (!blockdev_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
-                            cluster_buf)) {
-        free_cluster_chain(first_cluster);
-        return false;
-    }
-
-    return true;
+done:
+    /* rust_journal_commit()'s own return value reflects whether this
+     * transaction was actually made crash-safe (durability) and
+     * successfully applied (checkpoint) - both must succeed, in
+     * addition to the operation's own logical result, for this
+     * function to report success. See journal.rs's own header comment
+     * on why checkpoint is attempted even when durability failed. */
+    return rust_journal_commit() && result;
 }
 
 bool fat32_delete_file(const char* filename) {
@@ -586,25 +641,41 @@ bool fat32_delete_file(const char* filename) {
 
     uint32_t dir_cluster, dir_offset;
     if (!find_existing_entry_location(raw_name, &dir_cluster, &dir_offset)) {
-        return false;
+        return false; /* not found - nothing written yet, nothing to
+                          journal */
     }
 
-    if (!blockdev_read_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
-                           cluster_buf)) {
-        return false;
+    /* Phase 53: see fat32_write_file()'s own comment above - the same
+     * single-transaction wrapping, for the same reason: marking a
+     * directory entry deleted and freeing its whole cluster chain
+     * (potentially many FAT-table writes via free_cluster_chain()) is
+     * more than one real disk write that must never be observed
+     * half-done. */
+    rust_journal_begin();
+    bool result = false;
+
+    if (!rust_journal_read_sectors(cluster_to_lba(dir_cluster),
+                                    sectors_per_cluster, cluster_buf)) {
+        goto done;
     }
 
-    fat_dirent_t entry;
-    memcpy(&entry, &cluster_buf[dir_offset], sizeof(entry));
-    uint32_t first_cluster =
-        ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
+    {
+        fat_dirent_t entry;
+        memcpy(&entry, &cluster_buf[dir_offset], sizeof(entry));
+        uint32_t first_cluster =
+            ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
 
-    cluster_buf[dir_offset] = 0xE5; /* mark deleted */
-    if (!blockdev_write_sectors(cluster_to_lba(dir_cluster), sectors_per_cluster,
-                            cluster_buf)) {
-        return false;
+        cluster_buf[dir_offset] = 0xE5; /* mark deleted */
+        if (!rust_journal_write_sectors(cluster_to_lba(dir_cluster),
+                                         sectors_per_cluster, cluster_buf)) {
+            goto done;
+        }
+
+        free_cluster_chain(first_cluster);
     }
 
-    free_cluster_chain(first_cluster);
-    return true;
+    result = true;
+
+done:
+    return rust_journal_commit() && result;
 }
