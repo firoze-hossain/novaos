@@ -81,5 +81,14 @@ void isr_handler(registers_t* regs) {
                exception_names[regs->int_no], (int)regs->int_no,
                (int)regs->err_code, (int)regs->eip);
 
-    kernel_panic(exception_names[regs->int_no]);
+    /* Phase 54: this exception handler already has the one thing a
+     * software-detected kernel_panic() call never does - the CPU's own
+     * real register state at the exact moment of the fault - so it
+     * uses kernel_panic_fault() directly instead of the plain
+     * kernel_panic() wrapper. See kernel/rust/crashdump.rs's own
+     * header comment for what that state is used for. No faulting
+     * address here (that's page-fault-specific, CR2 - see kernel/arch/
+     * x86/mm/paging.c's own page_fault_handler(), which registers its
+     * own handler for vector 14 and never reaches this generic path). */
+    kernel_panic_fault(exception_names[regs->int_no], regs, false, 0);
 }

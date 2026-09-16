@@ -5228,7 +5228,295 @@ result was not observed in this session's own verification environment
 - confirming it is the concrete, single next step on a machine with
 this project's own working sysroot.
 
-## Phase 54 and beyond
+## Phase 54: a structured crash dump - a real minidump, not just a serial-port panic line
+
+**Status: Complete, honestly bounded where the verification sandbox
+itself couldn't build this kernel's bare-metal Rust target, and where
+one specific end-to-end test (a real triggered crash, followed by an
+actual reboot and the next boot reporting it) could not be exercised
+live in this sandbox for reasons explained below - see "Verified in
+layers" and "Known limitations."** Closes the release-readiness list's
+own "A structured crash-dump, not just a serial-port panic log" row.
+Before this phase, a panic produced exactly one thing: a line on the
+serial console, gone the instant the machine lost power or was
+rebooted. This phase gives every panic a second, durable form: a
+fixed-size, checksummed, versioned record written to its own disk
+partition, automatically read back and reported once at the very next
+boot - "I can tell you exactly what broke," not just "the machine
+stopped," even after the machine that broke is gone.
+
+### Design: a minidump-style record, not a full memory dump
+
+`kernel/rust/crashdump.rs` is modeled on the idea behind Windows'
+minidump format, scaled to what a hobby-scale kernel can actually
+capture and where it can put it: a small, fixed-size, self-describing
+record - not a raw memory snapshot - containing whatever the CPU and
+the panic path actually know at the moment things went wrong. The
+record fits in a single 512-byte sector (196 bytes used, the rest
+reserved), which matters for the same reason it mattered in Phase 53:
+this design reuses journal.rs's own foundational assumption that a
+single sector write is atomic with respect to power loss - a crash-
+dump write that itself gets torn by the very crash it's recording
+would defeat the purpose. Unlike the journal, there's no multi-sector
+transaction to protect here at all - one sector, written once, is the
+entire mechanism.
+
+The record layout: a `MAGIC` value that persists for as long as any
+crash record has ever been written (a durable "something happened
+here, ever" marker, independent of whether it's been read yet), a
+separate `PENDING_MAGIC` flag that's set when the record is written
+and explicitly cleared back to zero once `vfs_init()` has reported it
+- the difference between "was there a crash, ever" and "is there an
+unreported crash right now" - so a crash is surfaced automatically
+exactly once, at the very next boot, not on every boot afterward. An
+FNV-1a checksum (the same non-cryptographic, torn-write-detection-only
+convention Phase 53 established) covers everything from the boot-tick
+timestamp onward, deliberately excluding the magic/pending/checksum
+fields themselves so the checksum's own placement doesn't
+self-invalidate. The record holds: a boot-tick timestamp, a
+64-byte panic reason string, an optional full x86 register snapshot
+(`FaultRegs` - `eax`/`ebx`/`ecx`/`edx`/`esi`/`edi`/`ebp`/`eip`/`cs`/
+`eflags`/`useresp`/`ss`/`ds`, plus the raw interrupt vector and error
+code), an optional faulting address (CR2, for page faults), and up to
+8 stack-frame return addresses from a best-effort walk of the EBP
+chain at the moment of the panic.
+
+### The fourth partition, and a real, hard ceiling this project has now hit
+
+`tools/build-disk-image.sh` gets a new, fourth MBR partition - 1MB,
+far more than this record's own 196 bytes will ever need, kept at a
+whole MiB purely for alignment convention, matching Phase 53's own
+reasoning for the journal partition's size. This uses exactly the same
+reasoning Phase 53 used for *not* putting the journal inside FAT32's
+own reserved-sectors area (far too small, and shared with a filesystem
+that doesn't know anything is living there) - the crash-dump region
+gets its own dedicated space for the same reasons.
+
+Stated directly, because it's a real constraint discovered while
+building this, not a hypothetical: `kernel/fs/partition.h` defines
+`MAX_PARTITIONS` as 4, and this is now partition 4. This MBR-based
+partitioning scheme, as built, cannot add a fifth region without
+either extended/logical partitions or a move to GPT - neither of which
+this phase implements, because neither was needed for this feature
+specifically. Any future phase that wants its own dedicated disk
+region (rather than living inside an existing filesystem) will hit
+this ceiling immediately; it's recorded here, in `partition.h`, and in
+`build-disk-image.sh`'s own header comment, rather than left as a
+surprise for whoever hits it next.
+
+### `kernel_panic()` splits into two, without touching the ~7 callers that don't need to change
+
+Only two of this kernel's panic call sites actually have real CPU
+register state available to them: `isr.c`'s `isr_handler()` (any
+unhandled CPU exception) and `paging.c`'s `page_fault_handler()`
+(which additionally has CR2, the faulting address, that only a page
+fault provides). Every other call site - the scheduler, the heap, the
+user-config loader, the virtio-net driver, and others - calls
+`kernel_panic(message)` with just a string, because that's genuinely
+all they know when something has gone wrong.
+
+Rather than force all ~9 call sites to gather register state they
+don't have, `kernel_panic()` splits: `kernel_panic_fault(message, regs,
+has_fault_addr, fault_addr)` is the real implementation now, and
+`kernel_panic(message)` becomes a one-line wrapper -
+`kernel_panic_fault(message, NULL, false, 0)`. The ~7 plain-string
+call sites (`kernel/config/userscfg.c`, `kernel/arch/x86/mm/heap.c`,
+`kernel/task/scheduler.c`, `kernel/drivers/virtio/virtio_net.c`, and
+others) needed zero changes - they keep calling `kernel_panic()`
+exactly as before, and a crash record still gets written for them, just
+one honestly missing the register snapshot (`has_regs = 0`) rather than
+one filled with made-up values. Only `isr.c` and `paging.c` were
+changed, to call `kernel_panic_fault()` directly with their real
+`registers_t*` (and, for the page-fault path, the real CR2 value).
+
+### A best-effort stack walk, and a build-flag change that makes it worth doing
+
+`walk_stack()` follows the x86 EBP frame-pointer chain from whatever
+EBP was current at the moment of the panic, collecting up to 8 return
+addresses. It's bounded three ways, stated as risk mitigation, not as
+proof of correctness: each EBP must be 4-byte aligned, each must fall
+within this kernel's own documented identity-mapped range (0-64MB -
+`IDENTITY_MAP_CEILING`, the same ceiling Phase-era paging code already
+established), and each successive EBP in the chain must strictly
+increase (frames grow toward higher addresses on this kernel's stack
+layout; a chain that doesn't keeps increasing is corrupt or cyclic and
+walking stops immediately rather than risk it). Walking memory *from
+inside a crash handler* is itself a real hazard - a corrupted EBP
+chain could in principle cause a second, nested fault while trying to
+capture the first one - which is exactly why these bounds exist and
+why the walk gives up cleanly rather than trusting the chain
+indefinitely.
+
+For this walk to mean anything, the compiler has to actually keep EBP
+as a real frame pointer, which `-O2` doesn't guarantee by default. The
+Makefile's `CFLAGS` gets a new, deliberate addition:
+`-fno-omit-frame-pointer`, with a comment explaining exactly why - a
+real build-flag change, not a no-op, made specifically so the EBP
+chain this phase relies on is reliable rather than silently truncated
+or absent under optimization.
+
+### No lock, for a different reason than journal.rs's own
+
+`journal.rs` doesn't need a `SpinLock` because it's never called from
+IRQ context. `crashdump.rs` doesn't need one either, but for a
+different, stronger reason, stated explicitly rather than copied from
+the journal's own justification: a crash record is written at most
+once, ever, in the lifetime of a running kernel, and is immediately
+followed by a permanent `hlt` loop with interrupts disabled - nothing
+in this kernel ever runs again afterward to race it, regardless of
+what context it was called from. That's a stronger guarantee than
+"not called from IRQ context," and it's the actual reason this module
+has no lock.
+
+### `crashtest` - a real, deliberately un-automated exception trigger
+
+`userland/ring3-shell/shell.c` (the real ring-3 shell that builds to
+`SHELL.ELF` via its own `build.sh` - not `userland/shell/shell.c`,
+which is a different, legacy shell compiled directly into the kernel
+binary; this distinction cost real time to work out and is recorded
+here so it doesn't cost it again) gets a new `crashtest` command. It
+deliberately triggers a genuine `#DE` (divide-by-zero) CPU exception
+via inline assembly (`div %ecx` with `ecx` zeroed) - not a syscall, not
+a simulated panic, a real hardware exception the CPU itself raises,
+so the entire path this phase built (ISR → `kernel_panic_fault()` →
+`rust_crashdump_write_panic()` → disk) gets exercised for real. This
+is intentionally *not* wired into `make test`'s automated suite: that
+suite's own negative assertion (`tools/python/test_runner.py` fails
+the build if `PANIC`/`FAULT`/`FAIL` appears anywhere in the boot log)
+exists specifically to catch *unintended* panics, and a command whose
+entire purpose is to cause one on purpose has no business running
+inside it. `crashtest` is for a human, running `make run` or
+`make debug`, to use deliberately - see "Known limitations" below for
+exactly how.
+
+### Verified in layers
+
+Same honest gap as Phase 53, for the same pre-existing reason: this
+sandbox cannot build NovaOS's real bare-metal Rust target
+(`i686-novaos`) end to end - an unrelated rustc/`compiler_builtins`
+toolchain mismatch this phase's own changes didn't cause and don't fix,
+present before this phase and expected to be absent on this project's
+own real sysroot.
+
+Verified instead, in the layers that were available: (1) `crashdump.rs`
+compiled cleanly under a host-target (`x86_64-unknown-linux-gnu`)
+`--emit=metadata` type-and-borrow-check - real verification of the
+module's own logic, independent of target architecture; and (2) a full
+C-side integration build and boot: every changed line of C
+(`kernel.h`, `main.c`, `isr.c`, `paging.c`, `vfs.c`) was compiled and
+linked against a temporary, sandbox-only stub standing in for every
+kernel-side Rust module (the same methodology Phase 53 established -
+none of them can be built in this sandbox, not just this phase's own),
+producing a real, bootable kernel image, boot-tested headless in QEMU
+against a disk image rebuilt with all four partitions. The resulting
+serial log shows exactly the honest behavior this design should
+produce against a disk whose crash-dump partition the stub never
+configures: `[ OK ] Partition table found (MBR): 4 partition(s)`,
+`[ OK ] Crash dump: none pending (clean shutdown, or already
+reported)`, and `[ .. ] Crash dump self-test: skipped (no crash-dump
+partition configured on this disk)` - direct evidence the real C
+wiring in `vfs.c` (partition detection, configure, check-and-report),
+`isr.c`/`paging.c` (the `kernel_panic_fault()` call sites), and
+`main.c` (the panic/report plumbing) compiles, links, and boots
+without disturbing anything Phase 53 already proved - the journal's
+own self-test and the `JOURNTST.TXT` regression check both still pass,
+identically, in the same boot log.
+
+This phase also attempted to go one step further than Phase 53's own
+verification, and that attempt is recorded honestly rather than
+quietly dropped: using this same sandbox QEMU instance, an attempt was
+made to actually trigger `crashtest` live - launching QEMU with an HMP
+monitor socket and scripting keystroke injection (`sendkey`) to log in
+and type `crashtest`, to observe a real crash-dump write followed by a
+reboot and the next boot's report. The monitor accepted every command
+without error, but the guest's serial log never showed any evidence
+the keystrokes were actually received - no login attempt, no further
+shell output - even after retries, longer waits, and testing a single
+isolated keystroke in complete isolation. The root cause wasn't
+pinned down (candidates: PS/2 injection routing with no attached
+display, a timing/focus issue, or something in how this kernel's
+keyboard driver interacts with monitor-injected scancodes
+specifically), and pursuing it further stopped being a good use of
+time relative to what it would prove. That live round trip - a real
+crash, a real reboot, and the next boot reporting it - is the one
+piece this sandbox could not exercise; see "Known limitations" for
+the exact manual steps to run it for real.
+
+A second, separate discovery from this same re-verification pass,
+recorded because it explains a real limit on what could be checked
+here, not because this phase caused it: this sandbox's own full,
+71-assertion `tools/python/test_runner.py` suite (what `make test`
+calls) does not run to completion in this specific environment. The
+boot log stops, deterministically and reproducibly, immediately after
+the sandboxed ring-3 task's `SYS_OPEN("SYSTEM.CFG")`-denied line -
+right where `kernel/task/sandbox_demo.c` calls `sys_net_send()` to the
+gateway next. Traced (not just observed): this sandbox's own SLIRP-
+emulated gateway does not answer ARP for 10.0.2.2 quickly here (the
+same `[WARN] ip_send: ARP resolve failed for next hop 10.0.2.2` this
+boot log already shows earlier, from the unrelated ICMP self-test),
+so `ip_send()`'s own `arp_resolve()` falls into its documented ~3-
+second blocking wait - and `kernel/arch/x86/cpu/syscall_stub.asm`
+executes `cli` on every syscall entry with no matching `sti` until the
+syscall returns, this kernel's own existing, previously-documented
+design (see this document's own release-readiness companion for where
+it's already stated as a real, external constraint). A blocking wait
+that depends on the PIT timer's IRQ0 to advance, issued from inside a
+window where interrupts are disabled for the syscall's entire
+duration, cannot ever be satisfied - a genuine deadlock, not a slow
+pass, and not something this phase touched (`net/ip.c`, `net/arp.c`,
+and the syscall gate are all unchanged by this work). This is most
+likely specific to how this sandbox's own networking is set up (a
+real machine's SLIRP gateway typically answers ARP fast enough that
+this blocking path is rarely, if ever, actually taken), which is
+presumably why it hasn't been hit and documented before now. Stated
+here because it's the reason this phase's own re-verification (a full
+rebuild from source, done fresh in this session rather than reusing
+any earlier build) checked the boot log directly for the specific
+lines this phase's own changes produce, rather than relying on
+`test_runner.py`'s full assertion count - the same targeted-check
+method, for the same reason, Phase 53's own original verification
+already used. This is a pre-existing characteristic of the kernel's
+syscall design interacting with this one sandbox's own network
+behavior, not a regression from this phase, and not something this
+phase's own scope covers fixing (see "Phase 55 and beyond"'s own
+existing candidate on whether the scheduler safely tolerates
+preemption mid-syscall, the real fix for this class of problem).
+
+### Known limitations
+
+As with Phase 53: this phase's own real Rust build/self-test result
+(`rust_crashdump_selftest()` actually running, against a genuinely
+configured crash-dump partition) was not observed in this session's
+own verification environment - the concrete next step on a machine
+with this project's own working sysroot. The live interactive
+round trip - triggering `crashtest` for real, observing the halt,
+rebooting against the same `disk.img`, and confirming the next boot's
+serial log reports the crash - could not be exercised in this sandbox
+either, for the QEMU-monitor-injection reason above, and is left for
+a real machine: build and boot normally (`make run` or `make debug`),
+log in, run `crashtest`, wait for the halt, then reboot against the
+same `disk.img` and check the next boot's serial/console output for a
+`report_crash_dump()`-formatted block (ticks, reason, registers if
+present, CR2 if it was a page fault, and any captured stack frames).
+
+Beyond that: only 2 of this kernel's roughly 9 panic call sites
+(`isr.c`, `paging.c`) capture a real register snapshot - every other
+call site still gets a crash record, just honestly without registers
+(`has_regs = 0`), not a fabricated one. The stack walk is best-effort
+by construction, not a guarantee - a sufficiently corrupted EBP chain
+stops the walk early (bounded, not wrong) rather than producing a
+false or dangerous result, but it is not a substitute for real DWARF-
+based unwinding, which this kernel doesn't have. This is, by
+construction, the last MBR partition this on-disk scheme can ever add
+(`MAX_PARTITIONS = 4`, now fully used) - any future phase needing its
+own dedicated disk region will need extended partitions or GPT, not
+another `mkpart` call. And, like Phase 53's own journal, this design
+assumes a single 512-byte sector write is atomic with respect to power
+loss - the same standard, industry-wide assumption about real disk
+hardware, not something this kernel can independently prove against
+QEMU's own emulated disk.
+
+## Phase 55 and beyond
 
 Not started. Candidates: whether this kernel's own scheduler safely
 tolerates being preempted mid-syscall - a real, separate question this

@@ -172,6 +172,9 @@ static void cmd_help(void) {
     printf("  date            - show the current date/time\n");
     printf("  lspci           - list PCI devices\n");
     printf("  beep            - play a short tone through AC97 audio\n");
+    printf("  crashtest       - deliberately trigger a real CPU exception\n");
+    printf("                    to manually verify the crash-dump feature\n");
+    printf("                    (halts the machine - see PROGRESS.md Phase 54)\n");
     printf("  pkg list                - list available/installed packages\n");
     printf("  pkg install NAME        - install a package\n");
     printf("  pkg remove NAME         - remove an installed package\n");
@@ -357,6 +360,45 @@ static void cmd_beep(void) {
     if (!sys_beep()) {
         printf("beep: no AC97 audio device detected\n");
     }
+}
+
+/* Phase 54: a deliberate, real CPU exception (integer divide by zero,
+ * vector 0) - not a syscall, not a fabricated test harness, a genuine
+ * #DE the CPU itself raises, from real ring-3 code, the same way a
+ * real bug would. Exists to let this phase's own crash-dump mechanism
+ * (kernel/rust/crashdump.rs) be verified end to end, manually, the
+ * same "real, outside the shared automated test config" methodology
+ * Phase 52's own NE2000 conversion already established for this
+ * project: run this command, the machine halts (this is intentional -
+ * see below), then reboot (`make run`/`make debug` again against the
+ * same disk.img) and confirm the new boot reports the crash exactly as
+ * kernel/fs/vfs.c's report_crash_dump() describes - real registers,
+ * this exception's own vector (0) and eip, and a stack trace reaching
+ * back through this function. Inline asm, not a plain C `1 / x`,
+ * because a divisor computed from a `volatile` local is *usually*
+ * preserved by the compiler but not guaranteed to be - this guarantees
+ * a real `div` instruction executes with a zero divisor regardless of
+ * optimization level. Deliberately not wired into `make test`'s own
+ * automated suite: that suite's own "no PANIC/FAULT/FAIL anywhere in
+ * the log" assertion (tools/python/test_runner.py) exists specifically
+ * to catch an *unintended* panic - this command triggers one on
+ * purpose, so it stays a manual, opt-in command a developer runs by
+ * name, never something an automated boot reaches on its own. */
+static void cmd_crashtest(void) {
+    printf("Triggering a real divide-by-zero exception on purpose...\n");
+    printf("(the machine will halt after this - reboot and check the\n");
+    printf("next boot's own serial log for the crash-dump report)\n");
+    __asm__ volatile (
+        "mov $1, %%eax\n\t"
+        "xor %%edx, %%edx\n\t"
+        "xor %%ecx, %%ecx\n\t"
+        "div %%ecx\n\t"
+        :
+        :
+        : "eax", "edx", "ecx"
+    );
+    printf("crashtest: unreachable - the exception above should have "
+           "halted the machine\n");
 }
 
 static bool str_eq_ci(const char* a, const char* b) {
@@ -679,6 +721,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_lspci();
         } else if (strcmp(tokens[0], "beep") == 0) {
             cmd_beep();
+        } else if (strcmp(tokens[0], "crashtest") == 0) {
+            cmd_crashtest();
         } else if (strcmp(tokens[0], "pkg") == 0) {
             cmd_pkg(argc2, tokens);
         } else if (strcmp(tokens[0], "gui") == 0) {

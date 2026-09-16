@@ -5,6 +5,7 @@
 #include "../drivers/driver.h"
 #include "../arch/x86/cpu/gdt.h"
 #include "../arch/x86/cpu/idt.h"
+#include "../arch/x86/cpu/isr.h"
 #include "../arch/x86/cpu/tss.h"
 #include "../arch/x86/cpu/syscall.h"
 #include "../arch/x86/mm/heap.h"
@@ -53,8 +54,41 @@ void kernel_log(const char* format, ...) {
     va_end(args);
 }
 
-void kernel_panic(const char* message) {
+/* Phase 54: kernel/rust/crashdump.rs's own real integration point -
+ * see that module's own header comment for the full design. Declared
+ * here, not in a shared header, matching this project's own
+ * established convention of inline `extern` declarations right at the
+ * call site rather than a shared bridge header (see e.g. kernel/fs/
+ * fat32.c's own rust_journal_* declarations). `regs` is passed through
+ * as an opaque `const void*` - see crashdump.rs's own `FaultRegs` doc
+ * comment for the field-for-field layout contract this relies on
+ * instead of a shared header. */
+extern bool rust_crashdump_write_panic(const uint8_t* reason_ptr,
+                                        uint32_t reason_len,
+                                        const void* regs_or_null,
+                                        bool has_fault_addr,
+                                        uint32_t fault_addr,
+                                        uint32_t walk_ebp);
+
+/* The real implementation behind both kernel_panic() (below) and
+ * kernel_panic_fault() (kernel.h's own doc comment explains the split
+ * between the two). Writes a Phase 54 crash-dump record - before doing
+ * anything else, deliberately: if crash-dump writing itself somehow
+ * faults, the existing serial/VGA reporting below must not depend on
+ * having already run - then falls through to exactly the same
+ * serial/VGA reporting and halt this function has always done, so a
+ * disk with no crash-dump partition configured (rust_crashdump_write_
+ * panic() degrades to a safe no-op - see that function's own doc
+ * comment) panics exactly as it did before this phase. */
+void kernel_panic_fault(const char* message, const struct registers* regs,
+                         bool has_fault_addr, uint32_t fault_addr) {
     __asm__ volatile ("cli");
+
+    uint32_t walk_ebp = regs ? ((const registers_t*)regs)->ebp
+                              : (uint32_t)__builtin_frame_address(0);
+    rust_crashdump_write_panic((const uint8_t*)message, (uint32_t)strlen(message),
+                                (const void*)regs, has_fault_addr, fault_addr,
+                                walk_ebp);
 
     kernel_log("[PANIC] %s\n", message);
 
@@ -66,6 +100,10 @@ void kernel_panic(const char* message) {
     while (1) {
         __asm__ volatile ("hlt");
     }
+}
+
+void kernel_panic(const char* message) {
+    kernel_panic_fault(message, NULL, false, 0);
 }
 
 /* Everything that must happen before interrupts are safe to enable:
@@ -994,6 +1032,35 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                        "really_gone=%d\n",
                        (int)wrote, (int)read_ok, (int)deleted,
                        (int)really_gone);
+        }
+    }
+
+    /* Phase 54: kernel/rust/crashdump.rs's own self-test - verifies the
+     * encode/decode/checksum/"report once" logic directly against the
+     * real, already-configured crash-dump region (set up by
+     * kernel/fs/vfs.c's vfs_init(), before this point in boot, right
+     * next to Phase 53's own journal configure/recover) - see that
+     * module's own rust_crashdump_selftest() doc comment for exactly
+     * what each of its three parts proves. Skipped (not a failure) if
+     * no crash-dump partition was found on this disk, the same "not
+     * present, not broken" distinction this project's self-tests
+     * already make elsewhere (e.g. Phase 53's own journal self-test,
+     * immediately above this one in every earlier boot log). */
+    {
+        extern int rust_crashdump_selftest(void);
+        int result = rust_crashdump_selftest();
+        if (result < 0) {
+            kernel_log("[ .. ] Crash dump self-test: skipped (no "
+                       "crash-dump partition configured on this disk)\n");
+        } else {
+            kernel_log("[ %s ] Crash dump self-test: "
+                       "full-record-round-trip=%s "
+                       "reported-at-most-once=%s "
+                       "no-registers-record-round-trip=%s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       (result & 1) ? "FAIL" : "pass",
+                       (result & 2) ? "FAIL" : "pass",
+                       (result & 4) ? "FAIL" : "pass");
         }
     }
 

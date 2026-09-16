@@ -111,7 +111,12 @@ static void page_fault_handler(registers_t* regs) {
                user ? "user mode" : "kernel mode",
                reserved ? ", reserved bit set" : "");
 
-    kernel_panic("Page Fault");
+    /* Phase 54: unlike the generic isr_handler() path, this handler
+     * has a genuinely meaningful faulting address (CR2) to offer -
+     * kernel/rust/crashdump.rs's own crash record includes it whenever
+     * has_fault_addr is true, and kernel/fs/vfs.c's report_crash_dump()
+     * logs it back on the next boot. */
+    kernel_panic_fault("Page Fault", regs, true, faulting_address);
 }
 
 static void build_identity_map(void) {
