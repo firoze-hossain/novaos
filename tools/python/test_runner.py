@@ -121,10 +121,26 @@ ASSERTIONS: list[Assertion] = [
               "the FAT32 partition was found and mounted"),
     Assertion("fat32_file_read", r"FILE READ OK: HELLO\.TXT",
               "a real file was read back correctly from FAT32"),
-    Assertion("mbr_partition_table", r"Partition table found \(MBR\): 3 partition",
+    Assertion("mbr_partition_table", r"Partition table found \(MBR\): 4 partition",
               "the MBR partition table was parsed correctly (Phase 53 "
               "added a third partition - FAT32's write-ahead journal - "
+              "and Phase 54 added a fourth - the crash-dump region - "
               "alongside the original FAT32 and ext2 partitions)"),
+    Assertion("crashdump_none_pending", r"Crash dump: none pending",
+              "the new fourth (crash-dump) partition was detected and "
+              "checked at boot, and correctly reported nothing pending "
+              "on a disk that was never actually crashed"),
+    Assertion("crashdump_selftest",
+              r"Crash dump self-test: full-record-round-trip=pass "
+              r"reported-at-most-once=pass "
+              r"no-registers-record-round-trip=pass",
+              "the crash-dump module's own three-part self-test - a "
+              "full record with a register snapshot round-trips "
+              "exactly, the same slot correctly reports nothing "
+              "pending on a second read, and a record with no "
+              "register snapshot round-trips correctly too - ran for "
+              "real against the genuinely configured fourth partition "
+              "and passed"),
     Assertion("ext2_mounted", r"ext2 mounted: block_size=4096",
               "the ext2 partition was found and mounted"),
     Assertion("ext2_file_read", r"EXT2 FILE READ OK: EXT2TEST\.TXT",
