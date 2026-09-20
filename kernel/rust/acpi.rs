@@ -33,26 +33,41 @@
 //! considered.
 //!
 //! A real, honest limitation, found and precisely diagnosed rather
-//! than left as a mysterious "sometimes doesn't work": this module
-//! can only safely read memory within this kernel's own identity-
-//! mapped range (paging.c's own confirmed 0-64MB - see
-//! IDENTITY_MAPPED_LIMIT below), and on this project's own default
-//! `-m 512M` test config, QEMU places the actual RSDT/MADT tables
-//! well above that boundary - discovery correctly, gracefully reports
-//! "not found" in that case (proven safe: an earlier version of this
-//! module read those tables' signature/length *before* checking
-//! bounds at all, and crashed with a real page fault the first time
-//! it ran against real hardware instead of the self-test's own
-//! synthetic, stack-allocated table). Confirmed this is a memory-size
-//! boundary issue, not a parsing bug, by testing with `-m 32M`
-//! (comfortably under 64MB) instead: real discovery then succeeds,
-//! and the reported CPU count was independently verified against
-//! three different `-smp N` values (default/1, 2, and 4), each
-//! matching exactly - see PROGRESS.md's Phase 44 entry for the full
-//! account. Extending this kernel's identity map to cover more of
-//! physical memory would close this gap, but is real, separate,
-//! larger-blast-radius work (touching paging.c, not this module) -
-//! deliberately not attempted in this same, otherwise low-risk phase.
+//! than left as a mysterious "sometimes doesn't work" - fixed since,
+//! see the Phase 56 paragraph below, but kept here for the full
+//! account: this module could only safely read memory within this
+//! kernel's own static identity-mapped range (paging.c's own
+//! confirmed 0-64MB - see IDENTITY_MAPPED_LIMIT below), and on this
+//! project's own default `-m 512M` test config, QEMU places the
+//! actual RSDT/MADT tables well above that boundary - discovery
+//! correctly, gracefully reported "not found" in that case (proven
+//! safe: an earlier version of this module read those tables'
+//! signature/length *before* checking bounds at all, and crashed with
+//! a real page fault the first time it ran against real hardware
+//! instead of the self-test's own synthetic, stack-allocated table).
+//! Confirmed this was a memory-size boundary issue, not a parsing bug,
+//! by testing with `-m 32M` (comfortably under 64MB) instead: real
+//! discovery then succeeded, and the reported CPU count was
+//! independently verified against three different `-smp N` values
+//! (default/1, 2, and 4), each matching exactly - see PROGRESS.md's
+//! Phase 44 entry for the full account.
+//!
+//! Phase 56 closes this gap - not by extending paging.c's static
+//! boot-time identity map (still exactly 0-64MB, untouched), but by
+//! mapping whatever specific page a read actually needs, on demand,
+//! via the same `paging_map_page()` every per-process address space
+//! in this kernel already uses. See `ensure_mapped()`'s own comment
+//! below for the full reasoning, including why Phase 56 needed this
+//! capability anyway, unconditionally, for a completely different
+//! reason (kernel/rust/apic.rs's own LAPIC/IO-APIC MMIO access, at
+//! fixed hardware addresses nowhere near even a generous identity
+//! map), which is what made finally closing Phase 44's own
+//! documented gap essentially free rather than its own separate
+//! project. Real ACPI discovery under this project's standard
+//! `-m 512M` test config - previously a `[WARN] ... not found`,
+//! silently untested by `make test` - now succeeds deterministically,
+//! and PROGRESS.md's Phase 56 entry documents this as a real, if
+//! secondary, improvement in this project's own test coverage.
 //!
 //! Phase 55 extends this same module - deliberately, not as a new
 //! file - to close the release-readiness list's own "real shutdown,
@@ -111,20 +126,60 @@ impl AcpiCpuDiscovery {
     }
 }
 
-/// Reads a `u8` from a raw physical address - safe on this kernel
-/// specifically because paging.c identity-maps the entire 0-64MB
-/// range (confirmed directly, not assumed, before writing this
-/// module: `kernel_log("[ OK ] Paging enabled (identity-mapped
-/// 0-64MB)")`), and every address this module ever reads (the EBDA
-/// pointer at physical 0x40E, the 0xE0000-0xFFFFF BIOS ROM range, and
-/// whatever RSDT/MADT addresses those tables themselves report,
-/// bounds-checked against that same range below) falls well within it.
+/// Phase 56: exactly the same FFI hazard as `AcpiShutdownInfo` below
+/// (see its own doc comment for the full account, including how it
+/// was found) - discovered *in this struct too*, retroactively, while
+/// building Phase 56 on top of it. `AcpiCpuDiscovery` above keeps its
+/// two `bool` fields exactly as Phase 44 shipped them (nothing reads
+/// that struct's own `found_acpi`/`found_madt` fields across the FFI
+/// boundary directly - only individual, separately-typed out-params
+/// do, see `rust_acpi_discover_cpus()` just below), but this kernel's
+/// call site (kernel/init/main.c) declared those out-params - and,
+/// worse, this function's own *return value* - using C `bool` too.
+/// A return value doesn't have the same "fields shift by N bytes"
+/// failure mode a struct field does (there's only one value, not a
+/// layout), but it has its own real problem: this target's calling
+/// convention only guarantees the low 8 bits (AL) of EAX are
+/// meaningful for a `bool`-returning function: this kernel's own
+/// C `bool` is a 4-byte enum, so `bool found = rust_acpi_discover_cpus(...)`
+/// on the C side reads *all 32 bits* of EAX as the return value - if
+/// the upper 24 bits happen to be nonzero (unspecified, not
+/// guaranteed zero), `found` can read as true even when this function
+/// returned Rust `false` (AL = 0). Fixed the same way
+/// `AcpiShutdownInfo` was: this function's return value and its
+/// `out_found_acpi` parameter are both `u8` now, not `bool`, on
+/// either side of the boundary - see the updated extern declaration
+/// and call site in kernel/init/main.c.
+
+extern "C" {
+    /// C's own `bool` return, deliberately received here as a full
+    /// `i32` rather than Rust `bool` - see `AcpiCpuDiscovery`'s own
+    /// doc comment above for exactly why a truncated (AL-only) read
+    /// of a C-`bool`-returning function is a real, found hazard on
+    /// this target, not a theoretical one. `page_directory_ptr` must
+    /// be a directly-dereferenceable pointer, not just any physical
+    /// address (see paging.h's own doc comment on `paging_map_page`)
+    /// - `paging_kernel_directory_phys()`'s result satisfies that
+    /// because it is, itself, always within the static 0-64MB
+    /// identity map (it is a `static` array inside the kernel's own
+    /// loaded image, which starts at 1MB - see tools/linker.ld).
+    fn paging_map_page(page_directory_ptr: *mut u32, virt_addr: u32,
+                        phys_addr: u32, flags: u32) -> i32;
+    fn paging_kernel_directory_phys() -> u32;
+}
+
+const PAGE_PRESENT: u32 = 0x1;
+const PAGE_WRITE: u32 = 0x2;
+
+/// Reads a `u8` from a raw physical address. Safe to call on *any*
+/// address below 4GB (not just the static 0-64MB identity map) as of
+/// Phase 56 - see `ensure_mapped()` below for what changed and why.
 ///
 /// # Safety
-/// `addr` must be a physical address known to be mapped and safe to
-/// read as plain memory - every call site below either uses a fixed,
-/// known-safe address or one bounds-checked against the identity-
-/// mapped range first.
+/// `addr` must be a physical address this module has already decided
+/// is safe to treat as plain memory - every call site below either
+/// uses a fixed, known-safe address or one bounds-checked (and, if
+/// necessary, mapped) via `addr_range_safe()`/`ensure_mapped()` first.
 #[inline(always)]
 unsafe fn read_u8(addr: u32) -> u8 {
     core::ptr::read_volatile(addr as *const u8)
@@ -140,35 +195,103 @@ unsafe fn read_u32(addr: u32) -> u32 {
     core::ptr::read_unaligned(addr as *const u32)
 }
 
-/// This kernel's own identity-mapped range (see paging.c's own log
-/// message, confirmed directly before relying on it: "Paging enabled
-/// (identity-mapped 0-64MB)") - the only physical memory this module
-/// can safely read at all. Real ACPI tables are not guaranteed to sit
-/// within it - a QEMU/real-firmware RSDT or MADT can legitimately be
-/// placed anywhere in physical memory, and on this project's own
-/// `-m 512M` test config, they routinely are, well above 64MB. Every
-/// read in this module must be bounds-checked against this range
-/// *before* the read happens, not after - the bug this comment exists
-/// to prevent a regression of: an earlier version of this module
-/// checked bounds only inside checksum_ok(), called *after* already
-/// reading a table's signature and length first, which crashed with a
-/// real page fault the first time this ran against QEMU's actual
-/// ACPI tables instead of the self-test's own stack-allocated
-/// synthetic one (stack memory is always within the identity-mapped
-/// range, which is exactly why the self-test alone didn't catch this).
+/// This kernel's own *static, boot-time* identity-mapped range (see
+/// paging.c's own log message, confirmed directly before ever relying
+/// on it: "Paging enabled (identity-mapped 0-64MB)"). Below this
+/// limit, every physical address is already mapped and safe to read
+/// with no further work. At or above it, `ensure_mapped()` (added in
+/// Phase 56, see its own comment) maps the specific page on demand
+/// instead of refusing the read outright, which is what this module
+/// did through the end of Phase 55.
 const IDENTITY_MAPPED_LIMIT: u32 = 0x4000000; // 64MB
 
+/// Phase 56: maps physical address `addr`'s containing 4KB page,
+/// identity (virt == phys, matching every other mapping this kernel's
+/// low memory already uses), into the *kernel's own* page directory -
+/// a real, if narrow, fix for a gap Phase 44 shipped knowingly and
+/// documented rather than hid: that module's own header comment
+/// explained that real ACPI tables routinely live above the static
+/// 64MB identity map on this project's own default `-m 512M` test
+/// config, and discovery there correctly, gracefully reported "not
+/// found" rather than crash - but still couldn't actually read them.
+/// Phase 44's own comment named the fix ("extending this kernel's
+/// identity map to cover more of physical memory") and named why it
+/// wasn't attempted then: "real, separate, larger-blast-radius work
+/// (touching paging.c, not this module)."
+///
+/// This is deliberately NOT that fix. It does not touch paging.c's
+/// static boot-time identity map at all (still exactly 0-64MB, still
+/// built the same way, still every other subsystem's unchanged
+/// assumption). Instead it reuses paging.c's own existing, already-
+/// shipped `paging_map_page()` - the same function every per-process
+/// address space in this kernel already uses - to map exactly the one
+/// page a given read needs, into the kernel's own directory, the
+/// moment this module needs it. The blast radius is exactly this
+/// module (and, from Phase 56 on, kernel/rust/apic.rs's own LAPIC/
+/// IO-APIC MMIO access, which needs this unconditionally: their fixed
+/// hardware MMIO addresses - conventionally 0xFEE00000/0xFEC00000,
+/// just under the 4GB mark - sit *nowhere near* even a generously
+/// large static identity map, on any `-m` size).
+///
+/// Idempotent and cheap to call repeatedly on an already-mapped page
+/// (`paging_map_page()` just overwrites the same page-table entry
+/// with the same value; no allocation happens unless a *new* page
+/// table is needed for a 4MB region nothing in this range has touched
+/// yet) - deliberately not cached or short-circuited here, since every
+/// call site is one-time boot discovery over at most a handful of
+/// small ACPI tables, not a hot path. kernel/rust/apic.rs's own LAPIC
+/// EOI/IPI register access, which *is* a hot path (once per hardware
+/// interrupt), maps its MMIO page exactly once at init time instead
+/// of going through this function - see that module's own comment.
+pub(crate) fn ensure_mapped(addr: u32) {
+    if addr < IDENTITY_MAPPED_LIMIT {
+        return; // already covered by the static boot-time map
+    }
+    let page = addr & !0xFFFu32;
+    unsafe {
+        let kernel_dir = paging_kernel_directory_phys() as *mut u32;
+        paging_map_page(kernel_dir, page, page, PAGE_PRESENT | PAGE_WRITE);
+    }
+    // No failure path: if this is ever out of physical memory to
+    // allocate a new page table frame from, the *read* that follows
+    // will simply fault - an honest failure (a real page fault, this
+    // kernel's own diagnosable panic path - see paging.c's
+    // page_fault_handler()) rather than a silently wrong value. This
+    // module has no way to abort a read already in progress partway
+    // through a multi-byte scan, the same reasoning `addr_range_safe`
+    // already documented for `checked_add` above.
+}
+
 /// Must be checked before any read at `addr` - true iff every byte in
-/// `[addr, addr+len)` is safely within this kernel's identity-mapped
-/// range. Uses `checked_add` deliberately, not plain `+`, so a
-/// pathological `len` large enough to overflow `u32` arithmetic is
-/// rejected rather than wrapping into a false "safe" result.
+/// `[addr, addr+len)` is safe to read, mapping it on demand first if
+/// it falls outside the static identity range (see `ensure_mapped()`).
+/// Uses `checked_add` deliberately, not plain `+`, so a pathological
+/// `len` large enough to overflow `u32` arithmetic is rejected rather
+/// than wrapping into a false "safe" result. The only remaining
+/// rejection is that overflow case and `len == 0` - Phase 56 removed
+/// the fixed 64MB ceiling this function enforced through Phase 55 (see
+/// `ensure_mapped()`'s own comment for what replaced it and why doing
+/// so is safe).
 fn addr_range_safe(addr: u32, len: u32) -> bool {
-    len != 0
-        && addr
-            .checked_add(len)
-            .map(|end| end <= IDENTITY_MAPPED_LIMIT)
-            .unwrap_or(false)
+    let end = match addr.checked_add(len) {
+        Some(e) => e,
+        None => return false,
+    };
+    if len == 0 {
+        return false;
+    }
+    let mut page = addr & !0xFFFu32;
+    while page < end {
+        ensure_mapped(page);
+        page = match page.checked_add(0x1000) {
+            Some(p) => p,
+            None => break, // page was already within 4KB of u32::MAX -
+                            // nothing legitimate lives there; stop
+                            // rather than risk wrapping back to 0 and
+                            // looping forever
+        };
+    }
+    true
 }
 
 fn checksum_ok(addr: u32, len: u32) -> bool {
@@ -354,15 +477,15 @@ fn discover() -> AcpiCpuDiscovery {
 #[no_mangle]
 pub extern "C" fn rust_acpi_discover_cpus(out_count: *mut u32,
                                            out_local_apic_phys: *mut u32,
-                                           out_found_acpi: *mut bool)
-                                           -> bool {
+                                           out_found_acpi: *mut u8)
+                                           -> u8 {
     let result = discover();
     unsafe {
         *out_count = result.cpu_count;
         *out_local_apic_phys = result.local_apic_phys;
-        *out_found_acpi = result.found_acpi;
+        *out_found_acpi = if result.found_acpi { 1 } else { 0 };
     }
-    result.found_madt
+    if result.found_madt { 1 } else { 0 }
 }
 
 /// Ring-0 self-test, called directly from kernel_main() - verifies
@@ -744,24 +867,227 @@ fn find_s5_sleep_type(dsdt_addr: u32) -> Option<(u16, u16)> {
     None
 }
 
+/// `pub(crate)`, not private, as of Phase 56 - kernel/rust/apic.rs
+/// reuses these three directly (masking the legacy 8259 PIC once
+/// IO-APIC routing takes over needs the exact same port I/O primitive
+/// this module already established and proved correct in Phase 55;
+/// duplicating them there would be the same three `asm!` blocks
+/// copy-pasted for no reason).
 #[inline(always)]
-unsafe fn port_outb(port: u16, value: u8) {
+pub(crate) unsafe fn port_outb(port: u16, value: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") value,
                       options(nomem, nostack, preserves_flags));
 }
 
 #[inline(always)]
-unsafe fn port_outw(port: u16, value: u16) {
+pub(crate) unsafe fn port_outw(port: u16, value: u16) {
     core::arch::asm!("out dx, ax", in("dx") port, in("ax") value,
                       options(nomem, nostack, preserves_flags));
 }
 
 #[inline(always)]
-unsafe fn port_inw(port: u16) -> u16 {
+pub(crate) unsafe fn port_inw(port: u16) -> u16 {
     let value: u16;
     core::arch::asm!("in ax, dx", in("dx") port, out("ax") value,
                       options(nomem, nostack, preserves_flags));
     value
+}
+
+// ============================================================
+// Phase 56: MADT I/O APIC (type 1) and Interrupt Source Override
+// (type 2) entries - the two additional pieces of the same table
+// Phase 44 already parses for CPU-topology (type 0) entries, needed
+// before kernel/rust/apic.rs can program a real IO-APIC in place of
+// the legacy 8259 PIC.
+// ============================================================
+
+/// Bounded the same way `AcpiCpuDiscovery::apic_ids` is (see its own
+/// comment) - real machines overwhelmingly have exactly one IO-APIC;
+/// this cap exists so a pathological table can't grow this struct's
+/// fixed-size array without bound, not because more are expected.
+const MAX_IO_APICS: usize = 4;
+
+/// Bounded the same way, for Interrupt Source Override entries - a
+/// real MADT rarely has more than one or two (the IRQ0 override is
+/// the one this kernel actually depends on - see `smp_discover()`'s
+/// own comment), but nothing stops a table from listing one for every
+/// ISA IRQ line.
+const MAX_OVERRIDES: usize = 16;
+
+#[derive(Clone, Copy)]
+pub(crate) struct IoApicInfo {
+    pub(crate) id: u8,
+    pub(crate) phys_addr: u32,
+    pub(crate) gsi_base: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IrqOverride {
+    pub(crate) isa_irq: u8,
+    pub(crate) gsi: u32,
+}
+
+/// Everything kernel/rust/apic.rs needs to actually bring up SMP and
+/// replace the PIC, in one place - a strict superset of what
+/// `AcpiCpuDiscovery` (Phase 44, kept as-is and still used by
+/// `rust_acpi_discover_cpus()`'s own existing FFI callers) provides.
+/// Built by a *separate* parse of the same MADT, deliberately not by
+/// extending `parse_madt()` itself in place - Phase 44's own parsing
+/// logic is already shipped, tested (including against three
+/// different real `-smp N` configurations, not just the synthetic
+/// self-test), and depended on by main.c's existing informational log
+/// line; re-deriving the CPU list here from scratch, in new code, is
+/// a small amount of duplication in exchange for not touching a
+/// working, already-proven code path at all.
+pub(crate) struct SmpDiscovery {
+    pub(crate) found_acpi: bool,
+    pub(crate) found_madt: bool,
+    pub(crate) cpu_count: u32,
+    pub(crate) apic_ids: [u8; MAX_CPUS],
+    pub(crate) local_apic_phys: u32,
+    pub(crate) io_apic_count: u32,
+    pub(crate) io_apics: [IoApicInfo; MAX_IO_APICS],
+    pub(crate) override_count: u32,
+    pub(crate) overrides: [IrqOverride; MAX_OVERRIDES],
+}
+
+impl SmpDiscovery {
+    const fn empty() -> Self {
+        SmpDiscovery {
+            found_acpi: false,
+            found_madt: false,
+            cpu_count: 0,
+            apic_ids: [0; MAX_CPUS],
+            local_apic_phys: 0,
+            io_apic_count: 0,
+            io_apics: [IoApicInfo { id: 0, phys_addr: 0, gsi_base: 0 }; MAX_IO_APICS],
+            override_count: 0,
+            overrides: [IrqOverride { isa_irq: 0, gsi: 0 }; MAX_OVERRIDES],
+        }
+    }
+
+    /// The GSI a legacy ISA IRQ line actually shows up on for this
+    /// specific machine - identity (`isa_irq as u32`) unless an
+    /// Interrupt Source Override entry says otherwise. This matters
+    /// for exactly one line in practice on PC/AT-compatible chipsets
+    /// (including QEMU's own default `q35`/`i440fx` machine types):
+    /// ISA IRQ0 (the PIT) is very commonly wired to GSI 2, not GSI 0,
+    /// because GSI 0 is reserved for a different purpose in the
+    /// IO-APIC's own fixed wiring - a real, well-known, independently
+    /// documented (OSDev.org's own "IOAPIC" page covers exactly this)
+    /// gotcha, not a rare edge case. Getting this wrong would silently
+    /// mean the timer IRQ this kernel's entire scheduler tick depends
+    /// on (kernel/drivers/timer's own IRQ0 registration) is redirected
+    /// to a GSI nothing is actually listening on, the moment IO-APIC
+    /// routing replaces the PIC - the single most important reason
+    /// this module parses Interrupt Source Override entries at all,
+    /// rather than assuming GSI == IRQ for every ISA line the way a
+    /// first, simpler draft of this function did.
+    pub(crate) fn gsi_for_isa_irq(&self, isa_irq: u8) -> u32 {
+        for i in 0..(self.override_count as usize) {
+            if self.overrides[i].isa_irq == isa_irq {
+                return self.overrides[i].gsi;
+            }
+        }
+        isa_irq as u32
+    }
+}
+
+fn parse_madt_smp(madt_addr: u32, out: &mut SmpDiscovery) {
+    // Same fixed-size-header-first validation as parse_madt() above -
+    // see that function's own comment for why the order matters.
+    if !addr_range_safe(madt_addr, 44) {
+        return;
+    }
+    if !signature_matches(madt_addr, b"APIC") {
+        return;
+    }
+    let length = unsafe { read_u32(madt_addr + 4) };
+    if length < 44 || !checksum_ok(madt_addr, length) {
+        return;
+    }
+    out.found_madt = true;
+    out.local_apic_phys = unsafe { read_u32(madt_addr + 36) };
+
+    let end = madt_addr + length;
+    let mut cursor = madt_addr + 44;
+
+    while cursor + 2 <= end {
+        if !addr_range_safe(cursor, 2) {
+            break;
+        }
+        let entry_type = unsafe { read_u8(cursor) };
+        let entry_len = unsafe { read_u8(cursor + 1) };
+        if entry_len == 0 {
+            break;
+        }
+        if entry_type == 0 && entry_len >= 8 && cursor + 8 <= end
+            && addr_range_safe(cursor, 8)
+        {
+            // Processor Local APIC (see parse_madt()'s own comment
+            // for the field layout).
+            let apic_id = unsafe { read_u8(cursor + 3) };
+            let flags = unsafe { read_u32(cursor + 4) };
+            let enabled = (flags & 1) != 0;
+            if enabled && (out.cpu_count as usize) < MAX_CPUS {
+                out.apic_ids[out.cpu_count as usize] = apic_id;
+                out.cpu_count += 1;
+            }
+        } else if entry_type == 1 && entry_len >= 12 && cursor + 12 <= end
+            && addr_range_safe(cursor, 12)
+        {
+            // I/O APIC entry (ACPI spec table 5-27): type(1) length(1)
+            // io_apic_id(1) reserved(1) io_apic_address(4)
+            // global_system_interrupt_base(4).
+            if (out.io_apic_count as usize) < MAX_IO_APICS {
+                let id = unsafe { read_u8(cursor + 2) };
+                let phys_addr = unsafe { read_u32(cursor + 4) };
+                let gsi_base = unsafe { read_u32(cursor + 8) };
+                out.io_apics[out.io_apic_count as usize] =
+                    IoApicInfo { id, phys_addr, gsi_base };
+                out.io_apic_count += 1;
+            }
+        } else if entry_type == 2 && entry_len >= 10 && cursor + 10 <= end
+            && addr_range_safe(cursor, 10)
+        {
+            // Interrupt Source Override (ACPI spec table 5-29):
+            // type(1) length(1) bus(1) source(1)
+            // global_system_interrupt(4) flags(2). `bus` is always 0
+            // (ISA) in every real table this kernel has ever seen -
+            // not checked, since a nonzero value here would still be
+            // a real override this kernel should honor, not ignore.
+            if (out.override_count as usize) < MAX_OVERRIDES {
+                let isa_irq = unsafe { read_u8(cursor + 3) };
+                let gsi = unsafe { read_u32(cursor + 4) };
+                out.overrides[out.override_count as usize] =
+                    IrqOverride { isa_irq, gsi };
+                out.override_count += 1;
+            }
+        }
+        cursor += entry_len as u32;
+    }
+}
+
+/// The Phase 56 analogue of `discover()` above - same RSDP -> RSDT ->
+/// MADT walk, richer result. `pub(crate)`: called directly from
+/// kernel/rust/apic.rs, entirely within this crate - no FFI boundary,
+/// no repr(C) struct, no bool-sizing hazard, since both sides are
+/// ordinary Rust talking to ordinary Rust.
+pub(crate) fn discover_smp() -> SmpDiscovery {
+    let mut result = SmpDiscovery::empty();
+
+    let rsdp_addr = match find_rsdp() {
+        Some(addr) => addr,
+        None => return result,
+    };
+    result.found_acpi = true;
+
+    let rsdt_addr = unsafe { read_u32(rsdp_addr + 16) };
+    if let Some(madt_addr) = find_madt(rsdt_addr) {
+        parse_madt_smp(madt_addr, &mut result);
+    }
+
+    result
 }
 
 /// Runs the real discovery path (RSDP -> RSDT -> FADT -> DSDT -> _S5)

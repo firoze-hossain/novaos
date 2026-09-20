@@ -55,3 +55,7 @@ void idt_init(void) {
 
     idt_flush((uint32_t)&idt_pointer);
 }
+
+uint32_t idt_get_pointer_addr(void) {
+    return (uint32_t)&idt_pointer;
+}

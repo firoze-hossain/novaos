@@ -12,4 +12,9 @@ void idt_init(void);
  * (rather than made static) because both files populate the same table. */
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t selector, uint8_t flags);
 
+/* Phase 56: the physical address of this kernel's own already-built
+ * idt_pointer struct - see gdt.h's own gdt_get_pointer_addr() for the
+ * identical reasoning, one level down (IDT instead of GDT). */
+uint32_t idt_get_pointer_addr(void);
+
 #endif

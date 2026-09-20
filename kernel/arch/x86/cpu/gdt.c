@@ -65,3 +65,7 @@ void gdt_init(void) {
 
     gdt_flush((uint32_t)&gdt_pointer);
 }
+
+uint32_t gdt_get_pointer_addr(void) {
+    return (uint32_t)&gdt_pointer;
+}

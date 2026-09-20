@@ -63,7 +63,7 @@ ASMFLAGS = -f elf32 -g
 # on Intel Mac, Hyper-V disabled on Windows) and can make even a plain
 # boot take tens of seconds or appear to hang. NovaOS doesn't use SMM,
 # so turning it off is free.
-QEMU_FLAGS = -M pc,smm=off -m 512M -no-reboot
+QEMU_FLAGS = -M pc,smm=off -m 512M -smp 2 -no-reboot
 
 # Test FAT32 disk image, built with mtools (mformat/mcopy) so it works
 # identically on Windows/WSL2, Linux, and macOS without needing loop-
@@ -171,7 +171,14 @@ $(RUST_SYSROOT_MARKER):
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+AP_TRAMPOLINE_SRC = kernel/arch/x86/cpu/ap_trampoline.s
+AP_TRAMPOLINE_BIN = $(BUILD_DIR)/kernel/arch/x86/cpu/ap_trampoline.bin
+
+$(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
+	@mkdir -p $(dir $@)
+	$(ASM) -f bin $< -o $@
+
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -242,7 +249,7 @@ debug: $(ISO_FILE) $(DISK_IMG)
 # serial log, and fails (non-zero exit) if the expected subsystem
 # init markers are missing. This is what scripts/test.sh and CI use,
 # and it works identically on Linux, macOS, and Windows/WSL2.
-TEST_TIMEOUT ?= 25
+TEST_TIMEOUT ?= 40
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)

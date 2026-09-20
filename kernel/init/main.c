@@ -156,6 +156,45 @@ static void pci_log_device(const pci_device_t* dev) {
  * enabled: driver registration. IF is turned on right at the end, once
  * every handler a currently-unmasked IRQ could call is already in place. */
 void kernel_late_init(void) {
+    /* Phase 56: bring up any secondary CPUs this machine has, and -
+     * only if it also has a usable Local APIC + I/O APIC pair - hand
+     * hardware-interrupt routing over from the legacy 8259 PIC this
+     * kernel has used since Phase 2 to a real I/O APIC. Must run
+     * before timer_init()/driver_init_all() below: every one of those
+     * calls register_irq_handler() (kernel/arch/x86/cpu/irq.c), which
+     * needs to already know which controller is actually live to
+     * unmask the right one (see that function's own updated comment).
+     * Must also run before this function's own `sti` further down -
+     * kernel/rust/apic.rs's own rust_smp_init() relies on interrupts
+     * staying off for its entire duration (see its own busy-wait
+     * constants' comments for why a timer-tick-based wait would be
+     * worse than merely risky on this exact call path).
+     *
+     * Zero behavior change on any machine this doesn't apply to: a
+     * machine with no usable ACPI/MADT/LAPIC/IOAPIC (rust_smp_init()
+     * returns a negative code) leaves every existing PIC code path in
+     * irq.c completely untouched, exactly as Phase 55 left it - see
+     * kernel/rust/apic.rs's own module-level doc comment for the full
+     * account of what this phase does and, just as deliberately,
+     * does not attempt (a real SMP-aware scheduler chief among the
+     * latter). */
+    {
+        extern int rust_smp_init(void);
+        int aps_online = rust_smp_init();
+        if (aps_online >= 0) {
+            kernel_log("[ OK ] SMP: %d application processor(s) brought up "
+                       "and running real kernel Rust code (IO-APIC now "
+                       "routing hardware interrupts; legacy 8259 PIC "
+                       "masked)\n", aps_online);
+        } else {
+            kernel_log("[WARN] SMP: not available on this machine (code %d) "
+                       "- staying single-core, legacy 8259 PIC routing "
+                       "unchanged (see kernel/rust/apic.rs's own "
+                       "rust_smp_init() for what each negative code "
+                       "means)\n", aps_online);
+        }
+    }
+
     timer_init(TIMER_FREQUENCY_HZ);
     kernel_log("[ OK ] PIT timer initialized at %d Hz (IRQ0)\n",
                TIMER_FREQUENCY_HZ);
@@ -832,14 +871,24 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * tracks reality rather than just "the code ran without
      * crashing." */
     {
-        extern bool rust_acpi_discover_cpus(uint32_t* out_count,
-                                             uint32_t* out_local_apic_phys,
-                                             bool* out_found_acpi);
+        /* uint8_t, deliberately NOT this kernel's own `bool` - the
+         * same real, found (not theoretical) FFI hazard documented at
+         * length elsewhere in this file's own Phase 55 block below
+         * and in kernel/rust/acpi.rs's own AcpiCpuDiscovery doc
+         * comment. This specific call site had the exact same bug
+         * from the moment Phase 44 first wrote it - not caught until
+         * Phase 56, while extending this same module, went back and
+         * checked every existing bool-crossing-the-FFI-boundary call
+         * site in this codebase rather than assuming Phase 55's own
+         * fix (to a *different* struct) was the only one needed. */
+        extern uint8_t rust_acpi_discover_cpus(uint32_t* out_count,
+                                                uint32_t* out_local_apic_phys,
+                                                uint8_t* out_found_acpi);
         uint32_t cpu_count = 0;
         uint32_t local_apic_phys = 0;
-        bool found_acpi = false;
-        bool found = rust_acpi_discover_cpus(&cpu_count, &local_apic_phys,
-                                              &found_acpi);
+        uint8_t found_acpi = 0;
+        uint8_t found = rust_acpi_discover_cpus(&cpu_count, &local_apic_phys,
+                                                 &found_acpi);
         if (found) {
             kernel_log("[ OK ] ACPI MADT: %d CPU(s) found (Local APIC at "
                        "phys 0x%x) - single-core boot continuing "
