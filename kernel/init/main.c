@@ -28,6 +28,7 @@
 #include "../task/scheduler.h"
 #include "../task/user_demo.h"
 #include "../task/sandbox_demo.h"
+#include "../task/exec_trust_demo.h"
 #include "../task/unprivileged_demo.h"
 #include "../../userland/shell/shell.h"
 #include "../../userland/shell/firstrun.h"
@@ -1418,6 +1419,21 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
                                    1, sandbox_hosts, 1, true);
     process_create_user_task("unprivileged", unprivileged_demo_task);
+
+    /* Phase 59: exec_trust_demo_task's own SYS_EXEC_TRUSTED self-test
+     * (kernel/task/exec_trust_demo.c) - needs can_spawn (to exec
+     * TPROBE.ELF at all) and can_open_any_file (the specific
+     * capability it proves gets delegated through SYS_EXEC_TRUSTED but
+     * not plain SYS_EXEC) granted directly at creation, which ordinary
+     * process_create_sandboxed_task() deliberately never does - see
+     * process_create_sandboxed_task_trusted()'s own comment in
+     * process.c for why this one narrow exception exists. No file/host
+     * capability list needed (NULL/0 for both): this task never calls
+     * SYS_OPEN/SYS_NET_SEND directly itself, only SYS_EXEC/SYS_EXEC_
+     * TRUSTED. */
+    process_create_sandboxed_task_trusted("exec-trust-demo",
+                                           exec_trust_demo_task, NULL, 0,
+                                           NULL, 0, true);
 
     kernel_log("[ OK ] Tasks created: idle (kernel), shell (kernel), "
                "demo-a + demo-b (ring 3, private address spaces), "

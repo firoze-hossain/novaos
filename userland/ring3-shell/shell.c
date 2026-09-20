@@ -20,6 +20,19 @@
  * surface (SYS_PING, SYS_PKG_*, a way to launch the GUI, SYS_BEEP,
  * SYS_RTC_READ, SYS_LSPCI), deliberately not built in this pass. See
  * PROGRESS.md for the full, honest limitations list.
+ *
+ * Phase 59: ls/cat/echo/cp/rm are now real, separate ring-3 ELF32
+ * programs (userland/coreutils-rs/ls.rs, echo.rs, cp.rs, rm.rs, plus
+ * the pre-existing userland/coreutils/cat.c) that this shell execs,
+ * not logic duplicated inline here - genuinely completing this row's
+ * own "port to ring-3" scope note, not just adding cp/rm as two more
+ * builtins. cp/rm/cat all need file-write/delete capability at a name
+ * the user types, which a plain SYS_EXEC'd program never gets (see
+ * kernel/arch/x86/cpu/syscall.h's own comment on SYS_EXEC) - this
+ * shell uses the new SYS_EXEC_TRUSTED syscall (same file, same phase)
+ * to explicitly delegate its own can_open_any_file capability to
+ * those three specific programs, and only those three, when it
+ * launches them; `run`/ls/echo still use plain SYS_EXEC, unchanged.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,6 +177,8 @@ static void cmd_help(void) {
     printf("NovaOS ring-3 shell (Phase 30-33) - available commands:\n");
     printf("  ls              - list files in the root directory\n");
     printf("  cat FILE        - print a file's contents\n");
+    printf("  cp SOURCE DEST  - copy a file (Rust, Phase 59)\n");
+    printf("  rm FILE         - delete a file (Rust, Phase 59)\n");
     printf("  run FILE [args] - load and run a real ELF executable\n");
     printf("  sudo FILE [args] - re-authenticate, then run as root if "
            "authorized\n");
@@ -188,15 +203,25 @@ static void cmd_help(void) {
     printf("'gui' above is a proof-of-concept, not a full port).\n");
 }
 
+/* Phase 59: ls/cat are now real, separate ring-3 ELF32 programs
+ * (userland/coreutils-rs/ls.rs, userland/coreutils/cat.c), not logic
+ * duplicated inline in this shell - the same "port to ring-3" step
+ * Phase 29 already took for cat.c itself, applied consistently. ls
+ * needs no special capability (SYS_LIST_FILES isn't capability-gated),
+ * so plain SYS_EXEC is enough - the same reasoning cmd_ping()/cmd_gui()
+ * below already use. cat, unlike ls, opens a file the user names at
+ * the prompt (SYS_OPEN, capability-gated - see kernel/task/process.h's
+ * can_open_any_file), so it needs SYS_EXEC_TRUSTED instead of plain
+ * SYS_EXEC to actually work when run from here - see this file's own
+ * cmd_cp()/cmd_rm() below for the fuller explanation of why. */
 static void cmd_ls(void) {
-    static char buf[2048];
-    int n = sys_list_files(buf, sizeof(buf) - 1);
-    if (n < 0) {
-        printf("ls: no filesystem mounted, or listing too large\n");
+    char* ls_argv[] = {"LS.ELF"};
+    int pid = sys_exec("LS.ELF", ls_argv, 1);
+    if (pid < 0) {
+        printf("ls: failed to load LS.ELF\n");
         return;
     }
-    buf[n] = '\0';
-    sys_write(buf);
+    sys_wait(pid);
 }
 
 static void cmd_cat(int argc, char* argv[]) {
@@ -204,18 +229,66 @@ static void cmd_cat(int argc, char* argv[]) {
         printf("usage: cat FILE\n");
         return;
     }
-    int fd = sys_open(argv[1]);
-    if (fd < 0) {
-        printf("cat: cannot open '%s'\n", argv[1]);
+    char* cat_argv[] = {"CAT.ELF", argv[1]};
+    int pid = sys_exec_trusted("CAT.ELF", cat_argv, 2);
+    if (pid < 0) {
+        printf("cat: failed to load CAT.ELF\n");
         return;
     }
-    char buf[257];
-    int n;
-    while ((n = sys_read(fd, buf, sizeof(buf) - 1)) > 0) {
-        buf[n] = '\0';
-        sys_write(buf);
+    int exit_code = sys_wait(pid);
+    if (exit_code != 0) {
+        printf("cat: cannot open '%s'\n", argv[1]);
     }
-    sys_close(fd);
+}
+
+/* Phase 59: cp/rm are new - this project's first standalone ring-3 cp
+ * and rm, both written entirely in Rust (userland/coreutils-rs/cp.rs,
+ * rm.rs). Both need SYS_WRITE_FILE/SYS_DELETE_FILE, which are gated by
+ * can_open_any_file (see kernel/task/process.h) - a plain `run`
+ * (sys_exec()) would give either program nothing at all and they would
+ * simply fail every time, not because of a bug in either program but
+ * because plain SYS_EXEC never delegates that capability to anything
+ * it launches (see kernel/arch/x86/cpu/syscall.h's own comment on
+ * SYS_EXEC, and Phase 32's own choice to keep the package manager a
+ * shell builtin instead of a separate binary for exactly this reason).
+ * SYS_EXEC_TRUSTED (Phase 59) closes that gap the deliberately narrow
+ * way: this shell process already has can_open_any_file (granted once,
+ * at boot, via process_exec_as_shell() - see kernel/task/process.c),
+ * and SYS_EXEC_TRUSTED lets it explicitly delegate that exact
+ * capability to CP.ELF/RM.ELF specifically, without silently granting
+ * it to every other program `run`/plain SYS_EXEC can launch. */
+static void cmd_cp(int argc, char* argv[]) {
+    if (argc < 3) {
+        printf("usage: cp SOURCE DEST\n");
+        return;
+    }
+    char* cp_argv[] = {"CP.ELF", argv[1], argv[2]};
+    int pid = sys_exec_trusted("CP.ELF", cp_argv, 3);
+    if (pid < 0) {
+        printf("cp: failed to load CP.ELF\n");
+        return;
+    }
+    int exit_code = sys_wait(pid);
+    if (exit_code != 0) {
+        printf("cp: failed (see CP.ELF's own message above, if any)\n");
+    }
+}
+
+static void cmd_rm(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("usage: rm FILE\n");
+        return;
+    }
+    char* rm_argv[] = {"RM.ELF", argv[1]};
+    int pid = sys_exec_trusted("RM.ELF", rm_argv, 2);
+    if (pid < 0) {
+        printf("rm: failed to load RM.ELF\n");
+        return;
+    }
+    int exit_code = sys_wait(pid);
+    if (exit_code != 0) {
+        printf("rm: failed (see RM.ELF's own message above, if any)\n");
+    }
 }
 
 static void cmd_run(int argc, char* argv[]) {
@@ -315,14 +388,21 @@ static void cmd_ping(int argc, char* argv[]) {
     sys_wait(pid);
 }
 
+/* Phase 59: echo is now a real, separate ring-3 ELF32 program too
+ * (userland/coreutils-rs/echo.rs) - same "port to ring-3" reasoning as
+ * cmd_ls() above. Needs no special capability (just SYS_WRITE), so
+ * plain SYS_EXEC is enough. `argv` here is this shell's own already-
+ * tokenized command line (tokens[0] == "echo") - passed straight
+ * through rather than rebuilt into a new array, since echo.rs never
+ * reads argv[0] anyway and every other argv[i] is exactly what
+ * ECHO.ELF should see. */
 static void cmd_echo(int argc, char* argv[]) {
-    for (int i = 1; i < argc; i++) {
-        printf("%s", argv[i]);
-        if (i < argc - 1) {
-            printf(" ");
-        }
+    int pid = sys_exec("ECHO.ELF", argv, argc);
+    if (pid < 0) {
+        printf("echo: failed to load ECHO.ELF\n");
+        return;
     }
-    printf("\n");
+    sys_wait(pid);
 }
 
 static void cmd_clear(void) {
@@ -746,6 +826,10 @@ int main(int argc, char** argv, char** envp) {
             cmd_ls();
         } else if (strcmp(tokens[0], "cat") == 0) {
             cmd_cat(argc2, tokens);
+        } else if (strcmp(tokens[0], "cp") == 0) {
+            cmd_cp(argc2, tokens);
+        } else if (strcmp(tokens[0], "rm") == 0) {
+            cmd_rm(argc2, tokens);
         } else if (strcmp(tokens[0], "run") == 0) {
             cmd_run(argc2, tokens);
         } else if (strcmp(tokens[0], "sudo") == 0) {

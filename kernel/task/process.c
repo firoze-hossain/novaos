@@ -272,6 +272,55 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
     return p->pid;
 }
 
+/* Phase 59: the one deliberate, narrow exception to the invariant
+ * documented just above - exists only to let a real, kernel-compiled
+ * ring-3 self-test task genuinely exercise SYS_EXEC_TRUSTED's own
+ * capability-delegation path (process_exec_trusted(), see process.h's
+ * comment on it) as a real ring-3 caller making a real `int 0x80`
+ * call, the same way any actual delegation-capable program eventually
+ * would - rather than only testing process_exec_trusted() indirectly
+ * or not at all. Everything else is identical to process_create_
+ * sandboxed_task() above; this is not a general-purpose replacement
+ * for it and should not become one - a sandboxed task's whole point is
+ * the narrow, explicit allowed_files[] list, and can_open_any_file
+ * should stay reserved for the interactive shell (via process_exec_
+ * as_shell()) and whatever it explicitly delegates to, not become
+ * something every sandboxed test task can casually ask for. */
+int process_create_sandboxed_task_trusted(const char* name,
+                                           void (*entry)(void),
+                                           const char** filenames,
+                                           int file_count,
+                                           const uint32_t* hosts,
+                                           int host_count, bool can_spawn) {
+    process_t* p = create_user_task_common(name, entry);
+    if (p == NULL) {
+        return -1;
+    }
+
+    if (file_count > MAX_CAPABILITIES) {
+        file_count = MAX_CAPABILITIES;
+    }
+    for (int i = 0; i < file_count; i++) {
+        copy_name(p->allowed_files[i], filenames[i],
+                  sizeof(p->allowed_files[i]));
+    }
+    p->allowed_file_count = file_count;
+
+    if (host_count > MAX_CAPABILITIES) {
+        host_count = MAX_CAPABILITIES;
+    }
+    for (int i = 0; i < host_count; i++) {
+        p->allowed_hosts[i] = hosts[i];
+    }
+    p->allowed_host_count = host_count;
+
+    p->can_spawn = can_spawn;
+    p->can_open_any_file = true;
+
+    scheduler_add(p);
+    return p->pid;
+}
+
 /* Phase 22: frees the resources a ring-3 process exclusively owns -
  * the physical frames backing its private user stack, the page table
  * that mapped them, and the process's own page directory. Never
@@ -757,6 +806,23 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
  * kernel's own boot sequence calls this, for the shell specifically. */
 int process_exec_as_shell(const char* path, const char** argv, int argc) {
     return process_exec_internal(path, argv, argc, NULL, 0, true);
+}
+
+/* Phase 59: SYS_EXEC_TRUSTED's own implementation - see process.h's
+ * own comment on this function, and kernel/arch/x86/cpu/syscall.h's
+ * comment on SYS_EXEC_TRUSTED, for the full reasoning. Unlike every
+ * process_exec_*() variant above, the grant passed to process_exec_
+ * internal() here is not a fixed constant (false, or true only for
+ * the one kernel-boot-time shell exec) - it is read from the calling
+ * process itself, so this function's own behavior is entirely
+ * determined by who calls it: an ordinary process delegates "false"
+ * (a no-op, identical to plain process_exec()), while a process that
+ * already has can_open_any_file (only the interactive shell, today)
+ * delegates that same real grant to the child it's choosing to run. */
+int process_exec_trusted(const char* path, const char** argv, int argc) {
+    process_t* caller = process_current();
+    bool grant = (caller != NULL) && caller->can_open_any_file;
+    return process_exec_internal(path, argv, argc, NULL, 0, grant);
 }
 
 int process_wait(int pid) {

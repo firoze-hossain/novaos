@@ -6481,14 +6481,174 @@ non-synthetic TCP path - a real HTTP fetch over the boot-time self-
 test's own connection, not just the synthetic in-kernel state-machine
 proof this sandbox could provide.
 
-## Phase 59 and beyond
+## Phase 59: a shell and coreutils that feel complete
 
-Candidates: gating `SYS_CONNECT` against `allowed_hosts[]` the same
-way `SYS_NET_SEND` already is - the honest scope cut this phase named
-directly above; congestion control (slow start / congestion avoidance)
-for the TCP stack this phase added, currently reliability-only; per-
-driver locking for FAT32/ext2's own shared scratch buffers (this
-phase's own coarse `vfs_lock` is correct but not fine-grained - see
+What this phase actually closes: the release-readiness doc's own 2.1
+row, "port the remaining coreutils to ring-3" - before this phase,
+`ls`/`echo`/`cp`/`rm` existed only as logic inlined directly into
+`userland/ring3-shell/shell.c` (`cp`/`rm` did not exist at all, in any
+form), and only `cat` was a real, separate ring-3 ELF32 program the
+shell exec'd. That's a real gap from "the OS feels finished," because
+the shell's moment-to-moment command experience is most of what that
+feeling actually is.
+
+Closing it needed a genuine kernel-level decision, not just four new
+programs: `cp`/`rm` (and, done properly, `cat`) need to open or write
+or delete a file *by the name the user just typed at the prompt* -
+exactly the `can_open_any_file` capability check already gating
+`SYS_WRITE_FILE`/`SYS_DELETE_FILE`/arbitrary-path `SYS_OPEN` (see
+`kernel/task/process.c`). That capability has been kernel-boot-only
+since Phase 29/30 by deliberate design - `process_exec_internal()`
+resets `allowed_files[]`/`can_open_any_file`/`can_spawn` to nothing on
+every `SYS_EXEC`, precisely so an exec'd program never inherits more
+than it was explicitly granted. It's the same reason Phase 32 kept
+`pkg` as a shell builtin instead of a separate exec'd binary (see that
+phase's own comment, still in `shell.c` until this phase's edits moved
+it) - there was no mechanism for the shell to delegate any of its own
+broad access to something it execs. Making `cp`/`rm` real, separate
+ring-3 programs meant finally building that mechanism, not working
+around its absence again.
+
+That mechanism is `SYS_EXEC_TRUSTED` (syscall 38, `kernel/arch/x86/
+cpu/syscall.h`/`.c`, `kernel/task/process.h`/`.c`): behaves exactly
+like `SYS_EXEC`, except the new process's `can_open_any_file` is set
+to the *calling* process's own current `can_open_any_file`, not always
+`false`. It's safe by construction, not by convention: an ordinary
+caller has `can_open_any_file == false`, so delegating "false" is a
+no-op identical to plain `SYS_EXEC`; only an already-trusted caller
+(today, only the interactive shell, via `process_exec_as_shell()`) has
+anything real to delegate, and only to the specific programs it
+chooses to launch this way. `userland/libc`'s `sys_exec_trusted()`
+wraps the syscall for ring-3 callers the same way `sys_exec()` already
+does.
+
+This was verified for real, at boot, against a genuine on-disk ELF32
+binary - not asserted as a synthetic in-kernel call. A new kernel-
+compiled ring-3 self-test task, `exec_trust_demo_task()` (`kernel/
+task/exec_trust_demo.c`, launched via a new, deliberately narrow
+`process_create_sandboxed_task_trusted()` that mirrors the existing
+`process_create_sandboxed_task()` but also sets `can_open_any_file =
+true` - built specifically to give this one self-test a real, already-
+trusted caller to exercise the delegation path with, not a general
+replacement for the untrusted-by-default function), execs a small
+verification program, `TPROBE.ELF` (`userland/coreutils/tprobe.c`),
+twice: once via plain `SYS_EXEC` (expected, and confirmed, to fail
+every capability-gated step), once via `SYS_EXEC_TRUSTED` (expected,
+and confirmed, to succeed a full write/read-back/delete/confirm-
+deleted cycle). A new `test_runner.py` assertion,
+`exec_trusted_delegation_passed`, checks for the self-test's own PASS
+line every boot. Finding and fixing this self-test's own "confirm the
+file is really deleted" bug along the way was a genuine, separate
+finding: `SYS_OPEN` on this kernel is deliberately lazy (it only
+claims a handle and records the filename - existence is checked only
+by the first `SYS_READ` against that handle), so the probe's original
+"does a second open still succeed" check was structurally unable to
+detect a deletion; it now actually attempts a read and checks for
+failure.
+
+The four coreutils themselves are the first Rust ring-3 userland
+programs written since `ping-rs` (Phase 33), and follow that phase's
+own proven shape exactly: `#![no_std]#![no_main]`, an `extern "C"`
+`main(argc, argv, envp) -> i32`, built against this project's own
+bare-metal `i686-novaos` Rust sysroot and linked against the existing,
+unmodified C `crt0.o`/`syscall.o`/`stdlib.o` - only each program's own
+logic is Rust, the process-entry and raw `int 0x80` syscall mechanics
+are untouched. They live in the new `userland/coreutils-rs/` directory
+alongside a shared `ffi.rs` (the `extern "C"` syscall bindings all four
+share) and their own `build.sh` (mirrors `ping-rs/build.sh`, looped
+over four programs):
+
+- `ls.rs` - lists every file via the existing `SYS_LIST_FILES` syscall,
+  which already returns "NAME SIZE\n" lines; needs no special
+  capability, runs under plain `SYS_EXEC`.
+- `echo.rs` - joins `argv[1..]` with spaces plus a trailing newline;
+  also runs under plain `SYS_EXEC`.
+- `cp.rs` - the first `cp` this project has ever had, in any ring or
+  language: reads the source file in full into a fixed 256KB buffer
+  via `SYS_OPEN`/`SYS_READ`, then writes it out in one
+  `SYS_WRITE_FILE` call (this kernel has no incremental/append file
+  write, so a whole-file buffer-then-write is the only shape
+  available, not a simplification chosen here). Needs
+  `SYS_EXEC_TRUSTED`.
+- `rm.rs` - the first `rm` this project has ever had: a single
+  `SYS_DELETE_FILE` call. Needs `SYS_EXEC_TRUSTED`.
+
+Two real bugs were caught and fixed before these were considered done:
+`cp.rs`'s first draft passed a plain `&str`'s `.as_ptr()` straight to
+`sys_write()`, which expects a NUL-terminated C string - a real
+memory-safety hazard (`&str` carries no guaranteed trailing NUL), fixed
+by using explicit `b"...\0"` byte-string literals for every static
+message, matching `ping-rs`'s already-proven-correct pattern instead of
+inventing a new helper. And `ls.rs`/`cp.rs`'s `static mut` buffer
+access via `.as_mut_ptr()` tripped the 2024-edition `static_mut_refs`
+lint (that method call implicitly forms a Rust reference to the static
+before decaying it to a pointer); fixed with `core::ptr::addr_of_mut!`
+instead, which never forms that reference.
+
+`userland/ring3-shell/shell.c` now dispatches `ls`/`echo` to
+`LS.ELF`/`ECHO.ELF` via plain `sys_exec()`, and `cat`/`cp`/`rm` to
+`CAT.ELF`/`CP.ELF`/`RM.ELF` via `sys_exec_trusted()` - `cat`'s own
+inline `SYS_OPEN`/`SYS_READ` loop was removed the same way `ls`'s and
+`echo`'s inline bodies were, so all five now genuinely run as separate
+ELF32 processes the shell launches, not logic duplicated inline in the
+shell itself. `cmd_help()` and the command dispatch table were updated
+to match; this file compiles cleanly (verified: `sh userland/ring3-
+shell/build.sh`, zero new warnings - the pre-existing `const char**`
+vs `char**` warning on `sys_exec()`'s signature, already present on the
+untouched `gui`/`ping` dispatch, was fixed on the four commands this
+phase touched but left alone elsewhere, out of this phase's own
+scope). `tools/build-disk-image.sh`'s FAT32 fixture list gained
+`LS.ELF ECHO.ELF CP.ELF RM.ELF`, with a skip-and-warn (not abort) for
+any of the four that aren't present, since not every environment that
+runs this script will have built this project's own Rust sysroot.
+
+Honest scope note on verification in this sandbox specifically: the
+same pre-existing rustc/`compiler_builtins` rlib mismatch that has
+blocked real bare-metal Rust userland/kernel compilation here since
+Phase 33 (confirmed again directly this phase: `sh userland/coreutils-
+rs/build.sh` hits the identical `error[E0786]: found invalid metadata
+files for crate compiler_builtins`, and `rustup toolchain install
+nightly` cannot reach `static.rust-lang.org` through this sandbox's
+network) means the four `.ELF` binaries themselves could not be
+produced here. All four `.rs` source files were instead verified with
+a host-target `rustc --emit=metadata` check (the same technique this
+project's own kernel-Rust work has used since Phase 35, for the same
+reason) and came back with zero errors and zero warnings each, after
+the two fixes above. `tools/build-disk-image.sh` and the boot-test
+suite both ran successfully in this sandbox with all four fixtures
+genuinely absent (the new skip-and-warn logic handled that cleanly),
+and the full 75-assertion suite still shows exactly the same 9 pre-
+existing, environment-caused failures as before this phase (QEMU
+networking, SMP/ACPI, virtio-blk DMA - see Phase 58's own entry) plus
+one new pass (`exec_trusted_delegation_passed`) - no regressions. The
+user's own machine, where this project's Rust sysroot has previously
+built real `.ELF` binaries, is where `sh userland/coreutils-rs/
+build.sh` followed by `make disk.img` will actually produce
+`LS.ELF`/`ECHO.ELF`/`CP.ELF`/`RM.ELF` and let `ls`/`echo`/`cp`/`rm`
+run for real at the shell prompt.
+
+## Phase 60 and beyond
+
+Candidates: extending `SYS_EXEC_TRUSTED`'s delegation beyond
+`can_open_any_file` alone (`allowed_files[]`/`allowed_hosts[]`/
+`can_spawn` could all be delegated the same way, for a shell that
+wants to grant a narrower slice than "everything" to something it
+execs); more coreutils in the same `userland/coreutils-rs/` shape -
+`mv` (rename where possible, copy+delete where not - this kernel has
+no rename syscall yet), `mkdir`/`touch` (this filesystem's FAT32/ext2
+layers support file creation but there's no ring-3 syscall exposing
+directory creation specifically), `wc`, `head`/`tail`, `grep`; making
+`ls` match real coreutils' own default output shape more closely
+(columns, no trailing size on directories, `-l`/`-a` flags) rather
+than the current one-name-and-size-per-line dump inherited from
+`SYS_LIST_FILES`'s own wire format; shell scripting (`;`/`&&`, a
+`.novaosrc`, simple `for`/`if`) now that the shell has a real,
+growing command set worth scripting; gating `SYS_CONNECT` against
+`allowed_hosts[]` the same way `SYS_NET_SEND` already is - the honest
+scope cut Phase 58 named; congestion control (slow start / congestion
+avoidance) for the TCP stack Phase 58 added, currently reliability-
+only; per-driver locking for FAT32/ext2's own shared scratch buffers
+(the current coarse `vfs_lock` is correct but not fine-grained - see
 Phase 57's own entry); the same audit for every other driver's
 internal state, once anything besides the BSP's own idle task/IRQ
 handlers can reach them; whether this kernel's own scheduler safely
@@ -6511,9 +6671,10 @@ cross-process pipe use and a genuine shell `|` operator; signals; a
 versioned, single-source-of-truth syscall ABI header (`kernel/arch/
 x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
 hand-synchronized copies, now three with the socket syscalls added by
-this phase); a build-time check that `kernel_end` covers every section
-in the final binary (Phase 38's own "Known limitations"); wiring
-tools/python's two scripts into a CI workflow; a full ring-3
-compositor/Store port; a UDP-based equivalent sockets surface
-(`SYS_SOCKET`'s own shape already supports it, only `tcp.rs`'s
-connection-oriented half is wired up today).
+Phase 58, and again with `SYS_EXEC_TRUSTED` added by this phase); a
+build-time check that `kernel_end` covers every section in the final
+binary (Phase 38's own "Known limitations"); wiring tools/python's two
+scripts into a CI workflow; a full ring-3 compositor/Store port; a
+UDP-based equivalent sockets surface (`SYS_SOCKET`'s own shape already
+supports it, only `tcp.rs`'s connection-oriented half is wired up
+today).
