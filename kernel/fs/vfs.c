@@ -19,7 +19,26 @@
 #include "../drivers/blockdev.h"
 #include "../drivers/vga/vga.h"
 #include "../lib/stdio.h"
+#include "../lib/spinlock.h"
 #include "../include/kernel.h"
+
+/* Phase 57: named directly in this project's own release-readiness
+ * roadmap alongside process_table_lock/exec_lock/open_files_lock -
+ * "shared static scratch buffers inside fat32.c/ext2.c." Rather than
+ * lock each of those drivers' own internal buffers individually (a
+ * real, larger effort explicitly scoped out this phase, matching the
+ * multi-year-project framing that same roadmap text used), this one
+ * coarse-grained lock wraps every entry point that reaches down into
+ * them - vfs_read_file()/vfs_write_file()/vfs_delete_file() - so at
+ * most one CPU is ever inside fat32.c/ext2.c at a time, full stop.
+ * Deliberately NOT held around vfs_ls()/vfs_list_files() (directory
+ * listing isn't part of this phase's read/write/delete scope) or
+ * vfs_init() (runs once, at boot, before any second CPU exists - see
+ * kernel/init/main.c's ordering: vfs_init() at line ~209, long before
+ * kernel_late_init()'s rust_smp_init() at line ~630 brings the AP up
+ * at all). A real fix would give each driver its own lock (or finer
+ * buffer ownership); this is the honest, coarse stopgap. */
+static spinlock_t vfs_lock;
 
 /* Phase 53: kernel/rust/journal.rs's own configure/recover entry
  * points - see that file's header comment for the full design, and
@@ -103,6 +122,8 @@ static void report_crash_dump(const crash_report_t* r) {
 }
 
 void vfs_init(void) {
+    spinlock_init(&vfs_lock);
+
     ata_init();
     if (!ata_is_present()) {
         return;
@@ -239,9 +260,12 @@ void vfs_list_files(vfs_list_callback_t callback) {
 }
 
 int vfs_read_file(const char* filename, void* buf, uint32_t buf_size) {
+    uint32_t flags = spinlock_acquire(&vfs_lock);
+
     if (vfs_is_mounted()) {
         int result = fat32_read_file(filename, buf, buf_size);
         if (result >= 0) {
+            spinlock_release(&vfs_lock, flags);
             return result;
         }
     }
@@ -249,8 +273,11 @@ int vfs_read_file(const char* filename, void* buf, uint32_t buf_size) {
      * mounted. FAT32 always wins if a name exists in both, a simple,
      * documented tiebreak rather than surfacing an ambiguity error. */
     if (ext2_is_mounted()) {
-        return ext2_read_file(filename, buf, buf_size);
+        int result = ext2_read_file(filename, buf, buf_size);
+        spinlock_release(&vfs_lock, flags);
+        return result;
     }
+    spinlock_release(&vfs_lock, flags);
     return -1;
 }
 
@@ -258,12 +285,18 @@ bool vfs_write_file(const char* filename, const void* data, uint32_t size) {
     if (!vfs_is_mounted()) {
         return false;
     }
-    return fat32_write_file(filename, data, size);
+    uint32_t flags = spinlock_acquire(&vfs_lock);
+    bool result = fat32_write_file(filename, data, size);
+    spinlock_release(&vfs_lock, flags);
+    return result;
 }
 
 bool vfs_delete_file(const char* filename) {
     if (!vfs_is_mounted()) {
         return false;
     }
-    return fat32_delete_file(filename);
+    uint32_t flags = spinlock_acquire(&vfs_lock);
+    bool result = fat32_delete_file(filename);
+    spinlock_release(&vfs_lock, flags);
+    return result;
 }

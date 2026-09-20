@@ -37,6 +37,28 @@
 
 typedef enum {
     PROCESS_UNUSED = 0, /* slot is free */
+    /* Phase 57: a new, transient state - a slot that allocate_slot()
+     * (process.c) has just claimed, under process_table_lock, but
+     * whose caller hasn't finished setting it up (and called
+     * scheduler_add()/set it PROCESS_READY) yet. Exists specifically
+     * to close a real two-CPU race: without it, two CPUs calling
+     * allocate_slot() at the same physical instant could both scan
+     * the table, both find the same UNUSED slot, and both claim it -
+     * a real double-allocation of one process_t to two different
+     * callers. Marking the slot ALLOCATING (not UNUSED, not READY)
+     * the moment it's claimed - all still under the lock - makes the
+     * second CPU's scan correctly skip it, the same way PROCESS_READY/
+     * RUNNING/TERMINATED already made a slot ineligible for
+     * allocate_slot() before this phase. Never itself picked by the
+     * scheduler (kernel/task/scheduler.c's pick_next_locked() only
+     * ever considers PROCESS_READY). If a caller fails after
+     * allocate_slot() succeeds (e.g. process_exec_internal() finding
+     * out-of-memory partway through), the slot is simply left
+     * ALLOCATING forever - matching this kernel's existing, already-
+     * documented "process slots are never actually recycled"
+     * limitation (see process_wait()'s own comment), unchanged by
+     * this phase. */
+    PROCESS_ALLOCATING,
     PROCESS_READY,
     PROCESS_RUNNING,
     PROCESS_TERMINATED,
@@ -126,6 +148,21 @@ typedef struct process {
      * semantics - see process.c's own comments at each call site). */
     uint32_t uid;
     uint32_t gid;
+
+    /* Phase 57: true only for this kernel's one permanently-idle
+     * kernel task (see process_pin_to_bsp()'s own comment below and
+     * kernel/init/main.c's idle_task_entry()) - keeps it off the AP
+     * entirely. idle's own loop body is `hlt` waiting for the *shared*
+     * PIT/IO-APIC timer tick to wake it and have scheduler_on_tick()
+     * preempt it back out - that tick is still routed to the BSP only
+     * (kernel/rust/apic.rs's ioapic_program_isa_redirects(), unchanged
+     * since Phase 56), so an AP that ever picked up idle would `hlt`
+     * forever waiting for an interrupt that can never reach it - a
+     * real deadlock this flag exists specifically to prevent, not a
+     * defensive nicety. False (0, via process_table[]'s own
+     * zero-initialization in process_init()) for every other process,
+     * so ordinary work is free to land on either CPU. */
+    bool bsp_only;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -286,5 +323,14 @@ bool process_login(process_t* p, const char* username, const char* password);
  * account of why, and what a closer match to real sudo's scoping
  * would need. */
 bool process_sudo(process_t* p, const char* password);
+
+/* Phase 57: marks the process with this pid as never eligible to run
+ * on an AP - see process_t's own `bsp_only` comment for exactly why
+ * (today, this kernel's idle task specifically, and only that task).
+ * Kernel-boot-sequence use only (kernel/init/main.c, once, right after
+ * creating idle); no syscall wrapper exists or should - this is an
+ * internal scheduling-safety mechanism, not a general-purpose CPU-
+ * affinity feature. A no-op if `pid` doesn't currently exist. */
+void process_pin_to_bsp(int pid);
 
 #endif

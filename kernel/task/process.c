@@ -20,6 +20,7 @@
 #include "../arch/x86/mm/pmm.h"
 #include "../fs/vfs.h"
 #include "../lib/string.h"
+#include "../lib/spinlock.h"
 #include "../include/kernel.h"
 
 extern void enter_usermode(void);
@@ -33,6 +34,32 @@ extern void syscall_return_point(void);
 static process_t process_table[MAX_PROCESSES];
 static int next_pid = 1;
 
+/* Phase 57: named directly in this project's own release-readiness
+ * roadmap ("process_table[]"). Guards exactly one thing:
+ * allocate_slot()'s scan-then-claim of a free slot, the one genuinely
+ * racy operation two CPUs could perform on this table at the same
+ * physical instant (see PROCESS_ALLOCATING's own comment in
+ * process.h for the exact race this closes). Every other read of
+ * process_table[] in this file (process_wait()'s scan for a pid,
+ * free_user_address_space()/cow_share_address_space() walking a
+ * *specific* process's own page tables) either only ever touches a
+ * process this same CPU already exclusively owns (the currently-
+ * running one) or tolerates a benign, eventually-consistent stale
+ * read (process_wait()'s poll loop just tries again) - deliberately
+ * not locked, to keep this addition as narrow as the actual race,
+ * not a single big table-wide lock for every access. next_pid itself
+ * is only ever incremented from inside a slot a caller already holds
+ * exclusively (after allocate_slot() returns, before anything else
+ * can see that slot) in every existing call site, so it doesn't
+ * independently need this lock either - see PROGRESS.md for the
+ * honest note that a *very* unlucky simultaneous pid assignment
+ * (extremely unlikely given every call site pairs it with a real
+ * kmalloc()/pmm_alloc_frame() first, both now genuinely serializing
+ * via their own locks in practice) remains a narrow, undocumented-
+ * until-now edge this specific lock doesn't close - a real, if minor,
+ * honest gap, not silently swept under the rug. */
+static spinlock_t process_table_lock;
+
 static void copy_name(char* dest, const char* src, size_t dest_size) {
     size_t i = 0;
     while (src[i] != '\0' && i < dest_size - 1) {
@@ -44,14 +71,24 @@ static void copy_name(char* dest, const char* src, size_t dest_size) {
 
 void process_init(void) {
     memset(process_table, 0, sizeof(process_table));
+    spinlock_init(&process_table_lock);
 }
 
 static process_t* allocate_slot(void) {
+    uint32_t flags = spinlock_acquire(&process_table_lock);
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (process_table[i].state == PROCESS_UNUSED) {
+            /* Claim it immediately, still under the lock, so a second
+             * CPU calling allocate_slot() concurrently can never see
+             * this same slot as UNUSED too - see PROCESS_ALLOCATING's
+             * own comment in process.h for the full account of the
+             * race this closes. */
+            process_table[i].state = PROCESS_ALLOCATING;
+            spinlock_release(&process_table_lock, flags);
             return &process_table[i];
         }
     }
+    spinlock_release(&process_table_lock, flags);
     return NULL;
 }
 
@@ -421,6 +458,22 @@ process_t* process_current(void) {
     return scheduler_current();
 }
 
+void process_pin_to_bsp(int pid) {
+    /* Simple linear scan, unlocked - matches process_wait()'s own scan
+     * (see process_table_lock's comment above for why this specific
+     * read doesn't need it): called exactly once, at boot, before the
+     * scheduler or any AP has started (kernel/init/main.c calls this
+     * right after creating idle, both well before scheduler_start()),
+     * so there is no other CPU that could be concurrently mutating
+     * process_table[] at the time this runs. */
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].pid == pid && process_table[i].state != PROCESS_UNUSED) {
+            process_table[i].bsp_only = true;
+            return;
+        }
+    }
+}
+
 /* Writes `len` bytes into a (possibly not physically contiguous)
  * address space at `dest_vaddr`, one physical frame at a time - the
  * same walk-the-page-tables technique elf.c uses to copy segment
@@ -454,6 +507,26 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
     }
 }
 
+/* Phase 57: guards the one shared, mutable static buffer below
+ * (`elf_buffer`) - a real hazard this project's own release-readiness
+ * roadmap didn't name specifically (it's not one of the four examples
+ * given - process_table[]/the PMM bitmap/the heap allocator/"every
+ * driver's own state" - but it's exactly the same *kind* of hazard,
+ * found by reading this function while auditing those). Before this
+ * phase, two CPUs both calling process_exec()/process_exec_with_
+ * files()/process_exec_as_shell() at the same physical instant would
+ * both read their own (different) ELF file into the *same* 2MB
+ * buffer, corrupting whichever load loses the race - a real bug now
+ * that Phase 56 made a second core able to run ring-3 code
+ * concurrently with the first, not previously possible on one core.
+ * Held across the whole read-validate-load sequence (vfs_read_file()
+ * through elf_load()), all of which is bounded, non-blocking kernel
+ * work with no scheduler_yield() anywhere inside it - safe to hold a
+ * spinlock across, unlike do_schedule()'s own switch_context() (see
+ * that function's own comment for why *that* one specifically must
+ * never be called with a lock held). */
+static spinlock_t exec_lock;
+
 static int process_exec_internal(const char* path, const char** argv,
                                   int argc, const char** filenames,
                                   int file_count, bool grant_any_file) {
@@ -470,12 +543,17 @@ static int process_exec_internal(const char* path, const char** argv,
      * would stream this rather than buffer the whole file at once,
      * which vfs_read_file() doesn't support yet - see PROGRESS.md. */
     static uint8_t elf_buffer[2 * 1024 * 1024];
+
+    uint32_t exec_flags = spinlock_acquire(&exec_lock);
+
     int file_size = vfs_read_file(path, elf_buffer, sizeof(elf_buffer));
     if (file_size <= 0) {
+        spinlock_release(&exec_lock, exec_flags);
         kernel_log("[FAULT] process_exec: couldn't read '%s'\n", path);
         return -1;
     }
     if (!elf_validate(elf_buffer, (uint32_t)file_size)) {
+        spinlock_release(&exec_lock, exec_flags);
         kernel_log("[FAULT] process_exec: '%s' is not a valid ELF32 "
                    "executable this loader supports\n", path);
         return -1;
@@ -483,12 +561,14 @@ static int process_exec_internal(const char* path, const char** argv,
 
     process_t* p = allocate_slot();
     if (p == NULL) {
+        spinlock_release(&exec_lock, exec_flags);
         kernel_log("[FAULT] process_exec: process table full\n");
         return -1;
     }
 
     void* kstack = kmalloc(KERNEL_STACK_SIZE);
     if (kstack == NULL) {
+        spinlock_release(&exec_lock, exec_flags);
         kernel_log("[FAULT] process_exec: out of memory (kstack)\n");
         return -1;
     }
@@ -499,11 +579,21 @@ static int process_exec_internal(const char* path, const char** argv,
     uint32_t entry_point;
     if (!elf_load(elf_buffer, (uint32_t)file_size, address_space,
                    &entry_point)) {
+        spinlock_release(&exec_lock, exec_flags);
         kernel_log("[FAULT] process_exec: failed to load '%s'\n", path);
         kfree(kstack);
         free_user_address_space(address_space);
         return -1;
     }
+
+    /* elf_buffer itself is no longer touched past this point - what's
+     * left builds the new process's own stack/register state from
+     * already-copied-out data (entry_point, and argv/argc which never
+     * came from elf_buffer at all), so the lock is released here
+     * rather than held for the rest of this (fairly long) function -
+     * no correctness reason to serialize the parts that don't share
+     * anything. */
+    spinlock_release(&exec_lock, exec_flags);
 
     const int stack_pages = USER_STACK_SIZE / 4096;
     for (int i = 0; i < stack_pages; i++) {

@@ -12,12 +12,34 @@
  * firing while in ring 3 uses garbage as a kernel stack pointer -
  * simplest case is an immediate second (double) fault.
  *
- * There is exactly one TSS, loaded once at boot; the scheduler updates
- * its esp0 field (via tss_set_kernel_stack()) every time it switches
- * to a different process, so esp0 always points at *that* process's
- * own kernel stack. */
+ * Phase 57: previously exactly one TSS, loaded once at boot, shared by
+ * whatever single CPU this kernel ever ran on. Real SMP needs one *per
+ * CPU*: two cores genuinely running different ring-3 processes at the
+ * same physical instant each need their own, independent esp0 (this
+ * CPU's own currently-scheduled process's kernel stack) - one shared
+ * field would have one CPU's ring3->ring0 transition silently load the
+ * *other* CPU's kernel stack pointer, corrupting both. tss_init() now
+ * installs SCHED_MAX_CPUS separate TSS descriptors into the (still
+ * single, shared) GDT in one BSP-only call at boot (see gdt.h's own
+ * GDT_TSS_GATE_INDEX()/GDT_TSS_SELECTOR()); every CPU that will ever
+ * take a ring3->ring0 transition - the BSP and every AP - then loads
+ * its own with tss_load_this_cpu(), and the scheduler updates only its
+ * own slot via the now cpu-indexed tss_set_kernel_stack(). */
 void tss_init(void);
 
-void tss_set_kernel_stack(uint32_t esp0);
+/* Loads (LTR) this CPU's own TSS selector. Must be called once by
+ * every CPU that will ever take a ring3->ring0 transition - the BSP
+ * (kernel/init/main.c's kernel_early_init(), right after tss_init())
+ * and every AP (kernel/rust/apic.rs's rust_ap_main(), once it knows
+ * its own scheduler CPU index) - always *after* tss_init() has already
+ * installed every CPU's descriptor into the shared GDT. */
+void tss_load_this_cpu(uint8_t cpu_index);
+
+/* Updates cpu_index's own esp0 field only - never any other CPU's.
+ * `cpu_index >= SCHED_MAX_CPUS` is silently ignored (fail safe; every
+ * real caller already validated its own index via
+ * rust_smp_current_cpu_index() before reaching here - see
+ * kernel/task/scheduler.c). */
+void tss_set_kernel_stack(uint8_t cpu_index, uint32_t esp0);
 
 #endif

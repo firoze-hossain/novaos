@@ -2,6 +2,7 @@
 #define ARCH_X86_CPU_GDT_H
 
 #include "../../../include/types.h"
+#include "../../../include/smp.h"
 
 /* Segment selectors. Ring 3 (user) selectors are defined now, ahead of
  * the userspace/process work in Phase 4, so the scheduler and syscall
@@ -10,7 +11,19 @@
 #define GDT_KERNEL_DATA 0x10
 #define GDT_USER_CODE   (0x18 | 3)
 #define GDT_USER_DATA   (0x20 | 3)
-#define GDT_TSS_SELECTOR 0x28
+
+/* Phase 57: previously exactly one fixed TSS descriptor (gate 5,
+ * selector 0x28) shared by whatever single CPU this kernel ever ran
+ * on. Real SMP needs one TSS *per CPU* (see tss.h's own updated
+ * comment for why), so gates 5..5+SCHED_MAX_CPUS-1 are now each CPU's
+ * own descriptor, all installed into this one shared GDT by a single
+ * BSP-only tss_init() call at boot, before any AP exists - every CPU
+ * still shares the same GDT (this kernel has exactly one, as before),
+ * it just now has more than one TSS-shaped entry in it to choose from.
+ * GDT_TSS_SELECTOR(0) is exactly the old fixed 0x28 value, so the BSP
+ * ends up loading the identical selector it always did. */
+#define GDT_TSS_GATE_INDEX(cpu) (5 + (cpu))
+#define GDT_TSS_SELECTOR(cpu) ((uint16_t)(GDT_TSS_GATE_INDEX(cpu) * 8))
 
 void gdt_init(void);
 

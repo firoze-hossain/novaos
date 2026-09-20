@@ -119,6 +119,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ OK ] GDT initialized\n");
 
     tss_init();
+    /* Phase 57: tss_init() now installs one TSS descriptor per
+     * schedulable CPU (see tss.h's own comment) but no longer loads
+     * any of them itself - every CPU that will ever take a
+     * ring3->ring0 transition must LTR its own. The BSP is CPU 0 by
+     * this project's own registration convention (see
+     * kernel/rust/apic.rs's rust_smp_init(), which registers the BSP
+     * unconditionally before anything else); each AP loads its own in
+     * turn, later, from rust_ap_main(). */
+    tss_load_this_cpu(0);
     kernel_log("[ OK ] TSS installed\n");
 
     idt_init();
@@ -175,9 +184,10 @@ void kernel_late_init(void) {
      * returns a negative code) leaves every existing PIC code path in
      * irq.c completely untouched, exactly as Phase 55 left it - see
      * kernel/rust/apic.rs's own module-level doc comment for the full
-     * account of what this phase does and, just as deliberately,
-     * does not attempt (a real SMP-aware scheduler chief among the
-     * latter). */
+     * account of what Phase 56 did and, just as deliberately, did not
+     * yet attempt - a real SMP-aware scheduler chief among the
+     * latter, since built out by Phase 57 (see kernel/task/
+     * scheduler.c's own header comment). */
     {
         extern int rust_smp_init(void);
         int aps_online = rust_smp_init();
@@ -1304,7 +1314,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     firstrun_check_and_run();
 
     process_init();
-    process_create_kernel_task("idle", idle_task_entry);
+    int idle_pid = process_create_kernel_task("idle", idle_task_entry);
+    /* Phase 57: idle must never run on an AP - see process_t's own
+     * bsp_only comment in process.h for the exact deadlock this
+     * avoids (idle's hlt loop only ever wakes back up via a timer
+     * interrupt that's routed to the BSP only). */
+    process_pin_to_bsp(idle_pid);
     /* Phase 30: NovaOS now boots into a genuine ring-3 shell via
      * process_exec_as_shell() instead of running a shell as a
      * ring-0 kernel task (userland/shell/shell.c, Phase 29's

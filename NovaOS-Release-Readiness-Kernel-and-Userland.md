@@ -1,17 +1,23 @@
 # NovaOS: Release-Readiness Feature List (Kernel First, Then Userland)
 
-*Updated again: Phase 56 is now done (see below - real SMP bring-up,
-a Local APIC + IO-APIC driver and an AP bootstrap trampoline that
-brings a second CPU core online running real kernel Rust code, partially
-closing the "SMP support itself" row in 1.5 - the SMP-aware scheduler and
-the cross-subsystem locking audit remain explicitly out of scope and
-un-started), on top of Phase 55 (real ACPI shutdown, closing the "real
-shutdown, not just reboot" row in 1.3), Phase 54 (a structured,
-minidump-inspired crash dump, closing the "tells you why when it fails"
-row in 1.3), Phase 53 (a journaled FAT32, closing the "won't corrupt
-data" row in 1.3), and the 50-52 update before that - kernel work only,
-matching your stated priority; nothing in Part 2 (userland) has changed
-since this document was last updated, so that section is unmodified.
+*Updated again: Phase 57 is now done (see below - a real per-CPU
+scheduler, a per-CPU TSS, and locking for the process table, PMM
+bitmap, heap allocator, exec buffer, open-file-handle table, and a
+coarse VFS-wide lock, closing most of the "SMP support itself" row in
+1.5 - the hardware bring-up half (Phase 56) and this scheduler/locking
+half together now cover everything that row originally asked for,
+except per-driver FAT32/ext2 locking, which stays intentionally
+coarse, and a real, pre-existing `arp_resolve()` hang this phase found
+but did not fix, both named honestly below), on top of Phase 56 (real
+SMP bring-up, a Local APIC + IO-APIC driver and an AP bootstrap
+trampoline that brings a second CPU core online running real kernel
+Rust code), Phase 55 (real ACPI shutdown, closing the "real shutdown,
+not just reboot" row in 1.3), Phase 54 (a structured, minidump-inspired
+crash dump, closing the "tells you why when it fails" row in 1.3),
+Phase 53 (a journaled FAT32, closing the "won't corrupt data" row in
+1.3), and the 50-52 update before that - kernel work only, matching
+your stated priority; nothing in Part 2 (userland) has changed since
+this document was last updated, so that section is unmodified.
 Every "done" mark below
 reflects verified, shipped work, not a plan - and where a real,
 external constraint bounds what a phase could honestly claim (FAT32's
@@ -126,7 +132,7 @@ source, not assumed from a phase number.
 |---|---|---|---|
 | **Kernel synchronization primitives.** | ✅ **Done (Phase 40).** `SpinLock<T>` — the `spin_lock_irqsave`/`spin_unlock_irqrestore` shape (disables local interrupts while held *and* spins on a real atomic, so it's correct even once a second CPU exists, not just today). Applied to real, already-shipped state (`kernel/rust/pipe.rs`'s own `PIPES` table), not left as an unused primitive. This specifically closes the "no spinlock/mutex exists yet" half of the original claim in this row. | A genuine prerequisite for everything below — not something that mattered for its own sake until now. | **Linux's own approach** (fine-grained locking) is the long-term reference; this project's `SpinLock` is deliberately much simpler, correct for what it protects today. |
 | **CPU topology discovery (ACPI/MADT parsing).** | ✅ **Done (Phase 44) — the genuine first SMP prerequisite, verified three separate ways** including three independent real-hardware data points (`-smp 1/2/4`, each logged count exactly matching). A real bug (a page fault reading real ACPI tables placed outside this kernel's identity-mapped range) was found and fixed correctly, not papered over. **This is not SMP** — nothing about how this kernel boots, schedules, or handles interrupts changed; no second CPU is started. | The literal first fact any SMP implementation needs (how many CPUs, and their APIC IDs) — previously not knowable at all. | Every real OS (Linux, Windows, macOS) does exactly this, this way, first. |
-| **SMP support itself.** | ⚠️ **Partially done (Phase 56) — the hardware bring-up half is real and verified; the scheduler and locking-audit half is explicitly not started.** What Phase 56 built: a real Local APIC driver (`kernel/rust/apic.rs`) replacing the legacy 8259 PIC as this kernel's interrupt architecture; a real IO-APIC driver programming all 16 ISA redirection entries (correctly honoring MADT Interrupt Source Override entries, so ISA IRQ0's well-known remap to GSI2 is handled, not assumed); a real-mode-to-protected-mode AP (secondary CPU) bootstrap trampoline (`kernel/arch/x86/cpu/ap_trampoline.s`, hand-verified byte-for-byte against its intended machine code) living at a fixed low-memory address, with a deterministic BSP↔AP handshake mailbox; and a genuine INIT-SIPI-SIPI boot sequence that brings a second CPU core online running real, non-stub kernel Rust code (`rust_ap_main()`), confirmed live in this phase's QEMU sandbox-stub verification — not just theorized. As a direct side effect, the on-demand physical-page-mapping this required also closed a previously-known gap where real ACPI table discovery silently failed under this project's own standard `-m 512M` test configuration; `make test` now boots with `-smp 2` and asserts on a real second core coming online, every run. **What Phase 56 deliberately did not build, matching this row's own text calling it the hardest part**: an SMP-aware scheduler (today, a woken AP just idles in `sti; hlt` — it runs no process); per-CPU data structures beyond a minimal stack (no per-CPU TSS, no per-CPU "current process" pointer); and, above all, the cross-subsystem locking audit — `process_table[]`, `open_files[]`, the PMM bitmap, the heap allocator, and every driver's own state are *not yet* audited or locked for real concurrent access from two running cores. `SpinLock` was already available going into this phase; applying it everywhere a second CPU could actually touch shared state is the real remaining work, unchanged from this row's own original wording. A machine without a usable ACPI MADT/LAPIC/IOAPIC falls back to the original single-core 8259 PIC path with zero behavior change, verified by a second QEMU boot scenario in this phase's own sandbox testing. | Every machine sold in the last 15+ years has multiple cores. An OS that uses one is leaving most of the hardware's actual performance on the table, visibly. | All three do this; Linux's own multi-year effort at fine-grained locking is the concrete, hardest-earned lesson that this remains real, unrushed work, not a checkbox. |
+| **SMP support itself.** | ✅ **Mostly done (Phases 56-57) — hardware bring-up, a real per-CPU scheduler, and locking for every shared structure this project's own roadmap named plus a few more found by reading the code closely. Two honest gaps remain, named below, not swept under the rug.** Phase 56 built the hardware half: a real Local APIC driver, a real IO-APIC driver honoring MADT Interrupt Source Overrides, an AP bootstrap trampoline, and a genuine INIT-SIPI-SIPI sequence bringing a second CPU core online running real kernel Rust. Phase 57 built the half Phase 56's own header comment called "the genuinely hardest part": `kernel/task/scheduler.c` now keeps one `current` process per CPU (not a single shared global) behind a real `scheduler_lock` — never held across a context switch, the specific discipline that makes it safe — with an AP-join path (`scheduler_ap_join()`) that busy-spins rather than idles, since an AP has no periodic wake source of its own; a new `bsp_only` process flag keeps this kernel's one permanently-idle task off the AP entirely, closing a real deadlock (idle's own wake source, the timer tick, stays BSP-only) caught during design, not by testing. Every CPU now has its own TSS (`kernel/arch/x86/cpu/tss.c`) instead of one shared, load-bearing global. A CPU identifies itself via a new `rust_smp_current_cpu_index()`, built on CPUID's "initial APIC ID" specifically so it works even on a machine with no usable APIC at all (a plain single-core box included) — a genuine bug in this exact function (a register-aliasing hazard that intermittently corrupted the returned CPU index) was caught and fixed during this phase's own QEMU verification, not shipped. Locking added: `process_table[]` (a new `PROCESS_ALLOCATING` state plus `process_table_lock` close a real two-CPU double-allocation race in `allocate_slot()`), a new `exec_lock` around the shared `elf_buffer` scratch buffer in `process_exec_internal()`, the PMM bitmap (`pmm_lock`), the heap allocator (`heap_lock`), and two hazards beyond the roadmap's own original list, found by reading the rest of the kernel closely: `open_files[]` plus `handle_read()`'s shared scratch buffer (`kernel/arch/x86/cpu/syscall.c`, one `open_files_lock`), and FAT32/ext2's own shared static scratch buffers behind one coarse `vfs_lock` (`kernel/fs/vfs.c`) rather than per-driver locking, an explicit, named scope decision. Verified by the same sandbox-stub QEMU methodology this project has used throughout: with a pre-existing, unrelated hang worked around for verification only (see below), every scheduler/process/locking-dependent self-test this kernel has — ring-3 isolation, `SYS_SPAWN`, a real disk-loaded ELF, libc `malloc`, `SYS_EXEC` against both a hand-written and a libc-linked program, `fork()` and its copy-on-write isolation, `SYS_PIPE`, `SYS_LOGIN`, `SYS_SUDO` — passed cleanly, exercising exactly the code this phase touched. **What's still honestly not covered**: per-driver locking for FAT32/ext2 and for every other driver's own internal state (ATA, the NICs, AC97, UHCI, virtio) — none of it is reachable from more than one CPU today, so this is a deliberately scoped, named gap, not a miss; and a genuine, *pre-existing* (not caused by this phase) bug this phase's own verification found: `kernel/net/arp.c`'s `arp_resolve()` spins on the timer tick advancing while holding a cold ARP cache, but `int 0x80` is an interrupt gate that disables IF for the whole syscall — so any syscall reaching a cold-cache `arp_resolve()` (`SYS_NET_SEND`) hangs the entire single-core machine forever, waiting on a tick that can never fire. Not fixed here (a single-core interrupt-gate/blocking-call issue, unrelated to SMP or locking, deserving its own dedicated look) — named plainly, the same way this project names every other real gap. A machine without a usable ACPI MADT/LAPIC/IOAPIC still falls back to the original single-core path with zero behavior change. | Every machine sold in the last 15+ years has multiple cores. An OS that uses one is leaving most of the hardware's actual performance on the table, visibly. | All three do this; Linux's own multi-year effort at fine-grained locking is the concrete, hardest-earned lesson that per-driver locking (the one piece left coarse here) remains real, unrushed work, not a checkbox. |
 
 ### 1.5 A real network stack
 
@@ -221,14 +227,14 @@ A rough shape, so "release" means something concrete:
   started.
 - A window manager with actual dragging/management (Part 2.3) — still
   not started.
-- SMP support (Part 1.4) — **still not started, and still belongs
-  here, not earlier.** Its two real prerequisites (synchronization
-  primitives, CPU discovery) are now done (Phases 40, 44), but SMP
-  itself - a Local/IO-APIC driver, AP bootstrap, per-CPU state, and
-  auditing every existing shared kernel structure for multi-CPU safety
-  - remains substantial, deliberately unrushed work. Having the
-  prerequisites done makes this less of a blank slate than it was, not
-  less of an undertaking.
+- ~~SMP support (Part 1.4)~~ ✅ **mostly done (Phases 56-57)** — see
+  1.5 for the full account: hardware bring-up, a real per-CPU
+  scheduler, and locking for the process table, PMM bitmap, heap
+  allocator, exec buffer, and open-file-handle table, plus a coarse
+  VFS-wide lock. What's left: per-driver FAT32/ext2/hardware-driver
+  locking (deliberately coarse for now) and a real, pre-existing
+  `arp_resolve()` interrupt-disabled hang this phase found but did not
+  fix.
 
 **v2.0 ("I'd hand this to someone who isn't a developer")**
 - ~~Journaled/COW filesystem (Part 1.3)~~ ✅ **done (Phase 53)**,

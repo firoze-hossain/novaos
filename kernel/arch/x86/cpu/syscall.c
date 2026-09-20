@@ -31,6 +31,7 @@
 #include "../../task/greeter_task.h"
 #include "../../lib/string.h"
 #include "../../lib/stdio.h"
+#include "../../lib/spinlock.h"
 #include "../../include/kernel.h"
 #include "../../drivers/video/vga_graphics.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -64,6 +65,18 @@ typedef struct {
 } open_file_t;
 
 static open_file_t open_files[MAX_OPEN_FILES];
+
+/* Phase 57: guards the whole open_files[] table AND handle_read()'s
+ * shared `scratch` buffer below - both are genuinely reachable from
+ * two CPUs at once now (any ring-3 process on either CPU can be
+ * mid-syscall at the same physical instant). Coarse-grained on
+ * purpose: this table is tiny (MAX_OPEN_FILES=8) and every critical
+ * section under this lock is short, plain memory work with no
+ * blocking call inside it (vfs_read_file() itself is protected
+ * separately by vfs.c's own vfs_lock - see that file), so one lock
+ * for the whole table is the honest, simple choice rather than a
+ * finer-grained per-slot scheme this phase doesn't need. */
+static spinlock_t open_files_lock;
 
 /* Phase 36: kernel/rust/pipe.rs's exported functions - see that
  * file's own doc comments for the full contract of each. Declared
@@ -124,6 +137,7 @@ void syscall_init(void) {
      * instant user code tried `int 0x80` - this is the one interrupt
      * vector deliberately opened up to ring 3. */
     idt_set_gate(SYSCALL_VECTOR, (uint32_t)isr128, GDT_KERNEL_CODE, 0xEE);
+    spinlock_init(&open_files_lock);
 }
 
 static void handle_open(registers_t* regs) {
@@ -137,6 +151,8 @@ static void handle_open(registers_t* regs) {
         return;
     }
 
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+
     int slot = -1;
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
         if (!open_files[i].in_use) {
@@ -145,11 +161,16 @@ static void handle_open(registers_t* regs) {
         }
     }
     if (slot < 0) {
+        spinlock_release(&open_files_lock, flags);
         kernel_log("[FAULT] SYS_OPEN: open file table full\n");
         regs->eax = (uint32_t)-1;
         return;
     }
 
+    /* Claimed immediately, still under the lock, so a second CPU
+     * calling handle_open() at the same physical instant can never
+     * see this same slot as free too - the same scan-then-claim race
+     * process.c's allocate_slot() closes for process_table[]. */
     open_files[slot].in_use = true;
     open_files[slot].owner_pid = p->pid;
     open_files[slot].kind = OPEN_KIND_VFS;
@@ -161,10 +182,21 @@ static void handle_open(registers_t* regs) {
     }
     open_files[slot].filename[i] = '\0';
 
+    spinlock_release(&open_files_lock, flags);
+
     kernel_log("[SYSCALL] pid %d SYS_OPEN('%s') -> handle %d (capability "
                "granted)\n", p->pid, filename, slot);
     regs->eax = (uint32_t)slot;
 }
+
+/* Phase 57: shared across every caller of handle_read() below -
+ * genuinely reachable from two CPUs at once now, so it needs the same
+ * open_files_lock that protects the table itself, held across the
+ * whole read-then-slice sequence (not just the table lookup): two
+ * processes calling SYS_READ at the same physical instant, unlocked,
+ * could interleave their vfs_read_file() calls into this one buffer
+ * and each copy out a slice of the OTHER process's file. */
+static uint8_t read_scratch[4096];
 
 static void handle_read(registers_t* regs) {
     process_t* p = process_current();
@@ -172,8 +204,11 @@ static void handle_read(registers_t* regs) {
     void* buf = (void*)regs->ecx;
     uint32_t max_len = regs->edx;
 
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use ||
         open_files[handle].owner_pid != (p != NULL ? p->pid : -1)) {
+        spinlock_release(&open_files_lock, flags);
         kernel_log("[SECURITY] pid %d SYS_READ with an invalid or "
                    "not-owned handle %d\n", p != NULL ? p->pid : -1, handle);
         regs->eax = (uint32_t)-1;
@@ -187,9 +222,13 @@ static void handle_read(registers_t* regs) {
          * return-value contract (in particular, -2 means "would
          * block", not an error - SYS_READ passes it through to the
          * caller unchanged, the same way it already passes through
-         * -1 for a real error). */
-        regs->eax = (uint32_t)rust_pipe_read(open_files[handle].pipe_id,
-                                              (uint8_t*)buf, max_len);
+         * -1 for a real error). rust_pipe_read() has its own
+         * independent locking (see pipe.rs) - open_files_lock only
+         * needs to protect the handle-table lookup that got us here,
+         * not the pipe itself, so it's released before calling out. */
+        int pipe_id = open_files[handle].pipe_id;
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)rust_pipe_read(pipe_id, (uint8_t*)buf, max_len);
         return;
     }
 
@@ -199,10 +238,10 @@ static void handle_read(registers_t* regs) {
      * files this is exercised against; a real implementation would
      * want the underlying vfs_read_file() to support an offset
      * directly instead of always reading from the start. */
-    static uint8_t scratch[4096];
-    int total = vfs_read_file(open_files[handle].filename, scratch,
-                               sizeof(scratch));
+    int total = vfs_read_file(open_files[handle].filename, read_scratch,
+                               sizeof(read_scratch));
     if (total < 0) {
+        spinlock_release(&open_files_lock, flags);
         regs->eax = (uint32_t)-1;
         return;
     }
@@ -211,9 +250,10 @@ static void handle_read(registers_t* regs) {
                               ? (uint32_t)total - open_files[handle].offset
                               : 0;
     uint32_t to_copy = (remaining < max_len) ? remaining : max_len;
-    memcpy(buf, scratch + open_files[handle].offset, to_copy);
+    memcpy(buf, read_scratch + open_files[handle].offset, to_copy);
     open_files[handle].offset += to_copy;
 
+    spinlock_release(&open_files_lock, flags);
     regs->eax = to_copy;
 }
 
@@ -223,8 +263,11 @@ static void handle_write_handle(registers_t* regs) {
     const void* buf = (const void*)regs->ecx;
     uint32_t len = regs->edx;
 
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use ||
         open_files[handle].owner_pid != (p != NULL ? p->pid : -1)) {
+        spinlock_release(&open_files_lock, flags);
         kernel_log("[SECURITY] pid %d SYS_WRITE_HANDLE with an invalid or "
                    "not-owned handle %d\n", p != NULL ? p->pid : -1, handle);
         regs->eax = (uint32_t)-1;
@@ -234,12 +277,18 @@ static void handle_write_handle(registers_t* regs) {
     if (open_files[handle].kind != OPEN_KIND_PIPE_WRITE) {
         /* Explicit, honest scope limit for this phase - see this
          * syscall's own comment in syscall.h. */
+        spinlock_release(&open_files_lock, flags);
         regs->eax = (uint32_t)-1;
         return;
     }
 
-    regs->eax = (uint32_t)rust_pipe_write(open_files[handle].pipe_id,
-                                           (const uint8_t*)buf, len);
+    int pipe_id = open_files[handle].pipe_id;
+    spinlock_release(&open_files_lock, flags);
+
+    /* rust_pipe_write() has its own independent locking (see
+     * pipe.rs) - released open_files_lock before calling out, same
+     * reasoning as handle_read()'s pipe-read path above. */
+    regs->eax = (uint32_t)rust_pipe_write(pipe_id, (const uint8_t*)buf, len);
 }
 
 /* Phase 47: SYS_LOGIN/SYS_GETUID - see syscall.h's own comment on each
@@ -317,6 +366,8 @@ static void handle_pipe(registers_t* regs) {
         return;
     }
 
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+
     int read_slot = -1, write_slot = -1;
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
         if (!open_files[i].in_use) {
@@ -329,27 +380,42 @@ static void handle_pipe(registers_t* regs) {
         }
     }
     if (read_slot < 0 || write_slot < 0) {
+        spinlock_release(&open_files_lock, flags);
         kernel_log("[FAULT] SYS_PIPE: open file table full\n");
         regs->eax = (uint32_t)-1;
         return;
     }
 
+    /* Claim both slots immediately, still under the lock - same
+     * scan-then-claim race as handle_open() above, just for two slots
+     * at once. */
+    open_files[read_slot].in_use = true;
+    open_files[read_slot].owner_pid = p->pid;
+    open_files[write_slot].in_use = true;
+    open_files[write_slot].owner_pid = p->pid;
+
+    spinlock_release(&open_files_lock, flags);
+
     int pipe_id = rust_pipe_create();
     if (pipe_id < 0) {
+        /* Roll back the claim - rust_pipe_create() failing is rare
+         * (out of pipe slots) but leaving these two marked in_use
+         * forever would leak them. */
+        uint32_t rollback_flags = spinlock_acquire(&open_files_lock);
+        open_files[read_slot].in_use = false;
+        open_files[write_slot].in_use = false;
+        spinlock_release(&open_files_lock, rollback_flags);
         kernel_log("[FAULT] SYS_PIPE: no free pipe slots\n");
         regs->eax = (uint32_t)-1;
         return;
     }
 
-    open_files[read_slot].in_use = true;
-    open_files[read_slot].owner_pid = p->pid;
+    flags = spinlock_acquire(&open_files_lock);
     open_files[read_slot].kind = OPEN_KIND_PIPE_READ;
     open_files[read_slot].pipe_id = pipe_id;
-
-    open_files[write_slot].in_use = true;
-    open_files[write_slot].owner_pid = p->pid;
     open_files[write_slot].kind = OPEN_KIND_PIPE_WRITE;
     open_files[write_slot].pipe_id = pipe_id;
+    spinlock_release(&open_files_lock, flags);
 
     out[0] = read_slot;
     out[1] = write_slot;
@@ -362,15 +428,30 @@ static void handle_close(registers_t* regs) {
     process_t* p = process_current();
     int handle = (int)regs->ebx;
 
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+
     if (handle >= 0 && handle < MAX_OPEN_FILES && open_files[handle].in_use &&
         open_files[handle].owner_pid == (p != NULL ? p->pid : -1)) {
-        if (open_files[handle].kind == OPEN_KIND_PIPE_READ) {
-            rust_pipe_close(open_files[handle].pipe_id, 1);
-        } else if (open_files[handle].kind == OPEN_KIND_PIPE_WRITE) {
-            rust_pipe_close(open_files[handle].pipe_id, 0);
-        }
+        open_kind_t kind = open_files[handle].kind;
+        int pipe_id = open_files[handle].pipe_id;
         open_files[handle].in_use = false;
+        spinlock_release(&open_files_lock, flags);
+
+        /* rust_pipe_close() has its own independent locking - called
+         * after releasing open_files_lock, same reasoning as every
+         * other pipe.rs call site above. The slot itself is already
+         * freed above, under the lock, so no other CPU can claim this
+         * handle number for a new open while this pipe teardown is
+         * still in flight. */
+        if (kind == OPEN_KIND_PIPE_READ) {
+            rust_pipe_close(pipe_id, 1);
+        } else if (kind == OPEN_KIND_PIPE_WRITE) {
+            rust_pipe_close(pipe_id, 0);
+        }
+        return;
     }
+
+    spinlock_release(&open_files_lock, flags);
 }
 
 static void handle_read_key(registers_t* regs) {

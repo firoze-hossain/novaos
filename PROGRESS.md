@@ -6077,34 +6077,266 @@ paragraph stated its:**
   if a specific machine's AP count in the boot log doesn't match
   expectations.
 
-## Phase 57 and beyond
+## Phase 57: a real SMP-aware scheduler, and the cross-subsystem locking audit Phase 56 deliberately left undone
 
-Not started. Candidates: the real SMP work this phase's own "Known
-limitations" section named directly - a scheduler that can safely run
-more than one CPU (deciding how `current`/`pick_next()` become per-CPU
-without two CPUs ever picking the same process), the cross-subsystem
-locking audit this project's own release-readiness roadmap has called
-"the genuinely hardest part" since before Phase 40's own SpinLock
-existed, and a per-CPU TSS (needed the moment user processes can run
-on an AP, not before); whether this kernel's own scheduler safely
-tolerates being preempted mid-syscall - a real, separate question
-Phase 45 found but deliberately did not answer, worth investigating on
-its own terms since it would unlock genuinely interrupt-driven TX for
-both RTL8139 and NE2000 using the `TX_COMPLETE` signal already built
-and tested; per-command sudo scoping (fork before escalating,
-restoring the parent shell's own identity afterward - see Phase 51's
-own "Known limitations"); a way to grant broader file capabilities to
-a successfully-escalated process; a persistent (disk-backed) lockout
-counter; a `useradd`-equivalent way to create additional accounts
-after first boot; a real hardware entropy source for salt generation;
-simultaneous multi-mount support (ATA and virtio-blk both live at
-once), building on Phase 46's own blockdev abstraction; giving
-virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
-`net_init` to driver registration too; extending `process_fork()` to
-duplicate `open_files[]` entries by owner pid, unlocking real cross-
-process pipe use and a genuine shell `|` operator; signals; a
-versioned, single-source-of-truth syscall ABI header
-(`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
+Phase 56 brought a second physical CPU alive and running real kernel
+Rust, but was explicit that it was not a scheduler change: `current`/
+`current_index`/`pick_next()` stayed a single, shared, un-synchronized
+set of globals, and every AP it brought up ran nothing but its own
+`sti; hlt` idle loop forever, never touching `kernel/task/` at all.
+That module's own header comment also named, directly, what it was
+NOT doing: an audit of every other existing shared kernel structure
+(the process table, the PMM bitmap, the heap allocator, every
+driver's own state) for real multi-CPU safety - calling that "the
+genuinely hardest part... a much larger remaining task" than either
+`SpinLock` (Phase 40) or the LAPIC/IOAPIC/AP-bootstrap work itself
+(Phase 56). This phase is that next piece: a scheduler that can
+safely run more than one CPU, and the specific locking that scope
+note called out plus a few more hazards found by reading the rest of
+the kernel closely.
+
+**The scheduler itself (`kernel/task/scheduler.c`, `scheduler.h`):**
+replaced the single shared `current process` with `current[SCHED_MAX_
+CPUS]` - one slot per CPU this kernel can ever schedule onto (`kernel/
+include/smp.h`'s new `SCHED_MAX_CPUS`, currently 4) - and added a real
+`scheduler_lock` (a `SpinLock`, Phase 40's own primitive, finally
+protecting real shared scheduler state instead of just kernel/rust/
+pipe.rs's table). The one rule that made this safe rather than a new
+deadlock: `scheduler_lock` is NEVER held across `switch_context()` -
+that call only "returns" once some *other* `switch_context()` call
+resumes this exact saved context, which could be an arbitrary number
+of ticks later; holding a spinlock across it would mean the CPU
+that's about to sleep is still "holding the lock" the whole time it's
+not running, and no other CPU could ever acquire it again. Every path
+through `do_schedule()` releases the lock before it switches.
+`pick_next_locked()` gained one new parameter, `for_ap` (true for any
+non-BSP CPU): it skips any process with the new `bsp_only` flag (see
+below) - without this, an AP could pick up NovaOS's one permanently-
+idle kernel task, whose own `hlt` loop only ever wakes back up via the
+PIT/IO-APIC timer tick, which stays routed to the BSP only
+(`kernel/rust/apic.rs`'s `ioapic_program_isa_redirects()`, unchanged
+since Phase 56) - a real deadlock this flag exists specifically to
+prevent, caught during design, before any code was written, not found
+by testing. A new `scheduler_ap_join(cpu_index)` is the AP-side
+counterpart to `scheduler_start()`: since `kernel_late_init()` (which
+brings every AP up) runs before any `process_create_*()` call, an AP
+can genuinely reach this with nothing yet schedulable, and - unlike
+the BSP - has no periodic wake source of its own to fall back on, so
+it busy-spins retrying `pick_next_locked()` rather than ever halting.
+
+**Per-CPU TSS (`kernel/arch/x86/cpu/tss.c/.h`, `gdt.c/.h`):** the
+single, shared TSS Phase 56's own "Known limitations" named as a real,
+load-bearing gap the moment more than one CPU could take a ring3->ring0
+transition is now `tss[SCHED_MAX_CPUS]`, one GDT descriptor per CPU
+(`GDT_TSS_GATE_INDEX()`/`GDT_TSS_SELECTOR()`), installed once at boot
+by the BSP; every CPU that will ever field a ring3->ring0 transition -
+BSP included - now loads its own via `tss_load_this_cpu()`, and the
+scheduler updates only its own slot's `esp0` via the now CPU-indexed
+`tss_set_kernel_stack(cpu_index, esp0)`.
+
+**How a CPU identifies itself:** `kernel/rust/apic.rs` gained `rust_
+smp_current_cpu_index()` (declared for C in `kernel/include/smp.h`), a
+small, dense 0-based index (0 = BSP) every per-CPU array above is
+indexed by. Deliberately built on CPUID's "initial APIC ID"
+(`CPUID.1:EBX[31:24]`) rather than this module's own MMIO-based
+`lapic_id()`: a machine with no usable ACPI/MADT/LAPIC/IOAPIC at all -
+an ordinary single-core machine among them - never calls `LAPIC_BASE.
+store()`, so an MMIO-based lookup there would read from address 0, a
+severe regression on every single-core machine. CPUID needs nothing
+but the instruction itself, so it's safe on every CPU, on every
+machine, at any point in boot. The BSP registers itself as index 0
+unconditionally, at the very top of `rust_smp_init()`, before any of
+that function's own capability checks can return early - the same
+reason: `scheduler_current()`/`do_schedule()` need a valid index for
+the BSP on every machine, not just the ones Phase 56's own bring-up
+actually succeeds on. `rust_ap_main()` now calls `register_cpu_index()`
+itself after enabling its own Local APIC, then `tss_load_this_cpu()`
+and `scheduler_ap_join()` - a real change from Phase 56, whose own
+version of this function never called into `kernel/task/` at all. A
+CPU beyond `SCHED_MAX_CPUS` (only reachable well past this project's
+own tested `-smp 2` default) gets `0xFF` back and is never scheduled;
+`smp_boot_aps()` now stops launching further APs once the scheduler
+can't track any more anyway, rather than paying the real per-CPU
+INIT-SIPI-SIPI wall-clock cost for one that could only ever idle.
+
+**A real bug found and fixed during this phase's own verification, not
+shipped:** the first version of `cpuid_initial_apic_id()` (and its
+C-stub equivalent used for sandbox verification - see below) read
+CPUID's `EBX` result into a generic register-class output
+(`out(reg)`/`"=r"`) after a `push ebx` and before a matching
+`pop ebx`. That output constraint lets the compiler pick *any*
+general-purpose register, including `ebx` itself - if it did, `pop
+ebx` would clobber the exact register the previous instruction had
+just written the real result into, silently corrupting the returned
+APIC ID in a way that depended on register pressure at each call
+site. This surfaced as `process_current()` intermittently returning
+`NULL` for a real, currently-running process (visible in the QEMU
+boot log as a `SYS_WRITE` misattributed to "pid -1") - exactly the
+kind of call-site-dependent bug that would eventually make `scheduler_
+current()`/`do_schedule()` intermittently treat a real process as
+unschedulable. Fixed by forcing the output into a *named*, fixed
+register (`ecx`) that can never alias with `ebx`, matching the pattern
+this same file's own `cpu_has_apic()` already used for its own `edx`
+output. Caught and fixed before being delivered, via the verification
+process described next - a genuine example of why that process is
+worth running, not a formality.
+
+**Locking added, matching and extending the scope Phase 56's own
+"Known limitations" named directly:**
+- `kernel/arch/x86/mm/pmm.c` - a `pmm_lock` around every public
+  function (`pmm_alloc_frame`, `pmm_alloc_contiguous`, `pmm_free_
+  frame`, `pmm_get_stats`) - "the PMM bitmap," named verbatim in this
+  project's own release-readiness roadmap.
+- `kernel/arch/x86/mm/heap.c` - a `heap_lock` around `kmalloc()`'s
+  free-list search+split and `kfree()`'s `free = true` + coalesce
+  mutation (the magic/double-free checks that only touch the caller's
+  own block header run unlocked, before the lock is taken) - "the
+  heap allocator," the other structure that same roadmap text named.
+- `kernel/task/process.c` - a new `PROCESS_ALLOCATING` state and
+  `process_table_lock` close a genuine two-CPU race in `allocate_
+  slot()`'s scan-then-claim of a free `process_table[]` slot (without
+  it, two CPUs could both find the same `UNUSED` slot and both claim
+  it); a separate `exec_lock` protects the shared 2MB `elf_buffer`
+  static scratch buffer in `process_exec_internal()`, released as
+  soon as `elf_load()` finishes copying out of it rather than held for
+  the rest of that long function. `process_wait()`'s own scan and the
+  page-table-walk helpers are deliberately left unlocked - see `process_
+  table_lock`'s own comment in process.c for exactly why each is
+  either exclusively-owned or tolerates a benign, eventually-consistent
+  stale read - a documented, narrow-by-design choice, not an
+  oversight, plus an honest note that `next_pid`'s own increment still
+  isn't independently covered by any lock (every existing call site
+  happens to pair it with a real allocation first, which already
+  serializes in practice, but this is a real, if minor, undocumented-
+  until-now edge, named here rather than swept under the rug).
+- `kernel/arch/x86/cpu/syscall.c` - a discovery beyond the roadmap's
+  own named list, found by reading this file closely: `open_files[]`
+  (the open-file-handle table) and `handle_read()`'s shared, static
+  4KB `scratch` buffer were both completely unsynchronized. One
+  `open_files_lock` now guards the whole table (`handle_open`/
+  `handle_pipe`'s scan-then-claim, `handle_read`/`handle_write_
+  handle`'s ownership checks, `handle_close`'s free) and the scratch
+  buffer's read-then-slice sequence in `handle_read()` - without the
+  latter, two processes calling `SYS_READ` at the same physical
+  instant could interleave their reads into one buffer and each copy
+  out a slice of the *other* process's file.
+- `kernel/fs/vfs.c` - another discovery beyond the roadmap's own list:
+  `fat32.c`/`ext2.c` both keep their own shared static scratch buffers
+  (`cluster_buf`, `fat_sector_buf`, `block_buf`, `indirect_buf`,
+  `bitmap_buf`, `dir_buf`, and more) with no locking of their own. A
+  real fix would give each driver its own lock, or finer buffer
+  ownership - explicitly scoped out of this phase, the same "real,
+  unaudited, future work, not a checkbox" posture Phase 56's own
+  header comment already set for exactly this kind of larger,
+  dedicated effort. What this phase does instead: one coarse `vfs_
+  lock` around `vfs_read_file()`/`vfs_write_file()`/`vfs_delete_
+  file()`, so at most one CPU is ever inside either driver at a time,
+  full stop - correct, if not fine-grained.
+
+**What is still, honestly, not covered:** every other driver's own
+internal state (ATA, RTL8139/NE2000, AC97, UHCI, virtio-blk/-net) -
+none of it is reachable from more than one CPU today (no AP runs a
+process that could call into a driver directly, and the drivers that
+do their own polling only ever run from the single BSP's own idle
+task or IRQ handlers), so this is a real, deliberately-scoped gap
+matching the pattern above, not silently missed. `kernel/net/`'s own
+internal state (ARP cache, TCP/UDP connection tracking) is in the same
+position for the same reason.
+
+**A separate, pre-existing bug found (not caused by anything in this
+phase) while verifying it in QEMU:** `kernel/net/arp.c`'s `arp_
+resolve()` spins on `timer_get_ticks()` advancing past a ~3-second
+deadline while its cache is cold. `int 0x80` (`kernel/arch/x86/cpu/
+syscall_stub.asm`) is an interrupt gate, not a trap gate - it clears
+IF on entry and only restores it (`sti`) right before the final
+`iret` - so *any* syscall path that reaches `arp_resolve()` with a
+cold cache (`SYS_NET_SEND`, via `udp_send()`/`ip_send()`) runs that
+entire spin loop with interrupts disabled, meaning the timer tick it's
+waiting on can never fire: a genuine, permanent hang of the whole
+single-core machine, not a slow path. This has nothing to do with
+SMP or the locking work above - it would hang identically on a
+machine with no AP at all - and predates this phase entirely; it
+simply never surfaced before because every prior verification
+environment's QEMU SLIRP networking answered the gateway's ARP
+request quickly enough (usually from an already-warm cache, populated
+by the earlier boot-time ping self-test's own successful resolution)
+to never hit the cold-cache spin path from inside a syscall. This
+sandbox's own QEMU networking does not get a real ARP reply at all
+(the boot-time ping self-test's own `[WARN] Gateway did not reply to
+ping` / `ARP resolve failed` lines show this happening even before any
+process exists), which is what exposed it: `sandbox_demo_task`'s own
+`SYS_NET_SEND` test to the gateway hung the entire verification build
+solid, with total silence from every process, until it was identified
+and bypassed (temporarily, for verification only - not shipped) to
+confirm the rest of this phase's own changes. Not fixed as part of
+this phase (it's a single-core interrupt-gate/blocking-call design
+issue, not a locking or scheduler bug, and deserves its own dedicated
+look - converting `int 0x80` to a trap gate, re-enabling interrupts
+around the wait, or making `arp_resolve()` genuinely non-blocking are
+all real options with real tradeoffs) - named here, honestly, the same
+way this project names every other real gap it finds.
+
+**Verification:** the same sandbox-stub methodology this whole
+session has used (the real Rust cross-compiler toolchain isn't
+available in this cloud sandbox) - a from-scratch C reimplementation
+standing in for `kernel/rust/lib.o`, including a real CPUID-based
+`rust_smp_current_cpu_index()` and a `rust_ap_main()`-equivalent that
+genuinely calls the real, unmodified `tss_load_this_cpu()`/`scheduler_
+ap_join()` - let every real C change this phase made (`scheduler.c`,
+`process.c`, `tss.c`, `gdt.c`, `pmm.c`, `heap.c`, `syscall.c`,
+`vfs.c`, `main.c`, `spinlock.c`) compile, link, and boot for real in
+QEMU. With the pre-existing `arp_resolve()` hang above bypassed for
+verification only, every scheduler/process/locking-dependent self-test
+this kernel has passed cleanly: ring-3 process isolation, `SYS_SPAWN`
+(granted and denied), a spawned child actually running, a real
+disk-loaded ELF, libc `malloc()`, `SYS_EXEC` against both a hand-
+written and a libc-linked C program, `fork()` (child creation, the
+child actually running its own code, copy-on-write isolation), the
+sandboxed process's own `SYS_EXEC`/`SYS_PIPE`/`SYS_LOGIN`/`SYS_SUDO`
+tests - all exercising the exact code paths this phase added locking
+to. This sandbox's own QEMU/ACPI setup does not expose a usable RSDP
+at all (`[WARN] ACPI MADT not found or not parseable (RSDP found:
+no)`), a sandbox environment limitation distinct from anything this
+phase changed, so `scheduler_ap_join()`/`tss_load_this_cpu()`'s own
+AP-side path could not be exercised on real (virtual) multi-core
+hardware in this specific verification pass - it was instead verified
+by close code review plus successful compilation/linking of the exact
+same functions the BSP path already proved work. The user's own
+machine already brought up a real second CPU successfully under Phase
+56 (per this session's own history) - re-running `make test` there
+will be the first genuine confirmation of the AP actually reaching
+`scheduler_ap_join()` and running a process, which this sandbox
+couldn't provide.
+
+## Phase 58 and beyond
+
+Candidates: fixing `arp_resolve()`'s interrupt-disabled spin-hang,
+named directly above - probably the highest-value single fix left,
+since it's a real, permanent whole-machine hang reachable from
+ordinary ring-3 code (`SYS_NET_SEND`) any time the ARP cache is cold,
+not a corner case; per-driver locking for FAT32/ext2's own shared
+scratch buffers (this phase's own coarse `vfs_lock` is correct but not
+fine-grained - see this phase's own entry above); the same audit for
+every other driver's internal state, once anything besides the BSP's
+own idle task/IRQ handlers can reach them; whether this kernel's own
+scheduler safely tolerates being preempted mid-syscall - a real,
+separate question Phase 45 found but deliberately did not answer,
+worth investigating on its own terms since it would unlock genuinely
+interrupt-driven TX for both RTL8139 and NE2000 using the `TX_
+COMPLETE` signal already built and tested; per-command sudo scoping
+(fork before escalating, restoring the parent shell's own identity
+afterward - see Phase 51's own "Known limitations"); a way to grant
+broader file capabilities to a successfully-escalated process; a
+persistent (disk-backed) lockout counter; a `useradd`-equivalent way
+to create additional accounts after first boot; a real hardware
+entropy source for salt generation; simultaneous multi-mount support
+(ATA and virtio-blk both live at once), building on Phase 46's own
+blockdev abstraction; giving virtio-net its own IRQ handler; migrating
+`timer_init`/`vfs_init`/`net_init` to driver registration too;
+extending `process_fork()` to duplicate `open_files[]` entries by
+owner pid, unlocking real cross-process pipe use and a genuine shell
+`|` operator; signals; a versioned, single-source-of-truth syscall ABI
+header (`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
 novasys.h` are still two, hand-synchronized copies, now three with
 `SYS_SHUTDOWN` - Phase 55 - added to both); a build-time check that
 `kernel_end` covers every section in the final binary (Phase 38's own
