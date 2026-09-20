@@ -7,6 +7,7 @@
 #include "../drivers/net/ne2000.h"
 #include "../drivers/timer/timer.h"
 #include "../lib/string.h"
+#include "../task/scheduler.h"
 
 #define ARP_HTYPE_ETHERNET 1
 #define ARP_PTYPE_IPV4     0x0800
@@ -73,6 +74,31 @@ bool arp_resolve(uint32_t ip, uint8_t mac_out[6]) {
 
     arp_send_request(ip);
 
+    /* Phase 58 fix: this wait loop is reachable from inside a syscall
+     * handler (any blocking socket call that needs to resolve a cold
+     * destination - e.g. SYS_CONNECT - ends up here via ip_send()), and
+     * int 0x80's gate is an INTERRUPT gate (see syscall_stub.asm's
+     * isr128), which keeps this CPU's interrupts disabled for the
+     * entire syscall duration. Without the scheduler_yield() below,
+     * timer_get_ticks() can never advance - the timer IRQ that would
+     * advance it is exactly what's disabled - so `deadline` is never
+     * reached and this spins forever, hanging the whole machine, not
+     * just the calling process. This was found and diagnosed (but left
+     * unfixed, as explicitly out of scope) during Phase 57's locking
+     * audit; see PROGRESS.md's Phase 57 entry.
+     *
+     * scheduler_yield() (kernel/task/scheduler.c) switches to whatever
+     * other context is next runnable - the idle task if nothing else
+     * is - and switch_context() restores *that* context's own saved
+     * EFLAGS, which (for idle, or any ordinary process not itself
+     * mid-syscall) has IF=1. That re-enables interrupts globally for
+     * as long as this process isn't running, long enough for the timer
+     * IRQ to fire and advance timer_get_ticks(), after which this
+     * process is eventually round-robined back in to re-check its own
+     * condition. do_schedule() already safely no-ops if the scheduler
+     * hasn't started yet (current[cpu] == NULL), so this is safe to
+     * call even from an early-boot self-test that runs before
+     * scheduler_start(). */
     uint32_t deadline = timer_get_ticks() + 300; /* ~3s at 100Hz */
     while (timer_get_ticks() < deadline) {
         net_poll();
@@ -80,6 +106,7 @@ bool arp_resolve(uint32_t ip, uint8_t mac_out[6]) {
             memcpy(mac_out, cache_mac, 6);
             return true;
         }
+        scheduler_yield();
     }
     return false;
 }

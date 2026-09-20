@@ -6308,38 +6308,212 @@ will be the first genuine confirmation of the AP actually reaching
 `scheduler_ap_join()` and running a process, which this sandbox
 couldn't provide.
 
-## Phase 58 and beyond
+## Phase 58: a real network stack - TCP retransmission/windowing, and a
+Berkeley-sockets-shaped syscall API reachable from ring-3, entirely in
+Rust
 
-Candidates: fixing `arp_resolve()`'s interrupt-disabled spin-hang,
-named directly above - probably the highest-value single fix left,
-since it's a real, permanent whole-machine hang reachable from
-ordinary ring-3 code (`SYS_NET_SEND`) any time the ARP cache is cold,
-not a corner case; per-driver locking for FAT32/ext2's own shared
-scratch buffers (this phase's own coarse `vfs_lock` is correct but not
-fine-grained - see this phase's own entry above); the same audit for
-every other driver's internal state, once anything besides the BSP's
-own idle task/IRQ handlers can reach them; whether this kernel's own
-scheduler safely tolerates being preempted mid-syscall - a real,
-separate question Phase 45 found but deliberately did not answer,
-worth investigating on its own terms since it would unlock genuinely
-interrupt-driven TX for both RTL8139 and NE2000 using the `TX_
-COMPLETE` signal already built and tested; per-command sudo scoping
-(fork before escalating, restoring the parent shell's own identity
-afterward - see Phase 51's own "Known limitations"); a way to grant
-broader file capabilities to a successfully-escalated process; a
-persistent (disk-backed) lockout counter; a `useradd`-equivalent way
-to create additional accounts after first boot; a real hardware
-entropy source for salt generation; simultaneous multi-mount support
-(ATA and virtio-blk both live at once), building on Phase 46's own
-blockdev abstraction; giving virtio-net its own IRQ handler; migrating
-`timer_init`/`vfs_init`/`net_init` to driver registration too;
-extending `process_fork()` to duplicate `open_files[]` entries by
-owner pid, unlocking real cross-process pipe use and a genuine shell
-`|` operator; signals; a versioned, single-source-of-truth syscall ABI
-header (`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
-novasys.h` are still two, hand-synchronized copies, now three with
-`SYS_SHUTDOWN` - Phase 55 - added to both); a build-time check that
-`kernel_end` covers every section in the final binary (Phase 38's own
-"Known limitations"); wiring tools/python's two scripts into a CI
-workflow; a full ring-3 compositor/Store port; TCP retransmission/
-windowing and a sockets-style syscall API for TCP.
+The release-readiness document's own "1.5 A real network stack" row
+named two honest gaps: `kernel/net/tcp.c` only ever implemented a
+single, stop-and-wait, active-open-only connection with no real
+retransmission or windowing, and there was no way to reach TCP from
+ring-3 at all - it was a C-function-call API, callable only from
+kernel code (`main.c`'s own boot-time HTTP self-test), with nothing a
+userland process could call. Both are now fixed, and per this
+project's own explicit direction for this phase, the entire
+replacement is written in Rust rather than C wherever C wasn't
+architecturally required - the only new C is syscall-dispatch glue
+that reuses an existing pattern rather than growing a new one (see
+below).
+
+`kernel/net/tcp.c`/`tcp.h` are gone in substance, replaced by
+`kernel/rust/tcp.rs` - a real RFC 793 state machine (`Closed`,
+`Listen`, `SynSent`, `SynReceived`, `Established`, `FinWait1`,
+`FinWait2`, `CloseWait`, `Closing`, `LastAck`, `TimeWait`) over a
+fixed table of connections, each with its own sliding-window send and
+receive ring buffers, a real go-back-N retransmission queue with
+exponential RTO backoff (capped, with a hard retry limit before giving
+up), and genuine passive-open support - a real `LISTEN` state with a
+backlog array, so a listener can accept more than one pending
+connection rather than the old code's single hard-coded socket. The
+locking discipline Phase 57 established is followed exactly: the
+connection table's `SpinLock` is never held across `ip_send()` (which
+can block for seconds inside `arp_resolve()`) or across `scheduler_
+yield()` - every function gathers what it needs under the lock,
+releases it, then sends or yields.
+
+On top of that, a Berkeley-sockets-shaped syscall API - `SYS_SOCKET`,
+`SYS_BIND`, `SYS_LISTEN`, `SYS_ACCEPT`, `SYS_CONNECT` (33-37) - gives
+ring-3 code the same `socket()`/`bind()`/`listen()`/`accept()`/
+`connect()` shape Linux's own Berkeley sockets API uses, named
+explicitly as the reference shape to implement rather than something
+novel. It doesn't reinvent send/recv/close: a new `OPEN_KIND_SOCKET`
+open-file kind slots into the same `open_files[]` table and the same
+`SYS_READ`/`SYS_WRITE_HANDLE`/`SYS_CLOSE` syscalls Phase 36 already
+built for pipes, so a socket's handle is read and written exactly like
+any other file handle once it exists - the same "for free" reuse Phase
+36 established, not a parallel API.
+
+- `kernel/rust/tcp.rs` (new) - the entire TCP implementation described
+  above: connection table, state machine, ring buffers, retransmission/
+  backoff, LISTEN/accept, and the `rust_tcp_socket`/`bind`/`listen`/
+  `accept`/`connect`/`send`/`recv`/`close`/`handle_packet`/`poll`
+  C-callable exports. `rust_tcp_poll()` is called unconditionally from
+  `net_poll()`'s own idle-loop tick (not gated behind "a frame arrived"
+  - retransmission deadlines and queued sends need to fire even when
+  nothing new came in over the wire).
+- `kernel/arch/x86/cpu/syscall.h` / `userland/libc/include/novasys.h`
+  / `userland/libc/syscall.c` - the five new syscall numbers and their
+  `int $0x80` wrappers (`sys_socket`/`sys_bind`/`sys_listen`/
+  `sys_accept`/`sys_connect`), matching this project's existing,
+  already-named "two hand-synchronized copies" ABI pattern (see Phase
+  57's own "Phase 58 and beyond" note about that, carried forward
+  below).
+- `kernel/arch/x86/cpu/syscall.c` - `OPEN_KIND_SOCKET` added to the
+  open-file-kind enum; `handle_read()`/`handle_write_handle()`/
+  `handle_close()` each grew one branch that releases `open_files_
+  lock` and calls into `tcp.rs`; new `handle_socket()`/`handle_bind()`/
+  `handle_listen()`/`handle_connect()`/`handle_accept()` (the last two
+  genuinely blocking, called with the lock already released) plus the
+  five new `syscall_handler()` dispatch cases.
+- `kernel/net/ip.c` - `IP_PROTO_TCP` now dispatches to `rust_tcp_
+  handle_packet()` instead of the old `tcp_handle_packet()`, via a
+  direct `extern` declaration at the call site (this project's own
+  established "no shared bridge header" FFI convention - see `smp.h`'s
+  own comment and `syscall.c`'s pre-existing `rust_pipe_*()` externs
+  for precedent).
+- `kernel/net/tcp.c` / `kernel/net/tcp.h` - emptied to placeholder
+  stubs rather than deleted: this session's own file-delivery tooling
+  can write files into the user's checkout but cannot delete from it,
+  so both files are left behind, intentionally inert, with a comment
+  explaining why and asking the user to `git rm` them by hand.
+- `kernel/init/main.c` - the Phase 28 boot-time HTTP self-test now
+  calls `rust_tcp_socket()`/`rust_tcp_connect()`/`rust_tcp_send()`/
+  `rust_tcp_recv()`/`rust_tcp_close()` instead of the old C API; a new,
+  separate self-test right after it calls a new `rust_tcp_selftest()`
+  export directly (no real network needed) to prove the state machine
+  itself: a synthetic listener actually reaches `SynReceived`, backlogs
+  a completed handshake, `accept()`s it, and both directions of data
+  actually flow through `rust_tcp_send()`/`rust_tcp_recv()`.
+- `kernel/net/arp.c` - a real, separate bug fix, not a Phase 58 feature:
+  see below.
+
+**A real bug fixed, not just found:** Phase 57's own entry above named
+`arp_resolve()`'s interrupt-disabled spin-hang as "probably the
+highest-value single fix left" and left it unfixed. It's fixed now.
+`int 0x80`'s IDT gate is an interrupt gate, not a trap gate - it
+disables interrupts for the whole syscall duration - so a bare tick-
+deadline spin inside a syscall handler could never see the timer
+advance and hung the entire single-core machine solid, permanently,
+any time the ARP cache was cold. The fix is one line: a `scheduler_
+yield()` call inside the wait loop. `switch_context()` restores the
+resumed context's own saved `EFLAGS` (`IF=1` for an ordinary process),
+which re-enables interrupts long enough for the timer IRQ to actually
+fire before control returns to the spin. This has nothing to do with
+TCP directly, but TCP's own `connect()`/retransmission paths are
+exactly the code that now depends on `arp_resolve()` never hanging
+again, so it's fixed as part of this same phase rather than deferred
+further.
+
+**A second bug found and fixed during this phase's own verification,
+not present in the design above:** `rust_tcp_selftest()`'s cleanup of
+its synthetic test connection originally called the normal, graceful
+`rust_tcp_close()`, which sets `fin_needed` and lets the FIN go out
+and retry in the background - correct behavior for a real connection,
+but the selftest's synthetic "peer" never acknowledges anything, so
+every idle-loop `rust_tcp_poll()` call kept retrying that FIN with
+exponential backoff for the full `MAX_RETRIES` limit (tens of real
+seconds) on every single boot, for a peer that was never going to
+answer in the first place. Fixed with a small private `force_free()`
+helper - immediate slot deallocation, no FIN, deliberately not exposed
+to C or the syscall layer - used only by the selftest's own cleanup;
+a real ring-3 socket still always goes through the graceful `rust_tcp_
+close()`. Before this fix, the boot-time test log stopped abruptly
+right after this phase's own self-test ran and never reached the
+later self-tests (login, sudo, fork, exec) within this project's own
+60-second boot-test timeout; after it, boot completes in full.
+
+**Honest scope cuts, named rather than hidden:** `SYS_CONNECT`
+currently has no capability gate - `SYS_NET_SEND`'s existing `allowed_
+hosts[]` check was not extended to cover it, so any process that can
+reach the syscall at all can `connect()` anywhere. This is a scope cut
+for this phase, not a security decision - real follow-up work, named
+here the same way this project names every other honest gap.
+`MAX_TCP_CONNS` is a fixed table of 8 (4 of them usable as a single
+listener's backlog) - no dynamic allocation, matching this kernel's
+existing static-table style everywhere else (`open_files[]`, the pipe
+table, the process table). Congestion control (slow start, congestion
+avoidance) is out of scope - this phase implements reliability
+(retransmission, windowing, in-order delivery) as asked, not full RFC
+5681 congestion behavior.
+
+**Verification:** the same sandbox-stub methodology every phase since
+the Rust toolchain became bare-metal-only has used (real cross-
+compilation to this kernel's own `i686-novaos` target remains
+unavailable in this cloud sandbox) - a from-scratch, independent C
+reimplementation of the entire `tcp.rs` design standing in for
+`kernel/rust/lib.o`, letting the real, unmodified kernel C sources
+(including every file this phase actually changed - `ip.c`, `net.c`,
+`syscall.c`, `syscall.h`, `arp.c`, `main.c`) compile, link, and boot
+for real in QEMU. Separately, `tcp.rs` itself was compiled standalone
+against a normal host `x86_64` rustc target with `--emit=metadata`
+(type/borrow-checking without code generation, since the real bare-
+metal target isn't available here) and came back with zero errors and
+zero warnings of its own. The full boot-test suite passes both new
+assertions (`tcp_selftest_established`, `tcp_selftest_recv`) and, with
+the FIN-retry-storm bug above fixed, completes the entire 60-second
+boot budget and reaches every later self-test (login, sudo, fork,
+exec, pipe) cleanly. The handful of remaining boot-test failures are
+all pre-existing and environment-caused, not regressions from this
+phase: this sandbox's own QEMU networking never delivers a real ARP
+reply at all (`ping`/TFTP/DNS/`SYS_NET_SEND` all already failed this
+same way before this phase existed), this sandbox's QEMU config has no
+usable SMP or ACPI (`smp_aps_brought_up`/`ap_running_real_code`, same
+as Phase 56/57's own already-documented findings), and this sandbox's
+virtio-blk DMA times out intermittently (`virtio_blk_write_readback`,
+and its own downstream cascade into a temporarily-skipped journal/
+crash-dump self-test on the same boot) - a pre-existing limitation
+already named in earlier phases' own verification notes, not something
+this phase's TCP or syscall changes touch. The user's own machine,
+where real networking, SMP, ACPI, and virtio-blk have all previously
+worked (per this project's own history), is where `make test` will be
+the first genuine end-to-end confirmation of this phase's real,
+non-synthetic TCP path - a real HTTP fetch over the boot-time self-
+test's own connection, not just the synthetic in-kernel state-machine
+proof this sandbox could provide.
+
+## Phase 59 and beyond
+
+Candidates: gating `SYS_CONNECT` against `allowed_hosts[]` the same
+way `SYS_NET_SEND` already is - the honest scope cut this phase named
+directly above; congestion control (slow start / congestion avoidance)
+for the TCP stack this phase added, currently reliability-only; per-
+driver locking for FAT32/ext2's own shared scratch buffers (this
+phase's own coarse `vfs_lock` is correct but not fine-grained - see
+Phase 57's own entry); the same audit for every other driver's
+internal state, once anything besides the BSP's own idle task/IRQ
+handlers can reach them; whether this kernel's own scheduler safely
+tolerates being preempted mid-syscall - a real, separate question
+Phase 45 found but deliberately did not answer, worth investigating on
+its own terms since it would unlock genuinely interrupt-driven TX for
+both RTL8139 and NE2000 using the `TX_COMPLETE` signal already built
+and tested; per-command sudo scoping (fork before escalating,
+restoring the parent shell's own identity afterward - see Phase 51's
+own "Known limitations"); a way to grant broader file capabilities to
+a successfully-escalated process; a persistent (disk-backed) lockout
+counter; a `useradd`-equivalent way to create additional accounts
+after first boot; a real hardware entropy source for salt generation;
+simultaneous multi-mount support (ATA and virtio-blk both live at
+once), building on Phase 46's own blockdev abstraction; giving
+virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
+`net_init` to driver registration too; extending `process_fork()` to
+duplicate `open_files[]` entries by owner pid, unlocking real
+cross-process pipe use and a genuine shell `|` operator; signals; a
+versioned, single-source-of-truth syscall ABI header (`kernel/arch/
+x86/cpu/syscall.h` and `userland/libc/include/novasys.h` are still two,
+hand-synchronized copies, now three with the socket syscalls added by
+this phase); a build-time check that `kernel_end` covers every section
+in the final binary (Phase 38's own "Known limitations"); wiring
+tools/python's two scripts into a CI workflow; a full ring-3
+compositor/Store port; a UDP-based equivalent sockets surface
+(`SYS_SOCKET`'s own shape already supports it, only `tcp.rs`'s
+connection-oriented half is wired up today).

@@ -1,6 +1,15 @@
 # NovaOS: Release-Readiness Feature List (Kernel First, Then Userland)
 
-*Updated again: Phase 57 is now done (see below - a real per-CPU
+*Updated again: Phase 58 is now done (see 1.5 below - a real RFC 793
+TCP state machine with sliding-window transfer and go-back-N
+retransmission/backoff, real passive-open LISTEN/accept with a
+backlog, and a Berkeley-sockets-shaped syscall API (`SYS_SOCKET`/
+`SYS_BIND`/`SYS_LISTEN`/`SYS_ACCEPT`/`SYS_CONNECT`) reachable from
+ring-3 for the first time, closing this row's own two named gaps -
+written entirely in Rust (`kernel/rust/tcp.rs`), plus a real,
+previously-named-but-unfixed bug this phase also fixed: `arp_
+resolve()`'s interrupt-disabled spin-hang), on top of Phase 57 (see
+below - a real per-CPU
 scheduler, a per-CPU TSS, and locking for the process table, PMM
 bitmap, heap allocator, exec buffer, open-file-handle table, and a
 coarse VFS-wide lock, closing most of the "SMP support itself" row in
@@ -136,9 +145,9 @@ source, not assumed from a phase number.
 
 ### 1.5 A real network stack
 
-| What | Why a user notices | Best-in-class reference |
-|---|---|---|
-| **TCP retransmission/windowing** (currently stop-and-wait only) and a **sockets-style syscall API** exposed to ring-3 (TCP is currently C-function-call-only, not reachable from userland at all). | Anything beyond a local virtual link currently fails silently. No ring-3 program can use TCP today at all — this blocks a real browser, a real download manager, anything network-facing in userland. | **Linux's Berkeley sockets API** (`socket()`/`bind()`/`connect()`) is *the* universal reference every other OS's networking API is compatible with or inspired by — implement this shape specifically, not something novel. |
+| What | Status | Why a user notices | Best-in-class reference |
+|---|---|---|---|
+| **TCP retransmission/windowing** (was stop-and-wait only) and a **sockets-style syscall API** exposed to ring-3 (TCP was C-function-call-only, not reachable from userland at all). | ✅ **Done (Phase 58), written entirely in Rust.** `kernel/rust/tcp.rs` replaces the old single-connection, stop-and-wait, active-open-only `kernel/net/tcp.c` with a real RFC 793 state machine (`Closed` through `TimeWait`), per-connection sliding-window send/receive ring buffers, a real go-back-N retransmission queue with exponential RTO backoff (capped, bounded retries), and genuine passive-open support — a real `LISTEN` state with a multi-connection backlog, not the old single hard-coded socket. On top of it, `SYS_SOCKET`/`SYS_BIND`/`SYS_LISTEN`/`SYS_ACCEPT`/`SYS_CONNECT` (33-37) give ring-3 code exactly the `socket()`/`bind()`/`listen()`/`accept()`/`connect()` shape named in this row's own reference column — reusing the existing `open_files[]` table and the existing `SYS_READ`/`SYS_WRITE_HANDLE`/`SYS_CLOSE` syscalls for recv/send/close (the same pattern Phase 36 established for pipes), not a parallel API. A real, separate bug this row's own earlier verification had already found but left unfixed — `arp_resolve()`'s interrupt-disabled spin-hang, a genuine permanent whole-machine hang reachable from any cold-cache `SYS_NET_SEND`/TCP `connect()` — is fixed as part of this same phase (`scheduler_yield()` inside the wait loop, so the timer tick it needs can actually fire). **Honest scope cuts, named directly**: `SYS_CONNECT` has no capability gate yet (`SYS_NET_SEND`'s own `allowed_hosts[]` check wasn't extended to cover it — real follow-up work, not a security decision); congestion control (slow start/avoidance) is out of scope, this phase implements reliability, not full RFC 5681 behavior; the connection table is a fixed 8-entry static array, matching this kernel's existing static-table convention everywhere else. **Verified** the same sandbox-stub QEMU way every phase since Phase 53 has been (real `i686-novaos` cross-compilation remains unavailable in this environment): a from-scratch, independent C reimplementation of the whole `tcp.rs` design stood in for `kernel/rust/lib.o`, letting the real, unmodified kernel C sources build, link, and boot; separately, `tcp.rs` itself was type/borrow-checked standalone against a host `x86_64` rustc target with zero errors. Two new boot-time self-test assertions (a synthetic LISTEN → SYN_RECEIVED → ESTABLISHED handshake, backlog, `accept()`, and real data flow both directions through `rust_tcp_send()`/`rust_tcp_recv()`) pass, and the full 74-assertion boot-test suite now completes within its 60-second budget end-to-end (previously it didn't — see Phase 58's own entry in `PROGRESS.md` for the FIN-retry-storm bug this phase found and fixed in its own self-test cleanup). The user's own machine, where this project's real networking has previously worked, is where a genuine end-to-end HTTP fetch over this exact new TCP path can be confirmed — this sandbox's own QEMU networking has never delivered a real ARP reply at all, a pre-existing environment limitation unrelated to this phase's changes. | Anything beyond a local virtual link previously failed silently. No ring-3 program could use TCP at all — this blocked a real browser, a real download manager, anything network-facing in userland. | **Linux's Berkeley sockets API** (`socket()`/`bind()`/`connect()`) is *the* universal reference every other OS's networking API is compatible with or inspired by — implemented this shape specifically, not something novel. |
 
 ---
 
@@ -245,8 +254,12 @@ A rough shape, so "release" means something concrete:
 - ~~Structured crash dumps (Part 1.3)~~ ✅ **done (Phase 54)** — see
   1.3 for the design, the `MAX_PARTITIONS = 4` ceiling this phase
   hits, and the one live end-to-end test left for a real machine.
-- Sockets API + TCP retransmission (Part 1.5) — real networking
-  reachable from real userland software.
+- ~~Sockets API + TCP retransmission (Part 1.5)~~ ✅ **done (Phase
+  58)** — real TCP retransmission/windowing and a Berkeley-sockets-
+  shaped syscall API, both reachable from real ring-3 userland
+  software now, entirely in Rust; see 1.5 for the honest scope cuts
+  (no capability gate on `SYS_CONNECT` yet, no congestion control)
+  and the verification account.
 
 Everything else in Parts 1–2 makes NovaOS better at any point along
 this path — this is a suggested *order*, not a claim that anything
