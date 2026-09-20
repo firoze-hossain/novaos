@@ -298,6 +298,66 @@
  * write was issued but the machine is still running. */
 #define SYS_SHUTDOWN 32
 
+/* Phase 58: a real Berkeley-sockets-style syscall API - socket()/
+ * bind()/listen()/accept()/connect(), the exact shape the user
+ * requested (Linux's Berkeley sockets API is "the universal reference
+ * every other OS's networking API is compatible with or inspired by" -
+ * implemented as that shape specifically, not something novel).
+ * Backed entirely by kernel/rust/tcp.rs's real RFC 793 state machine
+ * (real retransmission, sliding-window data transfer, and - new this
+ * phase - LISTEN/passive-open/accept, none of which the old
+ * kernel/net/tcp.c ever had). recv()/send()/close() are deliberately
+ * NOT separate syscalls: a socket handle is just another entry in the
+ * existing open_files[] table (a new OPEN_KIND_SOCKET kind, the same
+ * pattern Phase 36 already established for pipes), so the existing
+ * SYS_READ/SYS_WRITE_HANDLE/SYS_CLOSE already work unchanged once
+ * kernel/arch/x86/cpu/syscall.c's dispatch recognizes that kind -
+ * exactly the way a pipe's read handle already reuses SYS_READ/
+ * SYS_CLOSE rather than needing its own. See kernel/rust/tcp.rs's own
+ * doc comment for the full design and honest scope limits. */
+
+/* No arguments (this kernel only ever creates an IPv4/TCP socket -
+ * there is no other family/type to select between, the same "one
+ * fixed shape, no argument needed" reasoning SYS_SPAWN's own comment
+ * already uses for its one spawnable task type). Returns a handle, or
+ * -1 if every TCP connection slot is already in use. */
+#define SYS_SOCKET 33
+
+/* EBX = handle, ECX = port (host byte order; 0 auto-assigns an unused
+ * ephemeral port >= 49152, matching real bind()'s "let the kernel
+ * pick" convention). Returns 0 on success, -1 on failure (invalid
+ * handle, already bound, or the port is already in use). */
+#define SYS_BIND 34
+
+/* EBX = handle, ECX = backlog (accepted for Berkeley-sockets shape
+ * compatibility but currently unused - see rust_tcp_listen()'s own
+ * comment: the real backlog is always a small fixed size). Marks the
+ * socket as a passive-open (LISTEN) socket; requires it already be
+ * bound. Returns 0 on success, -1 on failure. */
+#define SYS_LISTEN 35
+
+/* EBX = handle (a listening socket). Blocks (yielding repeatedly - the
+ * same pattern SYS_WAIT/arp_resolve() already use, safe from inside a
+ * syscall handler specifically because of arp_resolve()'s own Phase 58
+ * fix - see that function's comment) until a connection completes its
+ * 3-way handshake, then returns a brand new handle for it (already
+ * ESTABLISHED - no separate "finish connecting" step needed). Returns
+ * -1 if `handle` isn't currently a listening socket. */
+#define SYS_ACCEPT 36
+
+/* EBX = handle, ECX = destination IPv4 address (host byte order, e.g.
+ * built with ip_make()), EDX = destination port. Opens a connection -
+ * a full, real 3-way handshake with genuine SYN retransmission on
+ * loss (unlike SYS_NET_SEND's own UDP-only, fire-and-hope send, or
+ * the old removed tcp.c's single fire-and-hope SYN). Blocks until
+ * ESTABLISHED, refused (RST), or retries are exhausted. Returns 0 on
+ * success, -1 on failure. No capability gate, unlike SYS_NET_SEND's
+ * own host allowlist - an honest, deliberate scope cut for this phase
+ * (see PROGRESS.md), not a considered security decision; extending
+ * SYS_NET_SEND's existing allowed_hosts[] capability check to cover
+ * this too is real, sensible follow-up work. */
+#define SYS_CONNECT 37
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

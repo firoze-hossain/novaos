@@ -6,10 +6,20 @@
 #include "arp.h"
 #include "icmp.h"
 #include "udp.h"
-#include "tcp.h"
 #include "net.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
+
+/* Phase 58: kernel/rust/tcp.rs's own incoming-segment entry point -
+ * declared directly here rather than via a shared header, matching
+ * this project's established FFI convention for a small boundary
+ * declaration (see e.g. kernel/include/smp.h's own comment, or
+ * kernel/arch/x86/cpu/syscall.c's rust_pipe_*() declarations). Replaces
+ * the old kernel/net/tcp.c's tcp_handle_packet() - see tcp.h's own
+ * comment for why that file is now an intentionally empty
+ * placeholder rather than deleted outright. */
+extern void rust_tcp_handle_packet(uint32_t src_ip, const uint8_t* payload,
+                                    uint16_t length);
 
 typedef struct __attribute__((packed)) {
     uint8_t  version_ihl;
@@ -124,7 +134,7 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
             udp_handle_packet(src_ip, transport, transport_len);
             break;
         case IP_PROTO_TCP:
-            tcp_handle_packet(src_ip, transport, transport_len);
+            rust_tcp_handle_packet(src_ip, transport, transport_len);
             break;
         default:
             break; /* neither ICMP, UDP, nor TCP - nothing to dispatch to */

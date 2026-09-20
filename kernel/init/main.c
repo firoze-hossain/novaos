@@ -22,7 +22,6 @@
 #include "../fs/fat32.h"
 #include "../net/net.h"
 #include "../net/dns.h"
-#include "../net/tcp.h"
 #include "../net/icmp.h"
 #include "../net/tftp.h"
 #include "../task/process.h"
@@ -491,76 +490,130 @@ void kernel_late_init(void) {
                        "upstream network access from the DNS proxy?)\n");
         }
 
-        /* Self-test (Phase 28): a genuine end-to-end TCP test against
-         * a real, unmodified public HTTP server - the same "depends
-         * on real upstream connectivity, logged as WARN not a hard
-         * failure" honesty as the DNS self-test just above, extended
-         * one layer further (DNS resolution, then an actual TCP
-         * connection, HTTP request, and response over it). Uses
-         * HTTP/1.1 with an explicit Connection: close specifically so
-         * the server closes the connection after one response
-         * (HTTP/1.1 defaults to keep-alive) - this also lets
-         * tcp_receive()'s "0 means clean close" return value end the
-         * read loop naturally instead of needing to already know the
-         * response length in advance. An initial version of this test
-         * used HTTP/1.0, which the real server rejected with "426
-         * Upgrade Required" - a genuine finding from testing against
-         * a real, unmodified server, not a TCP bug: switched to
-         * HTTP/1.1 once it was clear the underlying connection,
-         * request, and response were all working correctly. This
-         * same test also caught a real, separate pre-existing bug:
-         * ip_send() never actually used NET_NETMASK to route through
-         * the gateway for an off-subnet destination (defined since
-         * Phase 6, never wired up) - every earlier phase's self-tests
-         * only ever talked to on-subnet SLIRP addresses, so the gap
-         * had no way to surface until this was the first thing to
-         * ever address a genuinely external IP. Fixed in ip.c. */
-        if (dns_resolve("example.com", NET_DNS_SERVER_IP, &resolved_ip) &&
-            tcp_connect(resolved_ip, 80)) {
-            const char* request =
-                "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: "
-                "close\r\n\r\n";
-            if (tcp_send(request, (uint16_t)strlen(request))) {
-                static char response_buf[2048];
-                int total = 0;
-                for (;;) {
-                    int n = tcp_receive(response_buf + total,
-                                        (uint16_t)(sizeof(response_buf) -
-                                                    (uint32_t)total - 1),
-                                        300);
-                    if (n <= 0) {
-                        break; /* 0 = clean close, -1 = timeout/error */
-                    }
-                    total += n;
-                    if (total >= (int)sizeof(response_buf) - 1) {
-                        break;
-                    }
-                }
-                response_buf[total] = '\0';
+        /* Self-test (Phase 28, rewritten in Phase 58): the same
+         * genuine end-to-end TCP test against a real, unmodified
+         * public HTTP server as before - the same "depends on real
+         * upstream connectivity, logged as WARN not a hard failure"
+         * honesty (see this test's own original Phase 28 history in
+         * PROGRESS.md, including the real ip_send()/NET_NETMASK
+         * routing bug it caught back then) - now exercised through
+         * kernel/rust/tcp.rs's real RFC 793 state machine via the same
+         * rust_tcp_*() entry points the new Berkeley-sockets-style
+         * syscalls (SYS_SOCKET/SYS_CONNECT/SYS_WRITE_HANDLE/SYS_READ/
+         * SYS_CLOSE) dispatch to from ring 3, rather than calling
+         * straight into the old, now-removed ring-0-only tcp.c client.
+         * This remains this project's one and only test of the real,
+         * unmodified-server client (active-open) path - see
+         * rust_tcp_selftest(), just below, for the new LISTEN/accept
+         * (passive-open) path, which has no real remote peer to test
+         * against and so is exercised synthetically instead. */
+        {
+            extern int rust_tcp_socket(void);
+            extern int rust_tcp_connect(int id, uint32_t remote_ip,
+                                         uint16_t remote_port);
+            extern int rust_tcp_send(int id, const uint8_t* buf, uint32_t len);
+            extern int rust_tcp_recv(int id, uint8_t* buf, uint32_t max_len);
+            extern void rust_tcp_close(int id);
 
-                if (total > 0) {
-                    char preview[64];
-                    int preview_len =
-                        (total < (int)sizeof(preview) - 1)
-                            ? total
-                            : (int)sizeof(preview) - 1;
-                    memcpy(preview, response_buf, (uint32_t)preview_len);
-                    preview[preview_len] = '\0';
-                    kernel_log("[ OK ] TCP HTTP OK: received %d bytes "
-                               "from example.com:80, starting with: "
-                               "%s\n", total, preview);
+            int sock = rust_tcp_socket();
+            if (sock >= 0 &&
+                dns_resolve("example.com", NET_DNS_SERVER_IP, &resolved_ip) &&
+                rust_tcp_connect(sock, resolved_ip, 80) == 0) {
+                const char* request =
+                    "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: "
+                    "close\r\n\r\n";
+                int sent = rust_tcp_send(sock, (const uint8_t*)request,
+                                          (uint32_t)strlen(request));
+                if (sent > 0) {
+                    static char response_buf[2048];
+                    int total = 0;
+                    uint32_t deadline = timer_get_ticks() + 300;
+                    for (;;) {
+                        int n = rust_tcp_recv(
+                            sock, (uint8_t*)(response_buf + total),
+                            (uint32_t)(sizeof(response_buf) -
+                                       (uint32_t)total - 1));
+                        if (n > 0) {
+                            total += n;
+                            deadline = timer_get_ticks() + 300; /* reset
+                                                                    on
+                                                                    progress */
+                        } else if (n == 0 || n == -1) {
+                            break; /* 0 = clean close, -1 = real error */
+                        }
+                        /* n == -2 (would block): fall through and keep
+                         * polling - yielding here (not just relying on
+                         * whatever else calls net_poll()) is what
+                         * actually gives rust_tcp_poll() a chance to
+                         * run and this connection a chance to make
+                         * progress; see arp_resolve()'s own Phase 58
+                         * fix for why yielding here is safe. */
+                        if (total >= (int)sizeof(response_buf) - 1) {
+                            break;
+                        }
+                        if (timer_get_ticks() >= deadline) {
+                            break; /* timeout */
+                        }
+                        scheduler_yield();
+                    }
+                    response_buf[total] = '\0';
+
+                    if (total > 0) {
+                        char preview[64];
+                        int preview_len =
+                            (total < (int)sizeof(preview) - 1)
+                                ? total
+                                : (int)sizeof(preview) - 1;
+                        memcpy(preview, response_buf, (uint32_t)preview_len);
+                        preview[preview_len] = '\0';
+                        kernel_log("[ OK ] TCP HTTP OK (Rust stack): "
+                                   "received %d bytes from "
+                                   "example.com:80, starting with: %s\n",
+                                   total, preview);
+                    } else {
+                        kernel_log("[WARN] TCP HTTP: connected and sent "
+                                   "a request but received no data "
+                                   "back\n");
+                    }
                 } else {
-                    kernel_log("[WARN] TCP HTTP: connected and sent a "
-                               "request but received no data back\n");
+                    kernel_log("[WARN] TCP HTTP: send failed after "
+                               "connecting\n");
                 }
+                rust_tcp_close(sock);
             } else {
-                kernel_log("[WARN] TCP HTTP: send failed after "
-                           "connecting\n");
+                kernel_log("[WARN] TCP HTTP: could not connect to "
+                           "example.com:80 (no upstream network "
+                           "access?)\n");
+                if (sock >= 0) {
+                    rust_tcp_close(sock);
+                }
             }
-            tcp_close();
-        } else {
-            kernel_log("[WARN] TCP HTTP: could not connect to "
-                       "example.com:80 (no upstream network access?)\n");
+        }
+
+        /* Self-test (Phase 58): kernel/rust/tcp.rs's own LISTEN/
+         * SYN_RECEIVED/accept/data/close path - see
+         * rust_tcp_selftest()'s own doc comment for why this has to be
+         * synthetic (hand-crafted incoming segments fed directly to
+         * rust_tcp_handle_packet(), the closest thing to a loopback
+         * test this kernel can do without a real loopback interface)
+         * rather than a real end-to-end test the way the HTTP client
+         * test just above is - nothing outside this machine will ever
+         * connect back to it. Returns a bitmask (0 = every check
+         * passed). */
+        {
+            extern int rust_tcp_selftest(void);
+            int result = rust_tcp_selftest();
+            kernel_log("[ %s ] Kernel-side Rust TCP self-test (LISTEN/"
+                       "accept, synthetic): listen=%s syn-received=%s "
+                       "established+backlog=%s accept=%s recv=%s "
+                       "send=%s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       (result & 1) ? "FAIL" : "pass",
+                       (result & 2) ? "FAIL" : "pass",
+                       (result & 4) ? "FAIL" : "pass",
+                       (result & 8) ? "FAIL" : "pass",
+                       (result & 16) ? "FAIL" : "pass",
+                       (result & 32) ? "FAIL" : "pass");
         }
     }
 }

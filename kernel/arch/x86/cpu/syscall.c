@@ -50,6 +50,13 @@ typedef enum {
     OPEN_KIND_VFS = 0,
     OPEN_KIND_PIPE_READ,
     OPEN_KIND_PIPE_WRITE,
+    /* Phase 58: a TCP socket handle - the same "extend open_files[]
+     * with a new non-VFS-backed kind" pattern pipes already
+     * established, so SYS_READ/SYS_WRITE_HANDLE/SYS_CLOSE already
+     * dispatch to it "for free" once handle_read()/handle_write_handle()/
+     * handle_close() below recognize this kind - see kernel/rust/tcp.rs
+     * for the real recv()/send()/close() logic each dispatches to. */
+    OPEN_KIND_SOCKET,
 } open_kind_t;
 
 typedef struct {
@@ -59,7 +66,11 @@ typedef struct {
                        is not a way around the capability check that
                        already happened at SYS_OPEN time */
     open_kind_t kind;
-    int pipe_id;    /* meaningful only when kind != OPEN_KIND_VFS */
+    int pipe_id;    /* meaningful only when kind != OPEN_KIND_VFS - also
+                        doubles as the socket's kernel/rust/tcp.rs
+                        connection id when kind == OPEN_KIND_SOCKET,
+                        the same field reused rather than adding a
+                        second, mutually-exclusive id field */
     char filename[13];
     uint32_t offset;
 } open_file_t;
@@ -92,6 +103,17 @@ extern void rust_pipe_close(int id, int is_read_end);
  * see that module's own doc comment and syscall.h's own SYS_SHUTDOWN
  * comment for the full contract. */
 extern int rust_acpi_shutdown(void);
+
+/* Phase 58: kernel/rust/tcp.rs's own exported functions - see that
+ * file's own doc comments for the full contract of each. */
+extern int rust_tcp_socket(void);
+extern int rust_tcp_bind(int id, uint16_t port);
+extern int rust_tcp_listen(int id, int backlog);
+extern int rust_tcp_accept(int id);
+extern int rust_tcp_connect(int id, uint32_t remote_ip, uint16_t remote_port);
+extern int rust_tcp_send(int id, const uint8_t* buf, uint32_t len);
+extern int rust_tcp_recv(int id, uint8_t* buf, uint32_t max_len);
+extern void rust_tcp_close(int id);
 
 static int str_eq_ci(const char* a, const char* b) {
     while (*a && *b) {
@@ -232,6 +254,20 @@ static void handle_read(registers_t* regs) {
         return;
     }
 
+    if (open_files[handle].kind == OPEN_KIND_SOCKET) {
+        /* Phase 58: same reasoning as the pipe-read branch just above -
+         * rust_tcp_recv() has its own independent locking (see
+         * kernel/rust/tcp.rs), so open_files_lock is released first;
+         * its return-value contract is deliberately identical to
+         * rust_pipe_read()'s (see that function's own doc comment),
+         * which is exactly what lets SYS_READ dispatch to either kind
+         * through this one shared path. */
+        int conn_id = open_files[handle].pipe_id;
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)rust_tcp_recv(conn_id, (uint8_t*)buf, max_len);
+        return;
+    }
+
     /* No real per-handle buffering - just re-reads the whole file (up
      * to a fixed scratch size) on every call and slices out whatever
      * the current offset/max_len asks for. Fine for the small demo
@@ -271,6 +307,18 @@ static void handle_write_handle(registers_t* regs) {
         kernel_log("[SECURITY] pid %d SYS_WRITE_HANDLE with an invalid or "
                    "not-owned handle %d\n", p != NULL ? p->pid : -1, handle);
         regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    if (open_files[handle].kind == OPEN_KIND_SOCKET) {
+        /* Phase 58: same reasoning as handle_read()'s socket branch -
+         * rust_tcp_send() has its own independent locking, and its
+         * return-value contract (bytes actually accepted, possibly
+         * less than `len` - or -1) is deliberately identical to
+         * rust_pipe_write()'s. */
+        int conn_id = open_files[handle].pipe_id;
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)rust_tcp_send(conn_id, (const uint8_t*)buf, len);
         return;
     }
 
@@ -447,6 +495,17 @@ static void handle_close(registers_t* regs) {
             rust_pipe_close(pipe_id, 1);
         } else if (kind == OPEN_KIND_PIPE_WRITE) {
             rust_pipe_close(pipe_id, 0);
+        } else if (kind == OPEN_KIND_SOCKET) {
+            /* Phase 58: fire-and-forget, same reasoning as the pipe
+             * cases above - rust_tcp_close() has its own independent
+             * locking, and this handle's own slot is already freed
+             * (above, under open_files_lock) before this runs, so no
+             * other CPU can reuse this handle number while the TCP-
+             * level close is still finishing in the background (see
+             * rust_tcp_close()'s own doc comment on why closing the
+             * handle doesn't mean the connection tears down
+             * instantly). */
+            rust_tcp_close(pipe_id);
         }
         return;
     }
@@ -754,6 +813,159 @@ static void handle_fork(registers_t* regs) {
     regs->eax = (uint32_t)child_pid;
 }
 
+/* Phase 58: the Berkeley-sockets-style syscall API - see syscall.h's
+ * own comment on each syscall number for the full contract. A socket
+ * is just another open_files[] entry (OPEN_KIND_SOCKET, this table's
+ * pipe_id field reused as the connection id - see open_file_t's own
+ * comment), the same pattern pipes already established, so recv()/
+ * send()/close() are already handled above by handle_read()/
+ * handle_write_handle()/handle_close() and don't need their own
+ * syscalls here. */
+
+static void handle_socket(registers_t* regs) {
+    process_t* p = process_current();
+    if (p == NULL) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int conn_id = rust_tcp_socket();
+    if (conn_id < 0) {
+        kernel_log("[FAULT] SYS_SOCKET: no free TCP connection slots\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+    int slot = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!open_files[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        spinlock_release(&open_files_lock, flags);
+        rust_tcp_close(conn_id);
+        kernel_log("[FAULT] SYS_SOCKET: open file table full\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    open_files[slot].in_use = true;
+    open_files[slot].owner_pid = p->pid;
+    open_files[slot].kind = OPEN_KIND_SOCKET;
+    open_files[slot].pipe_id = conn_id;
+    spinlock_release(&open_files_lock, flags);
+
+    kernel_log("[SYSCALL] pid %d SYS_SOCKET -> handle %d (tcp conn %d)\n",
+               p->pid, slot, conn_id);
+    regs->eax = (uint32_t)slot;
+}
+
+/* Shared validation for SYS_BIND/SYS_LISTEN/SYS_ACCEPT/SYS_CONNECT:
+ * confirms `handle` is a currently-open, calling-process-owned socket
+ * handle and returns its underlying kernel/rust/tcp.rs connection id,
+ * or -1 (and logs, the same [SECURITY] pattern every other handle-
+ * validating syscall in this file already uses) if not. Always
+ * releases open_files_lock itself before returning - callers never see
+ * it held. */
+static int lookup_socket_conn_id(int handle) {
+    process_t* p = process_current();
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+    if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use ||
+        open_files[handle].owner_pid != (p != NULL ? p->pid : -1) ||
+        open_files[handle].kind != OPEN_KIND_SOCKET) {
+        spinlock_release(&open_files_lock, flags);
+        kernel_log("[SECURITY] pid %d used an invalid/not-owned/non-socket "
+                   "handle %d for a socket syscall\n",
+                   p != NULL ? p->pid : -1, handle);
+        return -1;
+    }
+    int conn_id = open_files[handle].pipe_id;
+    spinlock_release(&open_files_lock, flags);
+    return conn_id;
+}
+
+static void handle_bind(registers_t* regs) {
+    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    regs->eax = (uint32_t)rust_tcp_bind(conn_id, (uint16_t)regs->ecx);
+}
+
+static void handle_listen(registers_t* regs) {
+    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    regs->eax = (uint32_t)rust_tcp_listen(conn_id, (int)regs->ecx);
+}
+
+static void handle_connect(registers_t* regs) {
+    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    process_t* p = process_current();
+    uint32_t dest_ip = regs->ecx;
+    uint16_t dest_port = (uint16_t)regs->edx;
+    kernel_log("[SYSCALL] pid %d SYS_CONNECT handle %d -> %d.%d.%d.%d:%d\n",
+               p != NULL ? p->pid : -1, (int)regs->ebx,
+               (int)(dest_ip >> 24) & 0xFF, (int)(dest_ip >> 16) & 0xFF,
+               (int)(dest_ip >> 8) & 0xFF, (int)dest_ip & 0xFF,
+               (int)dest_port);
+    regs->eax = (uint32_t)rust_tcp_connect(conn_id, dest_ip, dest_port);
+}
+
+/* Blocking (see rust_tcp_accept()'s own doc comment) - deliberately
+ * called with open_files_lock already released (lookup_socket_conn_id()
+ * above releases it before returning), the same "never hold a lock
+ * across a blocking/yielding call" discipline Phase 57's own audit
+ * established for every other lock in this kernel. */
+static void handle_accept(registers_t* regs) {
+    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int new_conn_id = rust_tcp_accept(conn_id);
+    if (new_conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    process_t* p = process_current();
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+    int slot = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!open_files[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        spinlock_release(&open_files_lock, flags);
+        rust_tcp_close(new_conn_id);
+        kernel_log("[FAULT] SYS_ACCEPT: open file table full\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    open_files[slot].in_use = true;
+    open_files[slot].owner_pid = p != NULL ? p->pid : -1;
+    open_files[slot].kind = OPEN_KIND_SOCKET;
+    open_files[slot].pipe_id = new_conn_id;
+    spinlock_release(&open_files_lock, flags);
+
+    kernel_log("[SYSCALL] pid %d SYS_ACCEPT -> handle %d (tcp conn %d)\n",
+               p != NULL ? p->pid : -1, slot, new_conn_id);
+    regs->eax = (uint32_t)slot;
+}
+
 void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
@@ -887,6 +1099,26 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_SHUTDOWN:
             handle_shutdown(regs);
+            break;
+
+        case SYS_SOCKET:
+            handle_socket(regs);
+            break;
+
+        case SYS_BIND:
+            handle_bind(regs);
+            break;
+
+        case SYS_LISTEN:
+            handle_listen(regs);
+            break;
+
+        case SYS_ACCEPT:
+            handle_accept(regs);
+            break;
+
+        case SYS_CONNECT:
+            handle_connect(regs);
             break;
 
         default:

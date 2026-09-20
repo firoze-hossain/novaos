@@ -243,3 +243,45 @@ int sys_shutdown(void) {
     __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
     return result;
 }
+
+int sys_socket(void) {
+    int result = SYS_SOCKET;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
+int sys_bind(int handle, unsigned short port) {
+    int result = SYS_BIND;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"((int)port)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_listen(int handle, int backlog) {
+    int result = SYS_LISTEN;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(backlog)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_accept(int handle) {
+    int result = SYS_ACCEPT;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port) {
+    int result = SYS_CONNECT;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(dest_ip), "d"((int)dest_port)
+                       : "memory", "cc");
+    return result;
+}

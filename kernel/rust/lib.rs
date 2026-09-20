@@ -37,6 +37,7 @@ mod pbkdf2;
 mod journal;
 mod crashdump;
 mod apic;
+mod tcp;
 
 use core::panic::PanicInfo;
 

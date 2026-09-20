@@ -90,6 +90,14 @@ bool net_driver_send(const void* frame, uint16_t length) {
  * comment. */
 extern bool rust_net_rx_check_and_clear(void);
 
+/* Phase 58: kernel/rust/tcp.rs's own retransmission/pacing clock - see
+ * that file's own rust_tcp_poll() doc comment for why net_poll() is
+ * its call site (this kernel has no dedicated per-connection timer
+ * interrupt, so it rides along on whatever already calls net_poll()
+ * regularly: the idle loop, and every other blocking wait loop in this
+ * kernel). */
+extern void rust_tcp_poll(void);
+
 uint16_t net_driver_receive(void* buffer) {
     switch (active_nic) {
         case NIC_VIRTIO_NET:
@@ -184,6 +192,13 @@ void net_poll(void) {
     if (length > 0) {
         eth_handle_frame(frame_buffer, length);
     }
+
+    /* Phase 58: drive TCP retransmission/pacing every time something
+     * already calls net_poll() - see rust_tcp_poll()'s own doc comment.
+     * Unconditional (not gated behind `length > 0`): a connection needs
+     * to retransmit or send more buffered data even on a tick where
+     * nothing arrived. */
+    rust_tcp_poll();
 }
 
 uint16_t net_checksum16(const void* data, uint16_t length) {

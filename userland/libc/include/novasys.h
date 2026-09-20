@@ -44,6 +44,11 @@
 #define SYS_GETUID 30
 #define SYS_SUDO 31
 #define SYS_SHUTDOWN 32
+#define SYS_SOCKET   33
+#define SYS_BIND     34
+#define SYS_LISTEN   35
+#define SYS_ACCEPT   36
+#define SYS_CONNECT  37
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -134,5 +139,34 @@ int sys_sudo(const char* password);
  * -4/-5 this machine needed an ACPI-enable handshake that failed, -6
  * the real S5 write was issued but had no effect. */
 int sys_shutdown(void);
+
+/* Phase 58: a real Berkeley-sockets-style API - see
+ * kernel/arch/x86/cpu/syscall.h's own comment on each syscall number
+ * for the full contract; kernel/rust/tcp.rs implements the real TCP
+ * state machine behind all of these.
+ *
+ * sys_socket() takes no arguments (this kernel only ever creates an
+ * IPv4/TCP socket) and returns a handle, or -1. sys_bind()'s `port` is
+ * host byte order; 0 auto-assigns an ephemeral port. sys_listen()'s
+ * `backlog` is accepted for Berkeley-sockets shape compatibility but
+ * currently unused (the real backlog is a small fixed size).
+ * sys_accept() blocks until a connection completes its handshake and
+ * returns a brand new handle for it, or -1. sys_connect()'s
+ * `dest_ip`/`dest_port` match sys_ping_start()'s own convention
+ * (dest_ip built with e.g. ip_make(), host byte order); blocks until
+ * ESTABLISHED or failure, returning 0 or -1.
+ *
+ * Once connected, an existing socket handle is read with the existing
+ * sys_read() (-2 return means "would block", not an error - more data
+ * may still arrive), written with the existing sys_write_handle(), and
+ * torn down with the existing sys_close() - all three already dispatch
+ * correctly on a socket handle exactly the way they already do on a
+ * pipe handle (see kernel/arch/x86/cpu/syscall.c); no new read/write/
+ * close syscalls were needed for this phase. */
+int sys_socket(void);
+int sys_bind(int handle, unsigned short port);
+int sys_listen(int handle, int backlog);
+int sys_accept(int handle);
+int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port);
 
 #endif
