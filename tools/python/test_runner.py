@@ -386,6 +386,22 @@ ASSERTIONS: list[Assertion] = [
               "the calling process to uid 0/gid 0 - the first check "
               "anywhere in this kernel that gates a privileged action on "
               "a process's own uid"),
+    Assertion("tcp_selftest_established",
+              r"Kernel-side Rust TCP self-test.*established\+backlog=pass",
+              "kernel/rust/tcp.rs's real LISTEN/SYN_RECEIVED/accept state "
+              "machine correctly completed a synthetic 3-way handshake"),
+    Assertion("tcp_selftest_recv", r"Kernel-side Rust TCP self-test.*recv=pass",
+              "kernel/rust/tcp.rs correctly delivered synthetic inbound data "
+              "to rust_tcp_recv()"),
+    Assertion("exec_trusted_delegation_passed",
+              r"sandbox. PASS: SYS_EXEC_TRUSTED delegates can_open_any_file "
+              r"correctly",
+              "Phase 59's SYS_EXEC_TRUSTED syscall correctly delegates a "
+              "trusted caller's own can_open_any_file capability to a "
+              "child it execs this way, and plain SYS_EXEC (same caller) "
+              "correctly does not - verified via a real write/read-back/"
+              "delete/confirm-deleted cycle against TPROBE.ELF, a real "
+              "on-disk ELF32 program, not a synthetic in-kernel call"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

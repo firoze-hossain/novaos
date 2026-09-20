@@ -199,6 +199,18 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
                                    const uint32_t* hosts, int host_count,
                                    bool can_spawn);
 
+/* Phase 59: see process.c's own comment on this function - a narrow,
+ * deliberate exception used only to let a real ring-3 self-test task
+ * genuinely exercise SYS_EXEC_TRUSTED's own capability-delegation
+ * path, not a general substitute for process_create_sandboxed_task()
+ * above. */
+int process_create_sandboxed_task_trusted(const char* name,
+                                           void (*entry)(void),
+                                           const char** filenames,
+                                           int file_count,
+                                           const uint32_t* hosts,
+                                           int host_count, bool can_spawn);
+
 /* Phase 23: how many argv entries process_exec() will pass through -
  * a small, fixed bound, the same "simple and honest about the limit"
  * choice as MAX_CAPABILITIES above rather than a dynamically-sized
@@ -239,6 +251,22 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
  * purpose program that needs them. Kernel-boot-sequence use only;
  * never reachable from ring-3 SYS_EXEC. */
 int process_exec_as_shell(const char* path, const char** argv, int argc);
+
+/* Phase 59: SYS_EXEC_TRUSTED's own kernel-side implementation - see
+ * kernel/arch/x86/cpu/syscall.h's own comment on that syscall for the
+ * full reasoning. Like process_exec(), except the new process's
+ * can_open_any_file is set to whatever the *calling* process's own
+ * can_open_any_file currently is (read via process_current()), rather
+ * than always false. Reachable from ring-3 SYS_EXEC_TRUSTED, unlike
+ * process_exec_with_files()/process_exec_as_shell() above - safe to
+ * expose because an unprivileged caller's own can_open_any_file is
+ * always false, so it has nothing to delegate; only a process already
+ * carrying that grant (today, only the interactive shell) can pass it
+ * on, and only to a program it explicitly execs this way, not to
+ * everything it runs. process_current() being NULL (no calling
+ * process) is treated as "nothing to delegate," the same
+ * fail-closed default plain process_exec() already uses. */
+int process_exec_trusted(const char* path, const char** argv, int argc);
 
 /* Blocks (yielding repeatedly) until process `pid` reaches
  * PROCESS_TERMINATED, then returns its exit code. Returns -1

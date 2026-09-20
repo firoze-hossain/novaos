@@ -155,10 +155,10 @@ source, not assumed from a phase number.
 
 ### 2.1 A shell and coreutils that feel complete
 
-| What | Why a user notices | Best-in-class reference |
-|---|---|---|
-| Port the remaining coreutils to ring-3 (`ls`, `echo`, `cp`, and others exist only in the legacy ring-0 shell today — only `cat` is a real ring-3 utility so far). | The everyday, moment-to-moment experience of using the shell — this is what "the OS feels finished" mostly *is*, in practice. | **Linux/BSD coreutils** — the exact, well-known command set users already expect. Don't invent new names/flags; match the familiar ones. |
-| `ping`/`nslookup`/`tftp`/`pkg`/the GUI aren't reachable from the ring-3 shell yet. | Right now the "real" shell (ring-3) is meaningfully less capable than the old ring-0 one — a visible regression to anyone who's used both. | — |
+| What | Status | Why a user notices | Best-in-class reference |
+|---|---|---|---|
+| Port the remaining coreutils to ring-3 (`ls`, `echo`, `cp`, and others exist only in the legacy ring-0 shell today — only `cat` is a real ring-3 utility so far). | ✅ **Done (Phase 59), written entirely in Rust.** `ls`/`echo`/`cp`/`rm` are now real, separate ring-3 ELF32 programs (`userland/coreutils-rs/{ls,echo,cp,rm}.rs`, plus the existing `cat.c`) that the shell execs, not logic duplicated inline — genuinely closing this row's own "port to ring-3" scope, not just adding `cp`/`rm` as two more shell builtins. Closing this needed a real kernel-level fix first: `cp`/`rm`/`cat` all need to open, write, or delete a file *by the name the user just typed*, which the existing `can_open_any_file` capability (reset to nothing on every `SYS_EXEC` by design since Phase 29/30) never granted to an exec'd program — the same gap that kept Phase 32's `pkg` a shell builtin rather than a separate binary. A new syscall, `SYS_EXEC_TRUSTED` (38), closes it: identical to `SYS_EXEC`, except it delegates the *calling* process's own `can_open_any_file` to the child, so only an already-trusted caller (today, only the interactive shell) has anything to delegate, and an ordinary caller's delegation is a safe no-op. Verified for real at boot against a genuine on-disk ELF32 binary (`TPROBE.ELF`) — a new self-test confirms plain `SYS_EXEC` correctly denies and `SYS_EXEC_TRUSTED` correctly delegates, through a real write/read-back/delete/confirm-deleted cycle, not a synthetic in-kernel call. `ls`/`echo` run under plain `SYS_EXEC` (no special capability needed); `cat`/`cp`/`rm` run under `SYS_EXEC_TRUSTED`. **Verified** the same sandbox-stub QEMU way every phase since Phase 53 has been: the new kernel C (the syscall, the two new `process.c` functions, the self-test task) built, linked, and booted cleanly with no regressions — the full boot-test suite still shows exactly the same pre-existing, environment-caused failures as before this phase, plus one new pass. The four Rust coreutils themselves were verified with a host-target `--emit=metadata` check (zero errors/warnings after fixing a real NUL-termination memory-safety bug in `cp.rs` and cleaning up 2024-edition `static_mut_refs` lint warnings) — this sandbox's own pre-existing `compiler_builtins` rlib mismatch (documented since Phase 33's `ping-rs`) still blocks producing the actual `.ELF` binaries here, so the user's own machine, where this project's Rust sysroot has previously built real binaries, is where `sh userland/coreutils-rs/build.sh` + `make disk.img` will produce them and let `ls`/`echo`/`cp`/`rm` run for real at the shell prompt. See `PROGRESS.md`'s own Phase 59 entry for the full account. | The everyday, moment-to-moment experience of using the shell — this is what "the OS feels finished" mostly *is*, in practice. | **Linux/BSD coreutils** — the exact, well-known command set users already expect. Don't invent new names/flags; match the familiar ones. |
+| `ping`/`nslookup`/`tftp`/`pkg`/the GUI aren't reachable from the ring-3 shell yet. | Still not started — out of this phase's own scope (it targeted the coreutils named in the row above specifically). | Right now the "real" shell (ring-3) is meaningfully less capable than the old ring-0 one — a visible regression to anyone who's used both. | — |
 
 ### 2.2 Package management that actually installs software
 
@@ -221,8 +221,13 @@ A rough shape, so "release" means something concrete:
   partial scope (4 of ~10 drivers migrated) — extending to the
   remaining drivers (`timer`/`vfs`/`net`) is real, smaller follow-up
   work, not a new milestone item.
-- Remaining coreutils ported to ring-3 (Part 2.1) — still not started;
-  see Part 2, unchanged since this document was last updated.
+- ~~Remaining coreutils ported to ring-3 (Part 2.1)~~ ✅ **done (Phase
+  59)** — `ls`/`echo`/`cp`/`rm` are all real, separate ring-3 programs
+  now, written in Rust, plus the new `SYS_EXEC_TRUSTED` capability-
+  delegation mechanism this needed; see Part 2.1 for the full account.
+  `ping`/`nslookup`/`tftp`/`pkg`/the GUI still aren't reachable from
+  the ring-3 shell — real, smaller follow-up work, not a blocker for
+  this milestone.
 
 **v1.0 ("I'd hand this to a curious friend")**
 - ~~Login screen + `sudo`-equivalent (Part 1.1)~~ ✅ **done (Phases

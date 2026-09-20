@@ -49,6 +49,7 @@
 #define SYS_LISTEN   35
 #define SYS_ACCEPT   36
 #define SYS_CONNECT  37
+#define SYS_EXEC_TRUSTED 38
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -168,5 +169,15 @@ int sys_bind(int handle, unsigned short port);
 int sys_listen(int handle, int backlog);
 int sys_accept(int handle);
 int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port);
+
+/* Phase 59: identical to sys_exec() in every respect but one - see
+ * kernel/arch/x86/cpu/syscall.h's own comment on SYS_EXEC_TRUSTED for
+ * the full reasoning. Delegates the *calling* process's own "may open
+ * any file" capability to the new process, instead of always granting
+ * nothing. Harmless to call from an ordinary, unprivileged program
+ * (delegating "false" is a no-op, identical to plain sys_exec()) -
+ * only meaningfully different when the caller already has that
+ * capability itself (in practice, only the interactive ring-3 shell). */
+int sys_exec_trusted(const char* path, char** argv, int argc);
 
 #endif

@@ -792,6 +792,34 @@ static void handle_exec(registers_t* regs) {
     regs->eax = (uint32_t)new_pid;
 }
 
+/* Phase 59's SYS_EXEC_TRUSTED - see kernel/arch/x86/cpu/syscall.h's own
+ * comment on this syscall for the full reasoning. Gated by can_spawn,
+ * exactly like plain SYS_EXEC above (a process still needs the basic
+ * "may create processes" capability either way) - the difference this
+ * syscall adds is entirely inside process_exec_trusted() itself, which
+ * reads the calling process's own can_open_any_file and passes that
+ * same value to the child, rather than always false. */
+static void handle_exec_trusted(registers_t* regs) {
+    process_t* p = process_current();
+
+    if (p == NULL || !p->can_spawn) {
+        kernel_log("[SECURITY] pid %d denied SYS_EXEC_TRUSTED - spawn "
+                   "capability not granted\n", p != NULL ? p->pid : -1);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    const char* path = (const char*)regs->ebx;
+    const char** argv = (const char**)regs->ecx;
+    int argc = (int)regs->edx;
+
+    int new_pid = process_exec_trusted(path, argv, argc);
+    kernel_log("[SYSCALL] pid %d SYS_EXEC_TRUSTED('%s') (can_open_any_file=%d "
+               "delegated) -> new pid %d\n", p->pid, path,
+               (int)p->can_open_any_file, new_pid);
+    regs->eax = (uint32_t)new_pid;
+}
+
 static void handle_wait(registers_t* regs) {
     int target_pid = (int)regs->ebx;
     int result = process_wait(target_pid);
@@ -1119,6 +1147,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_CONNECT:
             handle_connect(regs);
+            break;
+
+        case SYS_EXEC_TRUSTED:
+            handle_exec_trusted(regs);
             break;
 
         default:

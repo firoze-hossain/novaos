@@ -358,6 +358,34 @@
  * this too is real, sensible follow-up work. */
 #define SYS_CONNECT 37
 
+/* EBX = path (8.3 filename), ECX = argv (array of C string pointers),
+ * EDX = argc. Identical to SYS_EXEC in every respect but one: the new
+ * process's own can_open_any_file capability (see process.h's own
+ * comment on that field) is set to whatever the *calling* process's
+ * can_open_any_file currently is, instead of always false. This is a
+ * genuine, deliberately narrow capability-delegation mechanism, not a
+ * broadening of SYS_EXEC's own default-nothing behavior: an ordinary,
+ * unprivileged caller has can_open_any_file == false, so delegating
+ * "whatever I have" to a child is a no-op for it - the child still
+ * gets nothing, exactly like plain SYS_EXEC. Only a process that is
+ * already broadly trusted (today, only the interactive ring-3 shell,
+ * created via process_exec_as_shell() at boot) has anything real to
+ * delegate, and even then only to programs it explicitly chooses to
+ * launch this way - not automatically to everything it runs via plain
+ * `run`/SYS_EXEC. This exists specifically to close a real, previously
+ * named gap: Phase 29/30's own comments on process_exec_with_files()/
+ * process_exec_as_shell() already anticipated "a future, more capable
+ * shell [that] can deliberately choose what a program it launches may
+ * open" as real follow-up work, and Phase 32's own choice to keep the
+ * package manager a shell builtin instead of a separate exec'd binary
+ * cited the exact same missing mechanism as the reason why. Phase 59
+ * uses this to let the shell run real, standalone ring-3 coreutils
+ * (CP.ELF, RM.ELF, CAT.ELF) that need SYS_OPEN/SYS_WRITE_FILE/SYS_
+ * DELETE_FILE access to a file named at the prompt, without silently
+ * granting that same broad access to every other program SYS_EXEC can
+ * launch. Returns the new process's pid, or -1 - same as SYS_EXEC. */
+#define SYS_EXEC_TRUSTED 38
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

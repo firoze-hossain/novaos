@@ -285,3 +285,12 @@ int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_exec_trusted(const char* path, char** argv, int argc) {
+    int result = SYS_EXEC_TRUSTED;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(path), "c"(argv), "d"(argc)
+                       : "memory", "cc");
+    return result;
+}
