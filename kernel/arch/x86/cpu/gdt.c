@@ -25,7 +25,11 @@ struct gdt_ptr {
     uint32_t base;
 } __attribute__((packed));
 
-#define GDT_ENTRIES 6
+/* Phase 57: 5 fixed entries (null, kernel code/data, user code/data)
+ * plus one TSS descriptor per CPU this kernel's scheduler can ever
+ * schedule onto - see gdt.h's own GDT_TSS_GATE_INDEX()/GDT_TSS_
+ * SELECTOR() comment and kernel/include/smp.h's SCHED_MAX_CPUS. */
+#define GDT_ENTRIES (5 + SCHED_MAX_CPUS)
 
 static struct gdt_entry gdt[GDT_ENTRIES];
 static struct gdt_ptr   gdt_pointer;

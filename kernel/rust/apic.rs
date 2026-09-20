@@ -14,25 +14,35 @@
 //! (kernel/arch/x86/cpu/ap_trampoline.s), and enough per-CPU state to
 //! let a second CPU run independent, real kernel code at all.
 //!
-//! What this phase deliberately does NOT do, named as directly as
-//! Phase 44 named its own scope: this is not a symmetric multi-
-//! processing *scheduler*. kernel/task/scheduler.c's `current`/
-//! `current_index` globals and `pick_next()` are completely untouched
-//! - every AP this module brings up runs exactly one thing, forever,
-//! once it comes online: `rust_ap_main()`'s own `sti; hlt` idle loop
-//! below, never anything from kernel/task/. Nor is this an audit of
-//! every other existing shared kernel structure (the process table,
-//! the PMM bitmap, the heap allocator, every driver's own state) for
-//! real multi-CPU safety - this project's own release-readiness
-//! roadmap named that as "the genuinely hardest part... a much larger
-//! remaining task" than either of the two primitives (SpinLock,
-//! Phase 40; this module) that came before it, and nothing about
-//! actually building this module changed that assessment. It remains
-//! real, unaudited, future work, not a checkbox - see PROGRESS.md's
-//! Phase 56 entry for the explicit list of what that means in
-//! practice (starting with the fact that no AP here ever calls into
-//! kernel/task/ at all, so nothing SMP-unsafe there is actually
-//! exercised yet either).
+//! Phase 56 deliberately did NOT build a symmetric multi-processing
+//! *scheduler* on top of this - every AP it brought up ran exactly one
+//! thing, forever, once online: an `sti; hlt` idle loop, never
+//! anything from kernel/task/. Phase 57 is that next piece:
+//! kernel/task/scheduler.c now keeps one `current` process per CPU
+//! (not a single shared global), a real scheduler_lock, and an
+//! AP-join path (`scheduler_ap_join()`); this module's own
+//! `rust_ap_main()` now calls into it instead of idling forever - see
+//! that function's own updated comment below. Phase 57 also locked the
+//! specific shared structures Phase 56's own header comment named as
+//! still-unaudited (the process table, the PMM bitmap, the heap
+//! allocator) plus a few more found by reading the code closely (the
+//! open-file-handle table, a coarse VFS-wide lock) - see PROGRESS.md's
+//! Phase 57 entry for the honest, itemized account of what's covered
+//! and what still isn't (per-driver FAT32/ext2 locking chief among the
+//! latter - deliberately scoped out, same "real, unaudited, future
+//! work, not a checkbox" posture Phase 56's own header comment already
+//! set).
+//!
+//! This module's own contribution to Phase 57 specifically:
+//! `rust_smp_current_cpu_index()`, the one new C-callable export below
+//! (see kernel/include/smp.h's own doc comment for its full contract)
+//! - an MMIO-independent way for kernel/task/scheduler.c and
+//! kernel/arch/x86/cpu/tss.c to ask "which physical CPU is running
+//! this code right now," built on CPUID's "initial APIC ID" rather
+//! than this module's own `lapic_id()` specifically so it stays safe
+//! to call even on a machine where LAPIC_BASE was never set at all -
+//! see `cpuid_initial_apic_id()`'s own comment for exactly why that
+//! distinction matters.
 //!
 //! What IS real here, and provably so, not just claimed: a second
 //! (and third, ...) physical CPU core genuinely leaves reset state,
@@ -592,10 +602,10 @@ fn log_ap_running(apic_id: u8) {
 /// parallel would need either N separate trampoline copies (more
 /// physical low memory, more Makefile/embedding complexity) or a way
 /// for a newly-woken AP to read its own APIC ID before it can even
-/// find its own mailbox slot - real complexity this phase's own
-/// stated scope (get CPUs alive and running real code; leave
-/// scheduling and cross-subsystem locking for later) doesn't need to
-/// take on. The wall-clock cost (each AP's own INIT-SIPI-SIPI-and-wait
+/// find its own mailbox slot - real complexity Phase 56's own stated
+/// scope (get CPUs alive and running real code; leave scheduling and
+/// cross-subsystem locking for later - since built out by Phase 57)
+/// didn't need to take on. The wall-clock cost (each AP's own INIT-SIPI-SIPI-and-wait
 /// sequence, one after another) is milliseconds per CPU, paid once,
 /// at boot - not a real drawback for what this phase actually needs.
 ///
@@ -629,6 +639,22 @@ unsafe fn smp_boot_aps(smp: &crate::acpi::SmpDiscovery, bsp_apic_id: u8, lapic_b
     let mut next_index = 1u32; // 0 is implicitly the BSP itself
 
     for i in 0..(smp.cpu_count as usize) {
+        // Phase 57: stop launching further APs once the scheduler
+        // can't track any more anyway - BSP occupies index 0, so once
+        // `brought_up` APs are already up, SCHED_MAX_CPUS - 1 of them
+        // are registered and one more would only ever reach
+        // rust_ap_main()'s own register_cpu_index() == 0xFF fallback
+        // (permanently idle, never scheduled - see that function's own
+        // comment). Skipping the boot attempt entirely here is
+        // strictly better than paying the real INIT-SIPI-SIPI
+        // wall-clock cost per CPU for a CPU that could never do
+        // anything but idle regardless - see kernel/include/smp.h's
+        // own SCHED_MAX_CPUS comment, which already documents this
+        // exact behavior.
+        if brought_up + 1 >= SCHED_MAX_CPUS as u32 {
+            break;
+        }
+
         let apic_id = smp.apic_ids[i];
         if apic_id == bsp_apic_id {
             continue; // that's this CPU, already running - nothing to boot
@@ -682,6 +708,130 @@ unsafe fn smp_boot_aps(smp: &crate::acpi::SmpDiscovery, bsp_apic_id: u8, lapic_b
     brought_up
 }
 
+/// Phase 57: mirrors kernel/include/smp.h's identically-named/valued C
+/// constant exactly - see that header's own comment for the FFI-
+/// boundary-constant-duplication convention this project follows
+/// instead of a shared bridge header. Bounds CPU_INDEX_TABLE below and
+/// every per-CPU array kernel/task/scheduler.c and
+/// kernel/arch/x86/cpu/tss.c keep.
+const SCHED_MAX_CPUS: usize = 4;
+
+/// Phase 57: maps this kernel's own small, dense "scheduler CPU index"
+/// (0..SCHED_MAX_CPUS) to each registered CPU's real hardware identity
+/// - CPUID's "initial APIC ID" (see `cpuid_initial_apic_id()`'s own
+/// comment for exactly why that, and not this module's own MMIO-based
+/// `lapic_id()`, is the right key here). `None` means "this slot isn't
+/// registered to any CPU yet." Guarded by a SpinLock (Phase 40) rather
+/// than left lock-free: registration happens exactly once per real CPU
+/// this kernel ever runs on (the BSP, then each AP in turn, one at a
+/// time - see this table's own callers below) and lookups
+/// (`rust_smp_current_cpu_index()`, called from every scheduler tick
+/// on every CPU) are cheap enough that a short spin under contention
+/// is a complete non-issue in practice.
+static CPU_INDEX_TABLE: crate::spinlock::SpinLock<[Option<u8>; SCHED_MAX_CPUS]> =
+    crate::spinlock::SpinLock::new([None; SCHED_MAX_CPUS]);
+
+/// CPUID.1:EBX[31:24] - "initial APIC ID," a static, hardware-assigned
+/// per-CPU identity readable via a plain `cpuid` instruction from the
+/// very first cycle a CPU executes, with no dependency on the Local
+/// APIC's MMIO registers being mapped, enabled, or even present as an
+/// *addressable* device yet. Deliberately used here instead of this
+/// module's own `lapic_id()` for exactly that reason: on a machine
+/// where `rust_smp_init()` bails out before ever calling
+/// `LAPIC_BASE.store()` (no usable ACPI/MADT/LAPIC/IOAPIC at all - a
+/// perfectly ordinary single-core machine among them),
+/// `lapic_id(LAPIC_BASE.load(...))` would read from physical address
+/// 0, garbage at best, a real fault at worst - which would break
+/// `scheduler_current()`/`do_schedule()` on every single-core machine,
+/// a severe regression this function exists specifically to avoid.
+/// Safe to call from literally any code path, on any machine, at any
+/// point in boot.
+///
+/// # A bug this exact shape almost reintroduced (found and fixed
+/// during this phase's own QEMU verification, before it ever shipped)
+/// An earlier version of this function used `out(reg) ebx_out` - a
+/// generic register-class output - for a value that has to survive a
+/// `pop ebx` two instructions later. `out(reg)` lets the compiler pick
+/// ANY general-purpose register for `ebx_out`, including `ebx` itself;
+/// if it did, `pop ebx` would clobber the very register
+/// `mov {ebx_out:e}, ebx` had just written to, silently corrupting the
+/// returned APIC ID in a way that depends on register pressure at each
+/// call site - exactly the kind of intermittent, call-site-dependent
+/// bug that would make `rust_smp_current_cpu_index()` unreliable,
+/// which in turn would make `scheduler_current()`/`do_schedule()`
+/// (kernel/task/scheduler.c) intermittently treat a real, running
+/// process as having no valid CPU index and silently stop scheduling
+/// - a real, hard-to-spot deadlock. Fixed by forcing the output into
+/// `ecx` (`out("ecx") result`, a FIXED register distinct from `ebx`):
+/// cpuid's own `ebx` result is moved into `ecx` before `ebx` is
+/// restored, so there is no register the compiler could alias with
+/// `ebx` at all. `cpu_has_apic()` above already used this exact "fixed
+/// register, not a generic class" pattern for its own `edx` output -
+/// this function now matches it.
+fn cpuid_initial_apic_id() -> u8 {
+    let result: u32;
+    unsafe {
+        core::arch::asm!(
+            "push ebx",
+            "mov eax, 1",
+            "cpuid",
+            "mov ecx, ebx",
+            "pop ebx",
+            out("eax") _,
+            out("ecx") result,
+            out("edx") _,
+            options(nostack),
+        );
+    }
+    ((result >> 24) & 0xFF) as u8
+}
+
+/// Registers `apic_id` (see `cpuid_initial_apic_id()`'s own comment)
+/// into the first free slot of CPU_INDEX_TABLE and returns that slot
+/// as this CPU's own new "scheduler CPU index" - or 0xFF if the table
+/// is already full (more real CPUs than SCHED_MAX_CPUS; every caller
+/// already treats 0xFF as "not schedulable," the same fail-safe
+/// convention `rust_smp_current_cpu_index()` itself uses below).
+/// Idempotent: if `apic_id` is already registered (shouldn't happen -
+/// every real call site below registers a genuinely distinct physical
+/// CPU exactly once - but cheap to guard rather than assume), returns
+/// its existing index rather than wasting, or worse double-claiming, a
+/// second slot.
+fn register_cpu_index(apic_id: u8) -> u8 {
+    let mut table = CPU_INDEX_TABLE.lock();
+    for (i, slot) in table.iter().enumerate() {
+        if *slot == Some(apic_id) {
+            return i as u8;
+        }
+    }
+    for (i, slot) in table.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(apic_id);
+            return i as u8;
+        }
+    }
+    0xFF
+}
+
+/// kernel/include/smp.h's own C-callable contract - see that header's
+/// doc comment for the full picture. Returns this CPU's own registered
+/// scheduler index (0..SCHED_MAX_CPUS), or 0xFF if this CPU was never
+/// registered (shouldn't happen for the BSP or any AP this kernel
+/// itself brought up - see `rust_smp_init()`/`rust_ap_main()`'s own
+/// registration calls below - but a real, honest fallback rather than
+/// an unchecked array index for any caller reached some other way).
+#[no_mangle]
+pub extern "C" fn rust_smp_current_cpu_index() -> u8 {
+    let apic_id = cpuid_initial_apic_id();
+    let table = CPU_INDEX_TABLE.lock();
+    for (i, slot) in table.iter().enumerate() {
+        if *slot == Some(apic_id) {
+            return i as u8;
+        }
+    }
+    0xFF
+}
+
 /// CPUID.1:EDX bit 9 - "this CPU has an on-die Local APIC at all,"
 /// independent of anything ACPI claims. Checked before trusting the
 /// MADT's own word for it: ACPI tables describe the *platform*
@@ -717,6 +867,24 @@ fn cpu_has_apic() -> bool {
 /// (unchanged since Phase 2) remains exactly as it was.
 #[no_mangle]
 pub extern "C" fn rust_smp_init() -> i32 {
+    // Phase 57: register the BSP - unconditionally, before any
+    // capability check below - as scheduler CPU index 0. Must happen
+    // here, not after the cpu_has_apic()/ACPI/MADT/IOAPIC checks below
+    // (any one of which can return early), because
+    // kernel/task/scheduler.c's scheduler_current()/do_schedule() need
+    // a valid CPU index for the BSP on EVERY machine this kernel boots
+    // on - including a perfectly ordinary single-core one with no
+    // usable APIC at all - not just the multi-core ones the rest of
+    // this function goes on to actually bring APs up on. Uses CPUID's
+    // initial APIC ID (cpuid_initial_apic_id()), not lapic_id(): at
+    // this exact point LAPIC_BASE hasn't been set yet (and may never
+    // be, on the single-core path), so an MMIO-based read here would
+    // be the exact bug that function's own comment already warns
+    // against. register_cpu_index() on an empty table always returns
+    // 0, matching this project's own established convention (see
+    // scheduler.c's `do_schedule()`) that CPU index 0 means the BSP.
+    register_cpu_index(cpuid_initial_apic_id());
+
     if !cpu_has_apic() {
         return -1;
     }
@@ -801,23 +969,32 @@ pub extern "C" fn rust_smp_init() -> i32 {
 /// really can never return, since nothing in ap_trampoline.s left a
 /// return address on this AP's fresh stack for it to return to.
 ///
-/// Deliberately minimal, matching this phase's own stated scope (see
-/// this module's own header comment): this AP enables its own Local
-/// APIC (genuinely separate hardware from the BSP's, despite the
-/// shared MMIO address - see `lapic_id()`'s own comment), logs that
-/// it's alive, and idles - `sti` then `hlt`, forever. It does not
-/// call into kernel/task/scheduler.c, does not touch the process
-/// table, and is not itself an interrupt target for any device IRQ
+/// This AP enables its own Local APIC (genuinely separate hardware
+/// from the BSP's, despite the shared MMIO address - see
+/// `lapic_id()`'s own comment), logs that it's alive, registers its
+/// own CPUID-based scheduler index (`register_cpu_index()` - see that
+/// function's own comment), loads its own TSS
+/// (`tss_load_this_cpu()` - must happen only now, after registration,
+/// since it needs this AP's own real index, and only once, since
+/// `tss_init()` already installed every CPU's descriptor into the
+/// shared GDT back at boot), and joins the real scheduler
+/// (`scheduler_ap_join()`, kernel/task/scheduler.c) - a real change
+/// from Phase 56, whose own version of this function never called
+/// into kernel/task/ at all and idled forever instead (see this
+/// module's own header comment for the full Phase 56 -> 57 story).
+/// This AP is still not itself an interrupt target for any device IRQ
 /// (`ioapic_program_isa_redirects()` above routes every ISA IRQ's
 /// redirection entry at the BSP's own APIC ID specifically, not this
-/// one - see that function's own comment). `sti` here is still
-/// correct, not pointless, even though nothing is currently routed to
-/// this CPU: it's what lets a future phase's own inter-processor
-/// interrupt (a TLB shootdown, a wake-this-CPU-up IPI once real SMP
-/// scheduling exists) actually reach an idling AP instead of a
-/// permanently-`cli`'d one.
+/// one) - `scheduler_ap_join()`'s own busy-spin retry loop, not a
+/// timer tick, is what lets it pick up a process the instant one
+/// first becomes schedulable.
 #[no_mangle]
 pub extern "C" fn rust_ap_main() -> ! {
+    extern "C" {
+        fn tss_load_this_cpu(cpu_index: u8);
+        fn scheduler_ap_join(cpu_index: u8);
+    }
+
     let base = LAPIC_BASE.load(Ordering::Acquire);
     let id = unsafe {
         lapic_enable(base);
@@ -825,9 +1002,34 @@ pub extern "C" fn rust_ap_main() -> ! {
     };
     log_ap_running(id);
 
+    let cpu_index = register_cpu_index(cpuid_initial_apic_id());
+    if cpu_index == 0xFF {
+        // More real CPUs than SCHED_MAX_CPUS (see that constant's own
+        // comment) - this AP genuinely cannot be tracked by the
+        // scheduler at all. Falls back to the same permanently-idle
+        // `sti; hlt` loop this function used through Phase 56 rather
+        // than ever touching scheduler state with an invalid index:
+        // it stays alive and interruptible (a future inter-processor
+        // interrupt can still reach it) but never runs a process.
+        loop {
+            unsafe {
+                core::arch::asm!("sti", "hlt");
+            }
+        }
+    }
+
+    unsafe {
+        tss_load_this_cpu(cpu_index);
+        scheduler_ap_join(cpu_index);
+    }
+    // scheduler_ap_join() never returns (see its own C-side comment,
+    // kernel/task/scheduler.c) - this is unreachable in practice, kept
+    // only to satisfy this function's own `-> !` signature and to fail
+    // safe (parked, not undefined behavior) in the impossible case it
+    // somehow did.
     loop {
         unsafe {
-            core::arch::asm!("sti", "hlt");
+            core::arch::asm!("hlt");
         }
     }
 }

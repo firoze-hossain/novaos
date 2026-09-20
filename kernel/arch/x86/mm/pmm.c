@@ -17,6 +17,7 @@
  */
 #include "pmm.h"
 #include "../../../include/kernel.h"
+#include "../../../lib/spinlock.h"
 
 #define MAX_TRACKED_FRAMES (256u * 1024u) /* 1GB / 4KB */
 #define BITMAP_WORDS (MAX_TRACKED_FRAMES / 32)
@@ -26,6 +27,19 @@ extern uint32_t kernel_end;
 
 static uint32_t bitmap[BITMAP_WORDS];
 static uint32_t total_frames = 0;
+
+/* Phase 57: named directly in this project's own release-readiness
+ * roadmap as one of the shared structures a real SMP audit has to
+ * cover ("the PMM bitmap") - before this phase, two CPUs calling
+ * pmm_alloc_frame() (or alloc/free in any combination) at the exact
+ * same physical instant could both scan the bitmap, both see the same
+ * frame as free, and both mark-and-return it: a real double
+ * allocation, not a theoretical one, now that Phase 56 made a second
+ * core genuinely able to run kernel code concurrently with the first.
+ * pmm_init() itself is not locked - it runs once, at boot, before any
+ * AP exists (see kernel/init/main.c's own ordering), so there is
+ * nothing to race yet at that point. */
+static spinlock_t pmm_lock;
 
 static inline void bitmap_set(uint32_t frame) {
     bitmap[frame / 32] |= (1u << (frame % 32));
@@ -59,6 +73,8 @@ static void free_range(uint32_t phys_start, uint32_t phys_end) {
 }
 
 void pmm_init(const multiboot_info_t* mbi, bool magic_valid) {
+    spinlock_init(&pmm_lock);
+
     /* Start pessimistic: everything is "used" until proven to be
      * available RAM. This means a bad/missing memory map fails safe
      * (pmm_alloc_frame() just always returns 0) instead of handing out
@@ -111,12 +127,15 @@ void pmm_init(const multiboot_info_t* mbi, bool magic_valid) {
 }
 
 uint32_t pmm_alloc_frame(void) {
+    uint32_t flags = spinlock_acquire(&pmm_lock);
     for (uint32_t f = 0; f < total_frames; f++) {
         if (!bitmap_test(f)) {
             bitmap_set(f);
+            spinlock_release(&pmm_lock, flags);
             return f * PMM_FRAME_SIZE;
         }
     }
+    spinlock_release(&pmm_lock, flags);
     return 0; /* out of memory */
 }
 
@@ -139,6 +158,7 @@ uint32_t pmm_alloc_contiguous(uint32_t count) {
     if (count == 0) {
         return 0;
     }
+    uint32_t flags = spinlock_acquire(&pmm_lock);
     uint32_t run_start = 0;
     uint32_t run_len = 0;
     for (uint32_t f = 0; f < total_frames; f++) {
@@ -154,16 +174,20 @@ uint32_t pmm_alloc_contiguous(uint32_t count) {
             for (uint32_t i = run_start; i < run_start + count; i++) {
                 bitmap_set(i);
             }
+            spinlock_release(&pmm_lock, flags);
             return run_start * PMM_FRAME_SIZE;
         }
     }
+    spinlock_release(&pmm_lock, flags);
     return 0; /* no sufficiently long free run exists */
 }
 
 void pmm_free_frame(uint32_t phys_addr) {
     uint32_t frame = phys_addr / PMM_FRAME_SIZE;
     if (frame < MAX_TRACKED_FRAMES) {
+        uint32_t flags = spinlock_acquire(&pmm_lock);
         bitmap_clear(frame);
+        spinlock_release(&pmm_lock, flags);
     }
 }
 
@@ -171,6 +195,7 @@ void pmm_get_stats(pmm_stats_t* out) {
     if (out == NULL) {
         return;
     }
+    uint32_t flags = spinlock_acquire(&pmm_lock);
     out->total_frames = total_frames;
     out->used_frames = 0;
     for (uint32_t f = 0; f < total_frames; f++) {
@@ -179,4 +204,5 @@ void pmm_get_stats(pmm_stats_t* out) {
         }
     }
     out->free_frames = total_frames - out->used_frames;
+    spinlock_release(&pmm_lock, flags);
 }
