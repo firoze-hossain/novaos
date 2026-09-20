@@ -857,6 +857,85 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         }
     }
 
+    /* Phase 55: kernel/rust/acpi.rs's own FADT/_S5 parsing self-test -
+     * the same "small, fully synthetic, hand-constructed table" method
+     * the MADT self-test above already uses, extended to also prove
+     * the new _S5-package AML decode against a synthetic DSDT this
+     * test builds and checksums itself. Deliberately does not call
+     * rust_acpi_shutdown() - see that function's own doc comment for
+     * why a boot-time self-test must never risk actually powering the
+     * machine off. */
+    {
+        extern int rust_acpi_fadt_selftest(void);
+        int result = rust_acpi_fadt_selftest();
+        kernel_log("[ %s ] Kernel-side Rust ACPI FADT/_S5 parsing "
+                   "self-test: fadt-and-s5-values-correct=%s "
+                   "fadt-fields-correct=%s bad-checksum-rejected=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass");
+    }
+
+    /* Phase 55: real, non-destructive shutdown discovery - exactly
+     * what a real `shutdown` (kernel/arch/x86/cpu/syscall.c's own
+     * SYS_SHUTDOWN) would use on this actual machine, logged without
+     * ever touching a port that changes machine state. Mirrors the
+     * ACPI MADT block just above: real hardware discovery and parsing-
+     * logic correctness are proven separately, on their own terms, not
+     * conflated. See kernel/rust/acpi.rs's own AcpiShutdownInfo doc
+     * comment for the field-for-field FFI layout contract this struct
+     * relies on instead of a shared header - the same honest,
+     * unenforced-by-either-language convention this project's other
+     * Rust/C boundaries (e.g. kernel/fs/vfs.c's own crash_report_t)
+     * already use. */
+    {
+        /* uint8_t, deliberately NOT this kernel's own `bool`
+         * (kernel/include/types.h: a plain C enum, sized as a 4-byte
+         * int by this compiler, not one byte) - see
+         * kernel/rust/acpi.rs's own AcpiShutdownInfo doc comment for
+         * the real bug this avoids: an earlier version of this struct
+         * used `bool` here, which silently shifted every field after
+         * the first few by 9 bytes relative to the real Rust struct's
+         * actual 1-byte-per-flag layout, corrupting every field this
+         * block reads. Caught only by comparing this block's own
+         * logged values against a temporary diagnostic printed from
+         * inside the Rust/stub side itself - see PROGRESS.md's Phase
+         * 55 entry for the full account. */
+        struct {
+            uint8_t found_acpi;
+            uint8_t found_fadt;
+            uint8_t found_s5;
+            uint32_t pm1a_cnt_blk;
+            uint32_t pm1b_cnt_blk;
+            uint32_t smi_cmd;
+            uint8_t acpi_enable;
+            uint8_t sci_en_already_set;
+            uint16_t slp_typa;
+            uint16_t slp_typb;
+        } info;
+        extern int rust_acpi_shutdown_info(void* out);
+        int result = rust_acpi_shutdown_info(&info);
+        if (result == 0) {
+            kernel_log("[ OK ] ACPI shutdown (S5): ready - PM1a_CNT_BLK="
+                       "0x%x SLP_TYPa=%d SLP_TYPb=%d ACPI-already-"
+                       "enabled=%s (run the shell's own `shutdown` "
+                       "command to actually use this)\n",
+                       (unsigned int)info.pm1a_cnt_blk, (int)info.slp_typa,
+                       (int)info.slp_typb,
+                       info.sci_en_already_set ? "yes" : "no");
+        } else {
+            kernel_log("[WARN] ACPI shutdown (S5): not available on this "
+                       "machine (code %d - %s) - the shell's own "
+                       "`shutdown` command will report this same "
+                       "failure if used\n", result,
+                       result == -1 ? "no ACPI tables found" :
+                       result == -2 ? "no usable FADT/PM1a_CNT_BLK" :
+                       result == -3 ? "no _S5 package found in the DSDT" :
+                                      "unknown");
+        }
+    }
+
     /* Phase 46: proves virtio-blk is a genuine, mountable VFS block
      * device - not just capable of raw sector I/O (Phase 42's own,
      * now-superseded self-test already proved that), but capable of

@@ -175,6 +175,7 @@ static void cmd_help(void) {
     printf("  crashtest       - deliberately trigger a real CPU exception\n");
     printf("                    to manually verify the crash-dump feature\n");
     printf("                    (halts the machine - see PROGRESS.md Phase 54)\n");
+    printf("  shutdown        - real ACPI power-off (see PROGRESS.md Phase 55)\n");
     printf("  pkg list                - list available/installed packages\n");
     printf("  pkg install NAME        - install a package\n");
     printf("  pkg remove NAME         - remove an installed package\n");
@@ -399,6 +400,44 @@ static void cmd_crashtest(void) {
     );
     printf("crashtest: unreachable - the exception above should have "
            "halted the machine\n");
+}
+
+/* Phase 55: a real ACPI shutdown, via SYS_SHUTDOWN ->
+ * kernel/rust/acpi.rs's own rust_acpi_shutdown() - see that function's
+ * own doc comment for the full FADT/DSDT/_S5 discovery and ACPI-
+ * enable handshake it runs before ever touching a port. On real,
+ * working ACPI hardware sys_shutdown() does not return at all - the
+ * lines below the call are only ever reached on failure, the same
+ * "unreachable on success" shape cmd_crashtest() above already uses
+ * for its own always-halts command. */
+static void cmd_shutdown(void) {
+    printf("Shutting down (real ACPI S5 power-off)...\n");
+    int result = sys_shutdown();
+    printf("shutdown: failed (code %d) - the machine is still running.\n",
+           result);
+    switch (result) {
+        case -1:
+            printf("  no ACPI tables found on this machine at all.\n");
+            break;
+        case -2:
+            printf("  ACPI found, but no usable FADT/PM1a_CNT_BLK.\n");
+            break;
+        case -3:
+            printf("  FADT found, but no _S5 sleep-state package could "
+                   "be located in its DSDT.\n");
+            break;
+        case -4:
+        case -5:
+            printf("  this machine needs an ACPI-enable handshake first, "
+                   "and it failed.\n");
+            break;
+        case -6:
+            printf("  the real power-off command was sent, but this "
+                   "hardware didn't act on it.\n");
+            break;
+        default:
+            break;
+    }
 }
 
 static bool str_eq_ci(const char* a, const char* b) {
@@ -723,6 +762,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_beep();
         } else if (strcmp(tokens[0], "crashtest") == 0) {
             cmd_crashtest();
+        } else if (strcmp(tokens[0], "shutdown") == 0) {
+            cmd_shutdown();
         } else if (strcmp(tokens[0], "pkg") == 0) {
             cmd_pkg(argc2, tokens);
         } else if (strcmp(tokens[0], "gui") == 0) {

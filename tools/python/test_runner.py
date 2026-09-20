@@ -256,6 +256,19 @@ ASSERTIONS: list[Assertion] = [
               "count and Local APIC address - the genuine first "
               "prerequisite for SMP (CPU topology discovery), not SMP "
               "support itself"),
+    Assertion("acpi_fadt_selftest",
+              r"Kernel-side Rust ACPI FADT/_S5 parsing self-test.*"
+              r"fadt-and-s5-values-correct=pass",
+              "the FADT parsing and _S5 AML-package decode are both "
+              "correct, verified against a synthetic FADT/DSDT with "
+              "known-correct SLP_TYPa/SLP_TYPb values - the piece this "
+              "kernel's real shutdown (Phase 55) needs beyond Phase "
+              "44's own MADT parsing, and (like that phase's own real-"
+              "hardware discovery) not itself asserted here, since "
+              "whether a real FADT/_S5 are actually found depends on "
+              "where this specific machine's firmware placed them "
+              "relative to this kernel's own identity-mapped range - "
+              "see kernel/rust/acpi.rs's own header comment"),
     Assertion("virtio_net_selftest",
               r"Kernel-side Rust virtio-net self-test.*layout=pass",
               "the virtio-net virtqueue layout math and RX buffer post/"

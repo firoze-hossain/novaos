@@ -5516,7 +5516,232 @@ loss - the same standard, industry-wide assumption about real disk
 hardware, not something this kernel can independently prove against
 QEMU's own emulated disk.
 
-## Phase 55 and beyond
+## Phase 55: real ACPI shutdown (S5) - turning the computer off for real, in Rust
+
+**Status: Complete, and verified more strongly than any prior phase's
+own sandbox limitations allowed - see "Verified in layers" below for a
+real, live, automatable confirmation this session could get that
+Phase 53 and 54 genuinely could not.** Closes the release-readiness
+list's own "Real shutdown, not just reboot" row, which that document's
+own prior text pointed straight at this: "the foundation (real,
+verified ACPI table parsing) is no longer the blocker... the specific
+shutdown piece is still unbuilt." Phase 44's own MADT parsing already
+proved this kernel could read real ACPI tables; this phase reads a
+second one (the FADT) and adds the one piece no table field alone
+provides - a narrow, deliberately-scoped read of the DSDT's own AML
+bytecode - to make an actual `shutdown` command in the ring-3 shell
+really turn the machine off.
+
+### Design: FADT + a narrow, honest slice of AML, not a real AML interpreter
+
+`kernel/rust/acpi.rs` (Phase 44's own module, extended rather than
+duplicated - it already had the RSDP/RSDT scanning and bounds-checking
+this phase needed) gains FADT parsing (real signature `FACP`, not
+`FADT` - confirmed against the spec, not guessed), and a scan for the
+DSDT's `Name (_S5, Package (...) { SLP_TYPa, SLP_TYPb, ... })` object -
+the two 3-bit values that tell the real chipset which sleep state "S5"
+actually is on this specific machine. Getting those two bytes without
+becoming a general AML interpreter (a real byte-code VM with its own
+operand stack and dozens of opcodes - a huge, separate undertaking no
+hobby kernel needs in full just to shut down) uses the same narrow,
+independently-documented technique OSDev.org's own "Shutdown" page
+describes: scan the DSDT's raw bytes for the literal 4-byte name
+`_S5_`, then decode only the handful of bytes immediately following it
+directly - `PackageOp`, a `PkgLength` whose encoding is skipped rather
+than computed, an element count, and the two `SLP_TYP` integers
+themselves (each either `BytePrefix`+byte, or - for the values 0/1 -
+`ZeroOp`/`OneOp` alone, since those op bytes already equal the
+integers they mean). `kernel/rust/acpi.rs`'s own `find_s5_sleep_type()`
+and `try_parse_s5_package()` doc comments have the full byte-for-byte
+reasoning. Every read in this scan is bounds-checked against both the
+DSDT's own checksummed length and this kernel's identity-mapped range,
+the same paranoid discipline Phase 44's own MADT walk already
+established - this project's independently-documented reference for
+the technique (a real hobby-OS tutorial) has no bounds checking at
+all; this phase's own version does, at every single byte.
+
+Once `SLP_TYPa`/`SLP_TYPb` and `PM1a_CNT_BLK` (and `PM1b_CNT_BLK`, if
+present - most machines, including QEMU, don't have one) are known,
+the real shutdown is one write: if ACPI isn't already enabled (checked
+directly via `PM1a_CNT_BLK`'s own `SCI_EN` bit, not assumed), the real
+enable handshake (`SMI_CMD`/`ACPI_ENABLE`) runs first; then
+`(SLP_TYPa << 10) | SLP_EN` is written to the real I/O port via a
+direct `out` instruction (`core::arch::asm!`, the same inline-asm
+mechanism `kernel/rust/spinlock.rs` already established for this
+kernel-side Rust code, not a new pattern). On real, working ACPI
+hardware, that write is the entire mechanism - the machine powers off
+mid-function, and `rust_acpi_shutdown()` simply never returns.
+
+### A newly-discovered class of bug this phase's own bounded waits had to avoid
+
+Both the ACPI-enable handshake and the "did the power-off actually
+happen" check need to *wait* - but this function can be reached from a
+ring-3 `SYS_SHUTDOWN` syscall, and Phase 54's own PROGRESS.md entry
+already documented finding that this kernel's syscall gate
+(`syscall_stub.asm`) disables interrupts for a syscall's *entire*
+duration. A wait built the way `kernel/rust/journal.rs`/`crashdump.rs`'s
+own bounded operations are free to build one - counting real elapsed
+time via `timer_get_ticks()` - would need the PIT's IRQ0 to fire to
+ever make progress, and can't, from inside that same interrupts-
+disabled window: exactly the deadlock class Phase 54 found and
+documented, avoided here on purpose rather than rediscovered the hard
+way. Both waits in this phase are a fixed busy-loop iteration count
+instead - calibrated to "a lot of loop iterations," honestly not to
+any specific wall-clock duration, but immune to this entire failure
+mode regardless of what context calls them.
+
+### The syscall, the shell command, and the two-copies syscall-ABI header
+
+`SYS_SHUTDOWN` (32) is a plain, no-argument syscall -
+`kernel/arch/x86/cpu/syscall.c`'s `handle_shutdown()` calls
+`rust_acpi_shutdown()` directly and only ever sets a return value on
+failure, the same "unreachable on success" shape Phase 54's own
+`crashtest` command already established for an always-halts command.
+Deliberately **not** capability- or uid-gated, unlike `SYS_SUDO`'s own
+escalation check - matches the "any process can do this" scope
+`SYS_BEEP`/`SYS_GFX_*` already use, a scope decision stated directly
+rather than a security review this phase didn't do; gating shutdown to
+a privileged account is real, sensible follow-up work (see "Known
+limitations"). The new shell command (`userland/ring3-shell/shell.c`'s
+`cmd_shutdown()`, wired as `shutdown`) prints the specific failure
+reason if the machine is still running, matching each of
+`rust_acpi_shutdown()`'s own honestly-distinguished negative return
+values. As with every syscall this project adds, the new number and
+wrapper had to be added twice by hand - `kernel/arch/x86/cpu/syscall.h`
+*and* `userland/libc/include/novasys.h` - this project's own already-
+documented "two, hand-synchronized copies" limitation (see the
+"Phase 56 and beyond" candidate list this phase's own entry used to
+carry that note forward), not something this phase fixes, just
+another data point for why fixing it would be worth it.
+
+### A real bug this phase found in its own new code, caught before delivery, not after
+
+While verifying this phase's own boot-time discovery log (see
+"Verified in layers" below), the logged `PM1a_CNT_BLK`/`SLP_TYPa`
+values came back as all zeros - even though a diagnostic added
+directly inside the discovery function itself, one call frame earlier,
+printed the *correct*, real values (`0x604`, matching QEMU's own real,
+standard PM1a_CNT_BLK). That mismatch was the symptom of a genuine
+FFI-layout bug in this phase's own first draft: the C-side mirror
+struct in `kernel/init/main.c` used this kernel's own `bool`
+(`kernel/include/types.h`: `typedef enum { false = 0, true = 1 } bool;`
+- a plain C enum, sized as a 4-byte `int` by this compiler, not one
+byte), while Rust's `bool` in a `#[repr(C)]` struct is *always* exactly
+one byte, guaranteed by the language. Three `bool`-typed fields at the
+front of the struct meant the C side believed every field after them
+started 9 bytes later than where Rust had actually written it -
+`pm1a_cnt_blk` landed at whatever address `pm1b_cnt_blk` should have
+been at, `smi_cmd` where `acpi_enable` mostly was, and so on, every
+downstream field silently reading a neighbor's bytes instead of its
+own. `kernel/fs/vfs.c`'s own `crash_report_t` (Phase 54) had already
+established the right fix - plain fixed-width integers for every
+field that crosses this boundary, never either language's own `bool` -
+but this phase's first draft didn't follow that precedent for this new
+struct, and paid for it. Fixed by changing `AcpiShutdownInfo`'s four
+boolean-meaning fields (`found_acpi`, `found_fadt`, `found_s5`,
+`sci_en_already_set`) from `bool` to `u8` on the Rust side, and the
+mirror struct in `main.c` to `uint8_t` to match - `kernel/rust/acpi.rs`'s
+own `AcpiShutdownInfo` doc comment now states this explicitly, as a
+warning for the next FFI struct this project adds, not just a fixed
+bug. Caught here, before delivery, specifically *because* this phase's
+own extra verification step (below) diffed a real discovery result
+against a second, independent log of the same data - a struct that
+merely "compiled and didn't crash" would have shipped this exact
+corruption silently, since every read still landed inside this
+kernel's own identity-mapped range and never faulted.
+
+### Verified in layers - and, this time, a live confirmation the sandbox usually can't give
+
+The same honest, pre-existing gap as every prior phase: this sandbox
+cannot build NovaOS's real bare-metal Rust target end to end, so
+`kernel/rust/acpi.rs`'s own new code was verified via host-target
+(`x86_64-unknown-linux-gnu`) `--emit=metadata` type-and-borrow-checking
+- real verification, independent of target architecture - both before
+and after the `bool`-to-`u8` fix above.
+
+Beyond that, this phase went further than Phase 53 or 54's own C-
+integration stub could, because ACPI table parsing and a real I/O-port
+write have zero dependency on which language performs them: rather
+than a degraded no-op passthrough, this session's sandbox-only,
+never-delivered stub (`stub_rust.c`) got a genuine, independently
+hand-written C reimplementation of the exact same algorithm - same
+FADT field offsets, same `_S5_` AML scan, same port write - specific
+to this phase, unlike every other stubbed symbol in that file. Booting
+through it against this sandbox's real QEMU/SeaBIOS-supplied ACPI
+tables (at `-m 32M`, the same reduced-memory config Phase 44's own
+entry already established puts real ACPI tables inside this kernel's
+64MB identity-mapped range - the default `-m 512M` config does not,
+and reports so honestly, the same "not found... most likely above this
+kernel's own 64MB identity-mapped range" WARN Phase 44's own MADT
+discovery already logs) found a real FADT, a real `PM1a_CNT_BLK` of
+`0x604` (QEMU's own real, standard value - not a coincidence, direct
+confirmation this is finding the genuine table), a real `_S5` package,
+and correctly reported ACPI as already enabled (SeaBIOS's own default).
+
+Then, once that discovery was confirmed correct, this phase went one
+step further still: temporarily wiring a real call to
+`rust_acpi_shutdown()` directly into the boot sequence (never part of
+any delivered file - added, exercised, and fully reverted within this
+same session, confirmed by diff against the pre-experiment version)
+and booting with that change. The serial log ends immediately after
+`"calling rust_acpi_shutdown() now"` - the matching "returned" line one
+statement later never appears - and QEMU's own process exited on its
+own, with exit code 0, in 19 of the 20 seconds it was allowed to run,
+not killed by the timeout. That is about as direct as evidence gets
+inside this sandbox: the real write to the real `PM1a_CNT_BLK` port,
+with the real `SLP_TYPa` this scan found, actually powered the virtual
+machine off. This does not, and cannot, stand in for confirming
+`kernel/rust/acpi.rs`'s own Rust code compiles and runs identically on
+the real `i686-novaos` target - that gap is the same one every phase's
+stub leaves open, stated here as directly as everywhere else in this
+document - but it is real, live, automatable confirmation that the
+*design* (the exact table offsets, the exact AML decode, the exact
+port and value) is correct against genuine firmware and a genuine ACPI
+chipset implementation, not just plausible-looking code that never
+faulted.
+
+The new synthetic self-test (`rust_acpi_fadt_selftest()`, the same
+"small, fully synthetic, hand-constructed table" methodology
+`rust_acpi_selftest()` already established for MADT, extended to also
+build a synthetic DSDT with a known `_S5` package) runs at every boot
+and passed cleanly, both before and after the struct-layout fix (the
+self-test itself was never affected by that bug - it doesn't cross the
+struct-mirroring boundary the way the discovery-logging path does) -
+`tools/python/test_runner.py` gained a matching assertion
+(`acpi_fadt_selftest`), deliberately not asserting on the real-
+hardware discovery log the way Phase 44's own real MADT discovery
+isn't asserted either, for the identical reason: whether a real FADT
+is actually found depends on where this specific machine's firmware
+placed it relative to this kernel's own identity-mapped range, not on
+whether the parsing logic is correct.
+
+### Known limitations
+
+`SYS_SHUTDOWN` is not privilege-gated - any process, including an
+unprivileged one, can power the machine off. This project already has
+a real uid/privilege model (Phases 47-51); wiring shutdown to require
+it (root-only, or a new, narrower capability) is real, sensible follow-
+up work, deliberately out of this phase's own scope, which was closing
+the release-readiness row's actual technical gap (the ACPI mechanism
+itself), not building a new permission around it. The `_S5` AML scan
+is a narrow, well-precedented slice of one specific object shape, not
+a general AML interpreter - a DSDT whose compiler encoded `_S5` in a
+meaningfully different shape (wrapped in a `Scope`, or using a Word/
+DWord-sized `SLP_TYP` encoding no real machine actually needs, since
+the field is only 3 bits) would not be found by this scan; every real
+machine and QEMU/SeaBIOS this project has access to encodes it the way
+this scan expects, and the scan fails closed (reports "not found,"
+never guesses) rather than misreading an unexpected shape. Only the
+legacy ACPI 1.0 32-bit I/O-port PM1_CNT fields are read, matching
+Phase 44's own precedent of not also implementing the ACPI 2.0+ XSDT/
+GAS-encoded twins of the same fields - the right scope for a machine
+whose I/O is 32-bit `in`/`out` throughout regardless. And, as always:
+this phase's own real Rust build result on the actual `i686-novaos`
+target was not observed in this session's own environment - the same
+honestly-repeated gap, closed the same way every prior phase's was, on
+a machine with this project's own working sysroot.
+
+## Phase 56 and beyond
 
 Not started. Candidates: whether this kernel's own scheduler safely
 tolerates being preempted mid-syscall - a real, separate question this

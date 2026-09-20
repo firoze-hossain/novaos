@@ -237,3 +237,9 @@ int sys_sudo(const char* password) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_shutdown(void) {
+    int result = SYS_SHUTDOWN;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}

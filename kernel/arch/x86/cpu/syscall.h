@@ -280,6 +280,24 @@
  * already uses. */
 #define SYS_SUDO 31
 
+/* Phase 55: no arguments. Attempts a real ACPI power-off (S5) via
+ * kernel/rust/acpi.rs's own rust_acpi_shutdown() - see that function's
+ * own doc comment for the full FADT/DSDT/_S5 discovery it runs first
+ * and the exact meaning of each negative return value. On real,
+ * working ACPI hardware this syscall does not return at all - the
+ * machine powers off out from under the calling process. Deliberately
+ * NOT capability- or uid-gated the way SYS_SUDO's own escalation is -
+ * matches the "any process can do this" scope of SYS_BEEP/SYS_GFX_*
+ * above, not a considered security decision; gating shutdown to a
+ * privileged account is real, sensible follow-up work (see
+ * PROGRESS.md's Phase 55 entry), out of scope for closing this
+ * specific release-readiness row. Returns whatever
+ * rust_acpi_shutdown() itself returned, unchanged - -1 no ACPI
+ * present, -2 no usable FADT, -3 no _S5 package found, -4/-5 an ACPI-
+ * enable handshake this machine required failed, -6 the real S5
+ * write was issued but the machine is still running. */
+#define SYS_SHUTDOWN 32
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
