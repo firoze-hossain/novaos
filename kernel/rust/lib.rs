@@ -36,6 +36,7 @@ mod hmac_sha256;
 mod pbkdf2;
 mod journal;
 mod crashdump;
+mod apic;
 
 use core::panic::PanicInfo;
 

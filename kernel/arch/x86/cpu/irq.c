@@ -24,6 +24,21 @@
 
 #define PIC_EOI      0x20
 
+/* Phase 56: kernel/rust/apic.rs's own I/O APIC driver, which - only
+ * on a machine with a usable Local APIC + I/O APIC pair (see
+ * rust_smp_init()'s own doc comment for exactly what "usable" checks)
+ * - takes over routing every one of these same 16 ISA IRQ lines from
+ * the legacy 8259 PIC this file has driven since Phase 2.
+ * rust_ioapic_is_active() is what makes that switch-over safe to be
+ * silently absent: on any machine rust_smp_init() didn't find both
+ * pieces on, it never returns true, and this file's every existing
+ * PIC code path below (pic_remap(), pic_set_mask(), the two-line EOI
+ * in irq_handler()) runs completely unchanged from how Phase 2 first
+ * wrote it. */
+extern uint8_t rust_ioapic_is_active(void);
+extern void rust_apic_send_eoi(void);
+extern int rust_ioapic_set_mask(uint8_t irq, uint8_t masked);
+
 extern void irq0(void);  extern void irq1(void);  extern void irq2(void);
 extern void irq3(void);  extern void irq4(void);  extern void irq5(void);
 extern void irq6(void);  extern void irq7(void);  extern void irq8(void);
@@ -87,6 +102,19 @@ void register_irq_handler(uint8_t irq, isr_handler_t handler) {
         return;
     }
     irq_handlers[irq] = handler;
+
+    if (rust_ioapic_is_active()) {
+        /* I/O APIC routing is live - unmask this line's own
+         * redirection-table entry instead of the (now fully masked,
+         * see rust_smp_init()'s own mask_legacy_pic()) PIC. There is
+         * no cascade-line concept under IO-APIC routing at all (that
+         * was purely an artifact of the 8259 master/slave wiring),
+         * so unlike the PIC branch below, nothing extra is needed for
+         * irq >= 8. */
+        rust_ioapic_set_mask(irq, 0);
+        return;
+    }
+
     pic_set_mask(irq, 0);
 
     /* Any slave-PIC line (8-15) is physically wired through IRQ2 on
@@ -105,22 +133,37 @@ void irq_handler(registers_t* regs) {
     uint8_t irq = (uint8_t)(regs->int_no - IRQ_BASE);
 
     /* EOI must be sent BEFORE dispatching to the handler, not after.
-     * The 8259 is in normal (non-auto) EOI mode, so an IRQ line stays
-     * "in service" - meaning the PIC will never deliver another
-     * interrupt on it - until EOI is sent. A handler that triggers a
-     * context switch (see the scheduler's timer tick hook, Phase 4)
-     * can `ret` straight into a brand new task's stack and never
-     * return to this call frame at all - if EOI were sent after the
-     * handler call, it would simply never happen, permanently
-     * deadlocking that IRQ line. This was found the hard way: the
-     * very first scheduler tick worked once and then no further timer
-     * interrupt ever fired again. The slave PIC must be acknowledged
-     * before the master for any IRQ that arrived through the cascade
-     * (IRQ 8-15). */
-    if (irq >= 8) {
+     * Both controllers this kernel can route through share that same
+     * requirement (a handler that triggers a context switch - see the
+     * scheduler's timer tick hook, Phase 4 - can `ret` straight into a
+     * brand new task's stack and never return to this call frame at
+     * all), just via a different mechanism each:
+     *   - The 8259 PIC (Phase 2 through Phase 55, and still today on
+     *     any machine Phase 56's rust_smp_init() didn't upgrade) is in
+     *     normal (non-auto) EOI mode, so an IRQ line stays "in
+     *     service" until an explicit EOI command is sent to the
+     *     relevant PIC's own command port - the slave PIC must be
+     *     acknowledged before the master for any IRQ that arrived
+     *     through the cascade (IRQ 8-15). Found the hard way,
+     *     Phase 4: the very first scheduler tick worked once and then
+     *     no further timer interrupt ever fired again.
+     *   - A Local APIC (Phase 56, once rust_ioapic_is_active())
+     *     instead needs a single write to *this CPU's own* LAPIC EOI
+     *     register - kernel/rust/apic.rs's own rust_apic_send_eoi().
+     *     No slave/master distinction exists here; every IRQ this
+     *     kernel currently routes through IO-APIC still targets the
+     *     BSP's own LAPIC specifically (see
+     *     ioapic_program_isa_redirects()'s own comment), so this is
+     *     correct regardless of which CPU happens to be running this
+     *     handler today. */
+    if (rust_ioapic_is_active()) {
+        rust_apic_send_eoi();
+    } else if (irq >= 8) {
         outb(PIC2_COMMAND, PIC_EOI);
+        outb(PIC1_COMMAND, PIC_EOI);
+    } else {
+        outb(PIC1_COMMAND, PIC_EOI);
     }
-    outb(PIC1_COMMAND, PIC_EOI);
 
     if (irq_handlers[irq]) {
         irq_handlers[irq](regs);

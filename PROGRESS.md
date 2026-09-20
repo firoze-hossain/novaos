@@ -5741,11 +5741,354 @@ target was not observed in this session's own environment - the same
 honestly-repeated gap, closed the same way every prior phase's was, on
 a machine with this project's own working sysroot.
 
-## Phase 56 and beyond
+## Phase 56: real SMP bring-up - a second CPU, alive and running real Rust, in place of the 8259 PIC
 
-Not started. Candidates: whether this kernel's own scheduler safely
-tolerates being preempted mid-syscall - a real, separate question this
-phase found but deliberately did not answer, worth investigating on
+Picks up exactly where Phase 44 stopped, and stops exactly where that
+phase's own header comment said the next, much larger boundary was:
+"Local APIC driver, an I/O APIC driver (replacing/supplementing the
+8259 PIC), an AP bootstrap trampoline in low memory, per-CPU data
+structures... and - the genuinely hardest part - auditing and locking
+every existing shared kernel structure." This phase builds the first
+four items on that list, for real, and is exactly as direct as Phase
+44 was about not attempting the fifth: nothing in
+`kernel/task/scheduler.c` changed, no AP this phase brings up ever
+calls into `kernel/task/`, and no audit of the process table, PMM
+bitmap, heap allocator, or any driver's own state was performed. A
+second CPU now genuinely exists and runs real code; it does not yet
+do anything with the rest of this kernel. See "Known limitations"
+below for the honest, explicit list of what that means in practice.
+
+**What was built, in the order Phase 44 named it:**
+
+1. **A Local APIC driver** (`kernel/rust/apic.rs`, new file) - MMIO
+   register read/write, per-CPU `lapic_enable()`/`lapic_id()` (every
+   CPU's own Local APIC happens to sit at the same physical MMIO
+   address - real, separate hardware per core, not a shared device;
+   xAPIC mode routes each access to whichever CPU is actually making
+   it, standard x86 behavior this module relies on rather than works
+   around), EOI, and ICR-based IPI send with the delivery-pending poll
+   the SDM requires before a second ICR write is safe.
+2. **An I/O APIC driver**, same file - MADT type-1 (I/O APIC) and
+   type-2 (Interrupt Source Override) entries, newly parsed
+   (`kernel/rust/acpi.rs`'s new `parse_madt_smp()`/`discover_smp()`,
+   additive - Phase 44's own `parse_madt()`/`AcpiCpuDiscovery` are
+   untouched); redirection entries programmed for ISA IRQ 0-15, all
+   initially masked (preserving `irq.c`'s own existing "nothing can
+   interrupt the kernel until a driver explicitly asks" posture under
+   the new controller); the legacy 8259 fully masked once this takes
+   over. `kernel/arch/x86/cpu/irq.c`'s `register_irq_handler()` and
+   `irq_handler()` both now branch on a new `rust_ioapic_is_active()`
+   flag - PIC code paths completely unchanged when it's false, which
+   is every machine this doesn't find a usable Local APIC + I/O APIC
+   pair on.
+3. **An AP bootstrap trampoline in low memory**
+   (`kernel/arch/x86/cpu/ap_trampoline.s`, new file, deliberately NOT
+   named `*.asm` - see its own header comment for why the Makefile's
+   generic ASM glob would otherwise mis-handle it) - hand-written
+   16-bit real-mode code at a fixed `ORG 0x8000`, embedded into
+   `apic.rs` via `include_bytes!` (a new dedicated Makefile rule
+   assembles it with `nasm -f bin`, a flat binary, before rustc ever
+   runs). Walks real mode -> a throwaway temporary GDT -> 32-bit
+   protected mode -> paging enabled with the *same* CR3 every CPU
+   shares -> the real, already-built kernel GDT/IDT (two new one-line
+   accessors, `gdt_get_pointer_addr()`/`idt_get_pointer_addr()`) ->
+   jumps to compiled Rust. A small, fixed-address "mailbox" (six
+   dwords at physical `0x7000`, a constant hard-coded identically on
+   both the asm and Rust sides, documented in both places) is how the
+   BSP hands each AP its own stack and confirms it left the
+   trampoline, one CPU at a time - deliberately sequential (one shared
+   trampoline copy and mailbox, not one per AP), trading a few
+   milliseconds of extra boot time for not needing any per-AP self-
+   identification logic in 16-bit code at all.
+4. **Per-CPU state** - narrowly scoped to exactly what an idling AP
+   needs: its own stack (`pmm_alloc_contiguous(2)`, matching
+   `KERNEL_STACK_SIZE`), its own enabled Local APIC. `rust_ap_main()`
+   is deliberately minimal: enable this CPU's own LAPIC, log that it's
+   alive, `sti; hlt` forever. Not built: a per-CPU TSS (this kernel's
+   single, shared TSS remains correct for now specifically *because*
+   no AP here ever takes a ring3->ring0 transition - see "Known
+   limitations"), and not built: anything resembling "current process"
+   per CPU, since no AP ever calls into the scheduler.
+
+**A real, pre-existing bug this phase found while extending the module
+it lives in, not introduced by it:** `kernel/rust/acpi.rs`'s own
+`rust_acpi_discover_cpus()` (Phase 44) had the *exact* same bool-
+sizing FFI hazard Phase 55 already found and fixed once, in a
+different struct (`AcpiShutdownInfo`) - this kernel's own `bool`
+(`kernel/include/types.h`, a 4-byte C enum) is not the same size as
+Rust's guaranteed-1-byte `bool`, and `kernel/init/main.c`'s call site
+declared both an output parameter and this function's own *return
+value* using this kernel's `bool`. The output-parameter case is the
+same struct-field-layout bug Phase 55 already documented at length;
+the return-value case is a different, related hazard specific to this
+call site - the C caller's own `bool found = rust_acpi_discover_cpus(...)`
+reads the *full* 32-bit EAX register (since C's `bool` is 4 bytes),
+while Rust's calling convention only guarantees the low byte (AL) is
+meaningful for a 1-byte return type, so a nonzero upper 24 bits
+(unspecified, not guaranteed zero) could read as `true` even when
+Rust returned `false`. Found not by observing a failure (this call
+site's own log line happened to still read correctly in every prior
+session, by luck of whatever garbage was in EAX's upper bits at the
+time) but by deliberately re-checking every existing bool-crossing-
+the-FFI-boundary call site in this codebase while building this
+phase's own new ones, rather than assuming Phase 55's fix to one
+struct meant the class of bug was closed everywhere. Fixed the same
+way both previous instances were: `u8`/`uint8_t` on both sides, never
+either language's own `bool`, for this function's return value and
+every output parameter. See `kernel/rust/acpi.rs`'s own updated doc
+comment on `AcpiCpuDiscovery` for the full account.
+
+**A secondary gap this phase closed, found necessary for an unrelated
+reason:** Phase 44's own header comment named, and Phase 55's
+inherited, a real limitation - real ACPI tables sit above this
+kernel's static 64MB boot-time identity map on this project's own
+default `-m 512M` test config, so real MADT/FADT discovery has always
+silently failed there, `[WARN] ... not found` rather than a crash, but
+still untested by `make test`. This phase needed on-demand physical-
+page mapping *unconditionally*, for a completely different reason -
+the Local APIC and I/O APIC's own fixed MMIO addresses (conventionally
+`0xFEE00000`/`0xFEC00000`) sit just under the 4GB mark, nowhere near
+even a generously large static identity map, regardless of `-m` size.
+`kernel/rust/acpi.rs`'s new `ensure_mapped()` (called from
+`addr_range_safe()` for any address at or above the static 64MB
+range, reusing the same `paging_map_page()` every per-process address
+space in this kernel already calls) solves both at once: it is what
+`apic.rs` needs for LAPIC/IO-APIC access, and, as a side effect, it is
+also exactly Phase 44's own named fix for ACPI table reads - not
+reimplemented separately, and not touching `paging.c`'s own static
+boot-time map at all. Real ACPI/MADT/IO-APIC discovery under this
+project's *standard* `-m 512M` test config now succeeds
+deterministically, previously silently untested.
+
+**Why the INIT-SIPI-SIPI waits and the AP-ack wait are busy-loops, not
+timer-based**, the same reasoning `kernel/rust/acpi.rs`'s own Phase 55
+`BUSY_WAIT_ITERATIONS` already established, restated here because it's
+load-bearing again: `rust_smp_init()` runs from `kernel_late_init()`,
+before this kernel's one deliberate `sti` - interrupts are off for
+this call's *entire* duration on every code path that reaches it, so a
+timer-tick-based wait would not just risk the syscall-gate deadlock
+class Phase 54 found, it would be a guaranteed hang (no IRQ0 can fire
+at all while this runs). Three separate constants
+(`INIT_TO_SIPI_WAIT_ITERATIONS`, `SIPI_TO_SIPI_WAIT_ITERATIONS`,
+`AP_ACK_WAIT_ITERATIONS`), not one shared bound, since the Intel-
+recommended real-world gaps these approximate (~10ms, ~200us, and "an
+AP should ack quickly, but this is a completely different concern from
+either") are themselves very different magnitudes.
+
+**Why the legacy 8259 PIC, not just IO-APIC routing, had to be
+handled explicitly:** once an I/O APIC redirects the same physical ISA
+IRQ lines, leaving the 8259 unmasked would let the same interrupt be
+delivered twice, through two different controllers, or leave a PIC
+line permanently "in service" with nothing ever sending it an EOI
+again. `rust_smp_init()` fully masks both 8259 data ports the moment
+IO-APIC routing goes live - the existing `pic_remap()`/mask-everything
+call in `irq_install_gates()` still always runs first, unconditionally
+(cheap, and harmless even when IO-APIC later takes over), so there is
+no window where neither controller is correctly configured.
+
+**A real ISA-IRQ gotcha this phase's own MADT parsing had to get
+right, not assume away:** ISA IRQ0 (the PIT, which this kernel's
+entire scheduler tick and most timing depends on) is very commonly
+*not* wired to I/O APIC pin 0 on PC/AT-compatible chipsets, including
+QEMU's own default machine type - a real, independently documented
+(OSDev.org's own "IOAPIC" page) Interrupt Source Override remaps it,
+typically to GSI 2. `crate::acpi::SmpDiscovery::gsi_for_isa_irq()`
+parses and honors MADT type-2 entries specifically because getting
+this one wrong would have silently sent the timer interrupt to a GSI
+nothing was listening on the moment IO-APIC routing replaced the PIC -
+not a rare edge case this kernel could afford to assume didn't apply.
+
+**Spurious interrupts, handled deliberately, not left to fault:** a
+Local APIc can raise its configured spurious vector (this kernel uses
+Intel's own recommended `0xFF`) for interrupts withdrawn in the small
+window between being raised and being fetched - a normal, documented
+occurrence, not an error, and per the SDM must specifically *not* be
+EOI'd. Since every IDT vector starts not-present
+(`kernel/arch/x86/cpu/idt.c`'s own `idt_init()`), an unhandled spurious
+interrupt would otherwise be a real #NP CPU exception taken while
+already inside interrupt handling. A new, trivial handler
+(`kernel/arch/x86/cpu/spurious_stub.asm` - `iretd`, nothing else) is
+installed before any Local APIC, BSP or AP, is ever enabled.
+
+**Verified in layers, the same honest structure every phase since
+Phase 53 has used, adapted for what this phase specifically needed:**
+
+- Host-target (`x86_64-unknown-linux-gnu`) `rustc --edition 2021
+  --crate-type lib --emit=metadata` type/borrow-checking of the whole
+  crate (`kernel/rust/lib.rs`, pulling in the new `apic.rs` and the
+  extended `acpi.rs`) - clean, zero errors. The two "direct cast of
+  function item into an integer" warnings (`rust_ap_main`/
+  `spurious_interrupt_stub` address-taking, needed to hand a function
+  pointer to hardware/a mailbox) and one "field never read" (the
+  `IoApicInfo.id` this module discovers but doesn't currently act on)
+  are the only warnings this phase's own new code introduced - every
+  other warning in the same run (`static mut` references, sub-
+  register `asm!` formatting) is pre-existing, from `users.rs`/
+  `journal.rs`/`crashdump.rs`/`spinlock.rs`, confirmed by grepping for
+  `static mut` across every `kernel/rust/*.rs` file before assuming so.
+- `ap_trampoline.s` was assembled for real with this sandbox's own
+  `nasm` (a flat binary has no cross-compilation dependency at all -
+  unlike every other piece of this phase's Rust, this file's own
+  toolchain gap doesn't exist) and checked **byte-for-byte by hand**
+  against its own intended encoding: every instruction's opcode,
+  ModRM byte, and - the two places a real-mode-to-protected-mode
+  trampoline is most likely to be silently wrong - both far jumps'
+  encoded target addresses, confirmed to exactly match the linked
+  address of their own destination label (`pm_entry` at `0x801D`,
+  `.reload_segments` at `0x805B`), and the temporary GDT's own two
+  descriptors confirmed byte-identical to `gdt.c`'s own
+  `gdt_set_gate(1/2, 0, 0xFFFFFFFF, 0x9A/0x92, 0xCF)` encoding.
+- **The real thing, actually booted, twice, in QEMU with `-smp 2`** -
+  this project's biggest departure from Phase 53/54/55's own stub
+  methodology, made possible by a fact those phases didn't have
+  available: unlike a general kernel-side Rust module, an AP
+  bootstrap trampoline assembled with plain `nasm -f bin` has *zero*
+  dependency on this sandbox's missing `i686-novaos` Rust
+  cross-compilation toolchain - the real, byte-identical file that
+  ships is directly testable here, not just design-reviewed. A
+  sandbox-only C reimplementation of the surrounding mechanism
+  (MADT/IO-APIC parsing, the LAPIC/IO-APIC drivers, the mailbox
+  handshake - genuinely independent, hand-written, not copy-
+  translated, the same precedent Phase 55's own FADT/_S5 stub section
+  set) was added to `/home/claude/sandbox-stub/stub_rust.c` (never
+  committed/delivered), swapped in for `kernel/rust/lib.o` in a
+  throwaway copy of this entire tree (`/tmp/novaos-verify`, the real
+  tree touched nowhere), and the result linked and booted against the
+  *real*, unmodified `kernel/init/main.c`, `irq.c`, `gdt.c`, `idt.c`,
+  and (critically) the real, shipped `ap_trampoline.bin` embedded via
+  `.incbin` of the exact file `nasm` produced from the real `.s`
+  source.
+  - At `-m 32M -smp 2` (matching Phase 44/55's own precedent for
+    keeping real ACPI tables under this stub's simpler, unfixed 64MB
+    table-read ceiling - see the stub's own comment for why that
+    specific limitation was deliberately *not* also reimplemented a
+    third time here): the serial log shows, in order, `[ OK ] AP
+    online: APIC ID=0x01 running real kernel Rust code` - logged from
+    *inside* the second CPU core's own execution, not inferred by the
+    first - followed by the BSP's own `[ OK ] SMP: 1 application
+    processor(s) brought up...` summary line (the real, unmodified
+    `main.c` log line), and then every subsequent boot stage (PIT,
+    PS/2 mouse/keyboard, ATA, the 4-partition MBR table, journal,
+    crash-dump check, FAT32 mount, ext2 mount, RTL8139/network up,
+    `Interrupts enabled`, a FAT32 file read, an ext2 file read, and a
+    real ext2 write+readback) completed with **zero** `[FAULT]`,
+    `[PANIC]`, or `[WARN]` anywhere in the captured log - direct
+    evidence that handing interrupt routing over to a freshly-
+    programmed I/O APIC, with the legacy PIC fully masked, did not
+    silently break the PIT tick every one of those later subsystems
+    (several of which are themselves interrupt-driven) depends on.
+  - This run's *own first attempt* found a real bug - not in the
+    shipped Rust code, in this stub's own first draft, which
+    conflated "`-m 32M` keeps real ACPI *tables* under the static
+    64MB map" with "...and LAPIC/IO-APIC MMIO too," and crashed with
+    an actual `[FAULT] Page fault at 0xFEE00020` (the Local APIC ID
+    register) on its very first boot. This is independent, first-hand
+    confirmation that `kernel/rust/apic.rs`'s own unconditional call
+    to `crate::acpi::ensure_mapped()` before any LAPIC/IO-APIC access
+    is exactly correct, not defensive overkill - the stub was missing
+    the equivalent step, fixed by adding a `stub_ensure_mapped()` that
+    calls the same real, unmodified `paging_map_page()`/
+    `paging_kernel_directory_phys()` the real Rust code itself calls
+    through FFI, then re-verified clean.
+  - At `-m 512M -smp 2` (this project's own *standard* test config,
+    where this stub's simpler, unfixed ACPI-table-read ceiling means
+    real MADT discovery legitimately fails, mimicking exactly what
+    this phase's fallback path is for): `rust_smp_init()` correctly
+    returned `-2`, `main.c` logged the `[WARN] SMP: not available...`
+    fallback line, and boot proceeded through every one of the same
+    subsystems above, still with zero faults - direct confirmation
+    that a machine (or, here, a stub) this phase can't upgrade is left
+    completely unaffected, not just claimed to be.
+- `tools/python/test_runner.py` gained two new, always-asserted checks
+  (`smp_aps_brought_up`, `ap_running_real_code`) - genuinely
+  deterministic, unlike Phase 44's own CPU-count discovery, which
+  needed a manually-added `-smp N` override to verify even once:
+  `Makefile`'s own `QEMU_FLAGS` (and the Python script's mirrored
+  `QEMU_BASE_FLAGS`) now boot `-smp 2` by default, so every ordinary
+  `make test` run exercises this phase's real bring-up automatically.
+  `TEST_TIMEOUT`/`DEFAULT_TIMEOUT_SECONDS` both bumped 25s -> 40s for
+  the added real wall-clock cost (a second TCG-emulated CPU, plus this
+  phase's own unconditional INIT-to-SIPI/SIPI-to-SIPI busy-waits).
+- **The one honestly-repeated gap every phase since Phase 53 has had
+  to state, unchanged**: this sandbox still cannot cross-compile the
+  real `i686-novaos` Rust target, so `kernel/rust/apic.rs` and the
+  extended `acpi.rs`'s own compiled object code, as it will actually
+  ship, was not itself booted in this session - only host-metadata
+  type-checked, and (for the one piece with zero Rust-toolchain
+  dependency, the trampoline binary) booted for real. The mechanism's
+  *design* is now about as thoroughly verified as this environment
+  allows; the real Rust build's own result, on real hardware, remains
+  to be observed the same way Phase 53/54/55's did - on a machine with
+  this project's own working sysroot.
+
+**Known limitations, stated as directly as Phase 44's own scope
+paragraph stated its:**
+
+- **This is not a scheduler.** `kernel/task/scheduler.c`'s `current`/
+  `current_index`/`pick_next()` are untouched. No AP this phase brings
+  up ever calls into `kernel/task/` at all - each one runs
+  `rust_ap_main()`'s own `sti; hlt` loop, forever, and nothing else.
+  Two CPUs correctly never pick the same process today only because
+  neither AP ever picks a process at all, not because that problem was
+  solved.
+- **No cross-subsystem locking audit was performed**, and this phase's
+  own existence doesn't make one more urgent than it already was: the
+  process table, the PMM bitmap, the heap allocator, and every
+  driver's own state remain exactly as unaudited for concurrent access
+  as they were before this phase, for the same reason as the point
+  above - nothing outside `apic.rs`'s own small, `SpinLock`-protected
+  `IoApicState` is ever touched by more than one CPU today. This
+  remains real, separate, and - per this project's own release-
+  readiness roadmap, which this phase's own header comment quotes
+  directly - the genuinely hardest part of full SMP support, not a
+  checkbox this phase gets to claim.
+- **No per-CPU TSS.** This kernel's single, shared TSS
+  (`kernel/arch/x86/cpu/tss.c`) is correct today specifically because
+  no AP ever takes a ring3->ring0 transition (same-privilege-level
+  interrupts, which is all an idling AP can currently receive, don't
+  consult `TSS.esp0` at all). The moment a future phase lets user
+  processes run on more than one CPU, this becomes a real, load-
+  bearing gap - `esp0` is shared kernel-wide, and two CPUs
+  simultaneously trapping from ring 3 would race to overwrite each
+  other's kernel stack pointer.
+- **Only the first I/O APIC a machine reports is programmed.**
+  `SmpDiscovery`/`IoApicState` are both already shaped to make a
+  second one additive, not a redesign, but every machine this was
+  tested against (QEMU's own default and `q35` machine types) has
+  exactly one.
+- **ISA IRQ polarity/trigger-mode overrides are not honored**, only
+  GSI remapping (see the ISA-IRQ0 gotcha above) - every redirection
+  entry this phase programs assumes edge-triggered, active-high,
+  correct for the standard PC/AT-compatible IRQs this kernel actually
+  uses on every machine this was tested against, not a fully general
+  ACPI-compliant implementation.
+- **Every IRQ this kernel routes through the I/O APIC still targets
+  the BSP's own Local APIC specifically** - an AP idles with
+  interrupts enabled (so a future inter-processor interrupt, e.g. a
+  TLB shootdown, could reach it) but is not itself a target for any
+  device interrupt today. Real interrupt load-balancing across CPUs is
+  unbuilt.
+- **A CPU this phase fails to bring up (no stack available, no ack
+  within the bounded wait) is silently skipped**, not retried,
+  matching this project's own established "boot continues regardless"
+  posture for every other environment-dependent real-hardware
+  discovery (Phase 44's own CPU count, Phase 55's own shutdown
+  discovery) - correct for this phase's own scope, but worth knowing
+  if a specific machine's AP count in the boot log doesn't match
+  expectations.
+
+## Phase 57 and beyond
+
+Not started. Candidates: the real SMP work this phase's own "Known
+limitations" section named directly - a scheduler that can safely run
+more than one CPU (deciding how `current`/`pick_next()` become per-CPU
+without two CPUs ever picking the same process), the cross-subsystem
+locking audit this project's own release-readiness roadmap has called
+"the genuinely hardest part" since before Phase 40's own SpinLock
+existed, and a per-CPU TSS (needed the moment user processes can run
+on an AP, not before); whether this kernel's own scheduler safely
+tolerates being preempted mid-syscall - a real, separate question
+Phase 45 found but deliberately did not answer, worth investigating on
 its own terms since it would unlock genuinely interrupt-driven TX for
 both RTL8139 and NE2000 using the `TX_COMPLETE` signal already built
 and tested; per-command sudo scoping (fork before escalating,
@@ -5754,19 +6097,17 @@ own "Known limitations"); a way to grant broader file capabilities to
 a successfully-escalated process; a persistent (disk-backed) lockout
 counter; a `useradd`-equivalent way to create additional accounts
 after first boot; a real hardware entropy source for salt generation;
-the real SMP prerequisites named in Phase 44's own entry (Local
-APIC/IO-APIC drivers, AP bootstrap, per-CPU state, kernel-wide locking
-audit) - each substantial enough to be its own, separately-scoped
-phase, not one combined effort; simultaneous multi-mount support (ATA
-and virtio-blk both live at once), building on Phase 46's own blockdev
-abstraction; giving virtio-net its own IRQ handler; migrating
-`timer_init`/`vfs_init`/`net_init` to driver registration too;
-extending `process_fork()` to duplicate `open_files[]` entries by owner
-pid, unlocking real cross-process pipe use and a genuine shell `|`
-operator; signals; a versioned, single-source-of-truth syscall ABI
-header (`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
-novasys.h` are still two, hand-synchronized copies); a build-time check
-that `kernel_end` covers every section in the final binary (Phase 38's
-own "Known limitations"); wiring tools/python's two scripts into a CI
+simultaneous multi-mount support (ATA and virtio-blk both live at
+once), building on Phase 46's own blockdev abstraction; giving
+virtio-net its own IRQ handler; migrating `timer_init`/`vfs_init`/
+`net_init` to driver registration too; extending `process_fork()` to
+duplicate `open_files[]` entries by owner pid, unlocking real cross-
+process pipe use and a genuine shell `|` operator; signals; a
+versioned, single-source-of-truth syscall ABI header
+(`kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/
+novasys.h` are still two, hand-synchronized copies, now three with
+`SYS_SHUTDOWN` - Phase 55 - added to both); a build-time check that
+`kernel_end` covers every section in the final binary (Phase 38's own
+"Known limitations"); wiring tools/python's two scripts into a CI
 workflow; a full ring-3 compositor/Store port; TCP retransmission/
 windowing and a sockets-style syscall API for TCP.

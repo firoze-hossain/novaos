@@ -19,4 +19,15 @@ void gdt_init(void);
 void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit,
                    uint8_t access, uint8_t gran);
 
+/* Phase 56: the physical address of this kernel's own already-built
+ * gdt_pointer struct (the exact {limit:u16, base:u32} packed format
+ * LGDT expects). Nothing before this phase ever needed this from
+ * outside gdt.c - kernel/arch/x86/cpu/ap_trampoline.s's own mailbox
+ * carries this value so a newly-woken secondary CPU can LGDT the
+ * *same*, already-initialized table the BSP uses (this kernel has
+ * exactly one GDT, shared by every CPU, not rebuilt per-CPU) instead
+ * of needing gdt_init() re-run (and re-racing gdt_flush()'s own
+ * segment-register reload) on each one. */
+uint32_t gdt_get_pointer_addr(void);
+
 #endif

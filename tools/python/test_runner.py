@@ -39,7 +39,10 @@ BUILD_DIR = REPO_ROOT / "build"
 DEFAULT_LOG_PATH = BUILD_DIR / "test-serial.log"
 DEFAULT_ISO = REPO_ROOT / "novaos.iso"
 DEFAULT_DISK = REPO_ROOT / "disk.img"
-DEFAULT_TIMEOUT_SECONDS = 25
+# Phase 56: mirrors the Makefile's own TEST_TIMEOUT bump - see that
+# variable's own comment for why (-smp 2 plus kernel/rust/apic.rs's
+# own real, unconditional AP-bring-up busy-waits).
+DEFAULT_TIMEOUT_SECONDS = 40
 
 # Mirrors the Makefile's own QEMU_FLAGS/DISK_FLAGS/NET_FLAGS/
 # AUDIO_FLAGS/USB_FLAGS exactly (kept here as one definition this
@@ -50,7 +53,14 @@ DEFAULT_TIMEOUT_SECONDS = 25
 # NovaOS-Gap-Analysis-and-Kernel-Independence-Roadmap.md's own note on
 # syscall.h/novasys.h for the same class of issue elsewhere in this
 # project, worth keeping in mind if this script grows).
-QEMU_BASE_FLAGS = ["-M", "pc,smm=off", "-m", "512M", "-no-reboot"]
+# Phase 56: -smp 2 mirrors the Makefile's own QEMU_FLAGS exactly (see
+# that variable's own comment for why 2, not QEMU's default of 1 or a
+# larger number) - this project's own real SMP bring-up
+# (kernel/rust/apic.rs) needs more than one virtual CPU present to be
+# exercised at all, and this script's own DEFAULT_TIMEOUT_SECONDS
+# below already has headroom for the extra, real wall-clock cost of
+# bringing up a second CPU under QEMU's software (TCG) emulation.
+QEMU_BASE_FLAGS = ["-M", "pc,smm=off", "-m", "512M", "-smp", "2", "-no-reboot"]
 NET_FLAGS = [
     "-netdev",
     "user,id=net0,tftp=tools/fixtures/tftproot",
@@ -269,6 +279,26 @@ ASSERTIONS: list[Assertion] = [
               "where this specific machine's firmware placed them "
               "relative to this kernel's own identity-mapped range - "
               "see kernel/rust/acpi.rs's own header comment"),
+    Assertion("smp_aps_brought_up",
+              r"SMP: [1-9]\d* application processor\(s\) brought up",
+              "kernel/rust/apic.rs's own real SMP bring-up (Phase 56) "
+              "found and used a Local APIC + I/O APIC pair, and at "
+              "least one secondary CPU actually came online - "
+              "deterministic under this project's own test config as "
+              "of Phase 56 specifically because QEMU_BASE_FLAGS above "
+              "now boots with `-smp 2`, unlike Phase 44's own MADT "
+              "CPU-count discovery, which needed a manual `-smp N` "
+              "override to verify at all"),
+    Assertion("ap_running_real_code",
+              r"AP online: APIC ID=0x[0-9A-F]{2} running real kernel Rust code",
+              "the strongest evidence this phase's own module-level "
+              "doc comment (kernel/rust/apic.rs) says to look for: not "
+              "just that the hand-written real-mode trampoline ran "
+              "(kernel/arch/x86/cpu/ap_trampoline.s), but that a "
+              "second physical CPU core genuinely reached and is "
+              "executing compiled Rust - this line is logged from "
+              "inside rust_ap_main() itself, on that second core, not "
+              "inferred by the boot CPU"),
     Assertion("virtio_net_selftest",
               r"Kernel-side Rust virtio-net self-test.*layout=pass",
               "the virtio-net virtqueue layout math and RX buffer post/"
