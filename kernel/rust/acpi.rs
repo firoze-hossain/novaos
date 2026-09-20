@@ -53,6 +53,36 @@
 //! physical memory would close this gap, but is real, separate,
 //! larger-blast-radius work (touching paging.c, not this module) -
 //! deliberately not attempted in this same, otherwise low-risk phase.
+//!
+//! Phase 55 extends this same module - deliberately, not as a new
+//! file - to close the release-readiness list's own "real shutdown,
+//! not just reboot" row, which that document itself pointed straight
+//! back here: "the foundation (real, verified ACPI table parsing) is
+//! no longer the blocker... the specific shutdown piece is still
+//! unbuilt." Real ACPI power-off (the "S5" sleep state) needs a
+//! second table this module didn't read before - the FADT ("Fixed
+//! ACPI Description Table," real signature `FACP`, not `FADT` -
+//! confirmed against the ACPI spec, not assumed) - plus one thing no
+//! table field alone provides: the two-byte `SLP_TYPa`/`SLP_TYPb`
+//! values that tell the real chipset *which* sleep state S5 actually
+//! is on this specific machine, which only exist encoded inside the
+//! DSDT's own AML (ACPI Machine Language) bytecode, under a
+//! `Name (_S5, Package (...) { ... })` object. This module does not
+//! become a general AML interpreter to get those two bytes - real AML
+//! interpretation is a huge, separate undertaking (a byte-code VM
+//! with its own operand stack, name resolution, and dozens of
+//! opcodes) no hobby kernel needs in full just to shut down. Instead
+//! it uses the same narrow, well-precedented technique real hobby
+//! OSes (and this exact scan pattern, independently documented on
+//! OSDev.org's own "Shutdown" page) have used for years: scan the
+//! DSDT's raw bytes for the literal 4-byte ASCII name `_S5_`, then
+//! decode just the few bytes that immediately follow it directly -
+//! the `PackageOp`, a `PkgLength` whose encoding is skipped rather
+//! than needing to be computed, an element count, and the two
+//! `SLP_TYP` integers themselves - without interpreting any other AML
+//! in the table at all. `find_s5_sleep_type()`'s own comment below has
+//! the byte-for-byte reasoning; PROGRESS.md's Phase 55 entry has the
+//! full account of why this narrow slice is both correct and enough.
 
 const MAX_CPUS: usize = 16; // a reasonable, bounded cap - matching this
                              // kernel's own established preference for
@@ -416,6 +446,571 @@ pub extern "C" fn rust_acpi_selftest() -> i32 {
     }
     if result.cpu_count >= 1 && result.apic_ids[0] != 0 {
         code |= 16;
+    }
+
+    code
+}
+
+// ============================================================
+// Phase 55: FADT parsing + real ACPI shutdown (S5)
+// ============================================================
+
+/// PM1x_CNT register bit 0 (ACPI spec): 1 once this machine's ACPI
+/// subsystem has actually been switched on. Firmware boots most real
+/// machines and QEMU/SeaBIOS with this already set (Phase 44's own
+/// MADT discovery succeeding at all already proves *some* ACPI state
+/// exists), but it's not something to assume - `rust_acpi_shutdown()`
+/// below checks it directly and only runs the real enable sequence
+/// (SMI_CMD/ACPI_ENABLE) if it's actually needed.
+const PM1_SCI_EN: u16 = 0x0001;
+
+/// PM1x_CNT register bit 13 (ACPI spec) - "enter the sleep state named
+/// by the SLP_TYP field (bits 10-12) now." This is the one bit that
+/// actually does something; everything else in this section exists to
+/// find the right port and the right 3-bit value to put next to it.
+const PM1_SLP_EN: u16 = 0x2000;
+
+/// A fixed, non-timer-based iteration count used to bound two
+/// separate waits below (the ACPI-enable handshake, and the "did the
+/// power-off actually happen" check after writing PM1_CNT).
+/// Deliberately NOT derived from `timer_get_ticks()` the way
+/// kernel/rust/journal.rs/crashdump.rs's own bounded operations are
+/// free to be: this function can be reached from a ring-3 SYS_SHUTDOWN
+/// syscall (kernel/arch/x86/cpu/syscall.c), and this kernel's own
+/// syscall gate (syscall_stub.asm) disables interrupts for a syscall's
+/// entire duration - PROGRESS.md's Phase 54 entry documents finding
+/// this exact class of bug (a blocking wait that needs the PIT's IRQ0
+/// to advance a tick counter, issued from inside a window where
+/// interrupts can never fire, deadlocks forever). A plain busy-loop
+/// iteration count sidesteps that failure mode entirely, at the
+/// honestly-stated cost of being calibrated to "a lot of loop
+/// iterations on whatever CPU this runs on," not to any real
+/// wall-clock duration.
+const BUSY_WAIT_ITERATIONS: u32 = 20_000_000;
+
+/// `found_acpi`/`found_fadt`/`found_s5`/`sci_en_already_set` are `u8`
+/// (0/1), deliberately NOT Rust `bool`, even though Rust guarantees
+/// `bool` is exactly one byte in a `#[repr(C)]` struct - because the
+/// *C side* of this exact boundary cannot make the same guarantee.
+/// This kernel's own `bool` (kernel/include/types.h:
+/// `typedef enum { false = 0, true = 1 } bool;`) is a plain C `enum`,
+/// which GCC on this target sizes as a 4-byte `int` by default, not
+/// one byte - a real, found-by-building-and-booting-this-exact-struct
+/// mismatch, not a theoretical one (see PROGRESS.md's Phase 55 entry
+/// for the full account of how this was caught: a C-side mirror
+/// struct built with this kernel's own `bool` silently shifted every
+/// field after the first few by 9 bytes). `kernel/fs/vfs.c`'s own
+/// `crash_report_t` (Phase 54) already established the fix this
+/// module follows - plain fixed-width integers for every FFI-crossing
+/// struct field, never this kernel's own `bool` and never Rust's,
+/// so neither side's own bool representation is ever load-bearing.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AcpiShutdownInfo {
+    pub found_acpi: u8,
+    pub found_fadt: u8,
+    pub found_s5: u8,
+    pub pm1a_cnt_blk: u32,
+    pub pm1b_cnt_blk: u32,
+    pub smi_cmd: u32,
+    pub acpi_enable: u8,
+    pub sci_en_already_set: u8,
+    pub slp_typa: u16,
+    pub slp_typb: u16,
+}
+
+impl AcpiShutdownInfo {
+    const fn empty() -> Self {
+        AcpiShutdownInfo {
+            found_acpi: 0,
+            found_fadt: 0,
+            found_s5: 0,
+            pm1a_cnt_blk: 0,
+            pm1b_cnt_blk: 0,
+            smi_cmd: 0,
+            acpi_enable: 0,
+            sci_en_already_set: 0,
+            slp_typa: 0,
+            slp_typb: 0,
+        }
+    }
+}
+
+/// Only the FADT fields this module actually uses - real FADTs have
+/// several dozen more (power-button handling, C-state latencies, ACPI
+/// 2.0+'s 64-bit "X_" extended-address twins of most fields below,
+/// and much more), every one of them deliberately left unread. Same
+/// scope discipline this module's own MADT parsing already applies
+/// (ACPI 1.0's 32-bit table pointers, not also the 2.0+ XSDT) and the
+/// same reasoning: QEMU's default firmware (SeaBIOS) always populates
+/// the legacy 32-bit I/O-port fields below, which is what this
+/// kernel's own 32-bit `in`/`out` port instructions need anyway - the
+/// 2.0+ "X_" GAS-encoded twins exist for machines whose PM1 control
+/// register isn't plain I/O-port space at all (rare, and not
+/// expressible with a bare `outw`/`inw` regardless), not a gap this
+/// phase left open by mistake.
+struct FadtFields {
+    dsdt_addr: u32,
+    smi_cmd: u32,
+    acpi_enable: u8,
+    pm1a_cnt_blk: u32,
+    pm1b_cnt_blk: u32,
+}
+
+/// Same structure as `find_madt()` above, real signature `FACP`
+/// ("Fixed ACPI Control Panel," the historical name behind the
+/// acronym mismatch with "FADT" - confirmed against the ACPI spec,
+/// not assumed or guessed from the table's common name).
+fn find_fadt(rsdt_addr: u32) -> Option<u32> {
+    if !addr_range_safe(rsdt_addr, 36) {
+        return None;
+    }
+    if !signature_matches(rsdt_addr, b"RSDT") {
+        return None;
+    }
+    let length = unsafe { read_u32(rsdt_addr + 4) };
+    if length < 36 || !checksum_ok(rsdt_addr, length) {
+        return None;
+    }
+
+    let entry_count = (length - 36) / 4;
+    for i in 0..entry_count {
+        let entry_addr = rsdt_addr + 36 + i * 4;
+        if !addr_range_safe(entry_addr, 4) {
+            continue;
+        }
+        let table_addr = unsafe { read_u32(entry_addr) };
+        if signature_matches(table_addr, b"FACP") {
+            return Some(table_addr);
+        }
+    }
+    None
+}
+
+/// Validates and reads the fixed region every field above lives in
+/// (72 bytes - the real, fixed ACPI 1.0 FADT layout up through
+/// PM1b_CNT_BLK at offset 68..72, confirmed against the spec:
+/// DSDT@40, SMI_CMD@48, ACPI_ENABLE@52, PM1a_CNT_BLK@64,
+/// PM1b_CNT_BLK@68) upfront, the same "whole fixed region bounds-
+/// checked before any field read, not field-by-field" discipline
+/// `find_madt()`/`parse_madt()` above already established.
+fn parse_fadt(fadt_addr: u32) -> Option<FadtFields> {
+    if !addr_range_safe(fadt_addr, 72) {
+        return None;
+    }
+    if !signature_matches(fadt_addr, b"FACP") {
+        return None;
+    }
+    let length = unsafe { read_u32(fadt_addr + 4) };
+    if length < 72 || !checksum_ok(fadt_addr, length) {
+        return None;
+    }
+
+    Some(FadtFields {
+        dsdt_addr: unsafe { read_u32(fadt_addr + 40) },
+        smi_cmd: unsafe { read_u32(fadt_addr + 48) },
+        acpi_enable: unsafe { read_u8(fadt_addr + 52) },
+        pm1a_cnt_blk: unsafe { read_u32(fadt_addr + 64) },
+        pm1b_cnt_blk: unsafe { read_u32(fadt_addr + 68) },
+    })
+}
+
+/// Decodes the handful of AML bytes immediately following an already-
+/// located `_S5_` name into `(SLP_TYPa, SLP_TYPb)`. `cursor` must
+/// point exactly one byte past the `_S5_` name's own 4 ASCII bytes;
+/// `end` bounds every read to the DSDT's own declared length (checked
+/// by the caller, `find_s5_sleep_type()`, before this is ever called).
+///
+/// Expected encoding, per how every ACPI-compiler-generated DSDT
+/// declares `Name (_S5, Package (0x04) { SLP_TYPa, SLP_TYPb, 0, 0 })`:
+/// `PackageOp`(0x12) `PkgLength` `NumElements` `SLP_TYPa` `SLP_TYPb`
+/// ... Two encodings intentionally handled, not one: `PkgLength`'s own
+/// top two bits say how many *additional* bytes encode the actual
+/// length value (0-3 more) - this function skips exactly that many
+/// bytes without ever computing the length itself, since nothing here
+/// needs to know it, only skip past it correctly. Each `SLP_TYP`
+/// integer (always 0-7, a 3-bit hardware field) is compiler-encoded
+/// either as a raw byte preceded by `BytePrefix`(0x0A), or - for the
+/// specific values 0 and 1 - as `ZeroOp`(0x00) or `OneOp`(0x01) alone,
+/// with no prefix at all. This function does not need to tell those
+/// two cases apart: `ZeroOp`'s and `OneOp`'s own byte values (0x00,
+/// 0x01) already equal the integers 0 and 1 they mean, so "skip a
+/// 0x0A prefix if present, then use whatever byte is there" reads the
+/// correct value either way - the same well-known technique
+/// OSDev.org's own "Shutdown" reference page documents, adapted here
+/// with real bounds checking added at every single byte, since that
+/// reference implementation (correctly, for a page whose whole point
+/// is the AML decoding, not memory safety) has none at all.
+fn try_parse_s5_package(mut cursor: u32, end: u32) -> Option<(u16, u16)> {
+    if cursor >= end || !addr_range_safe(cursor, 1) {
+        return None;
+    }
+    if unsafe { read_u8(cursor) } != 0x12 {
+        return None; // not immediately followed by PackageOp - not the
+                      // shape this function knows how to decode
+    }
+    cursor += 1;
+
+    if cursor >= end || !addr_range_safe(cursor, 1) {
+        return None;
+    }
+    let pkglength_byte0 = unsafe { read_u8(cursor) };
+    let extra_length_bytes = (pkglength_byte0 >> 6) & 0x3;
+    cursor += 1 + extra_length_bytes as u32; // skip PkgLength entirely
+
+    // NumElements (1 byte) - skipped, not validated; the two elements
+    // this function actually reads are always the package's first two
+    // regardless of how many more follow.
+    if cursor >= end || !addr_range_safe(cursor, 1) {
+        return None;
+    }
+    cursor += 1;
+
+    let read_typ = |c: &mut u32| -> Option<u16> {
+        if *c >= end || !addr_range_safe(*c, 1) {
+            return None;
+        }
+        let mut b = unsafe { read_u8(*c) };
+        if b == 0x0A {
+            // BytePrefix - the real value is the next byte
+            *c += 1;
+            if *c >= end || !addr_range_safe(*c, 1) {
+                return None;
+            }
+            b = unsafe { read_u8(*c) };
+        }
+        *c += 1;
+        Some(b as u16)
+    };
+
+    let slp_typa = read_typ(&mut cursor)?;
+    let slp_typb = read_typ(&mut cursor)?;
+    Some((slp_typa, slp_typb))
+}
+
+/// Scans a DSDT's own bytes (bounds-checked against both its own
+/// declared length and this kernel's identity-mapped range, exactly
+/// like every other table walk in this module) for the literal 4-byte
+/// ASCII name `_S5_` (the trailing underscore is part of the real
+/// AML name - every ACPI NameSeg is padded to exactly 4 characters
+/// with trailing `_`), then hands off to `try_parse_s5_package()`
+/// immediately after each match. A DSDT can legitimately be tens of
+/// kilobytes - unlike every fixed-size table this module reads
+/// elsewhere, this is a real linear byte scan over real firmware-
+/// supplied data, not a fixed handful of field reads, so it's
+/// deliberately un-aligned (`_S5_` can start at any byte offset,
+/// unlike the RSDP's own 16-byte-aligned scan) and bounded strictly by
+/// the DSDT's own checksummed length.
+fn find_s5_sleep_type(dsdt_addr: u32) -> Option<(u16, u16)> {
+    if !addr_range_safe(dsdt_addr, 36) {
+        return None;
+    }
+    if !signature_matches(dsdt_addr, b"DSDT") {
+        return None;
+    }
+    let length = unsafe { read_u32(dsdt_addr + 4) };
+    if length < 36 || !addr_range_safe(dsdt_addr, length)
+        || !checksum_ok(dsdt_addr, length)
+    {
+        return None;
+    }
+
+    let end = dsdt_addr + length;
+    const PATTERN: &[u8; 4] = b"_S5_";
+    let mut addr = dsdt_addr + 36; // search the table body, after its
+                                    // own 36-byte SDT header
+    while addr + 4 <= end {
+        if !addr_range_safe(addr, 4) {
+            break;
+        }
+        let mut matched = true;
+        for i in 0..4u32 {
+            if unsafe { read_u8(addr + i) } != PATTERN[i as usize] {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            if let Some(result) = try_parse_s5_package(addr + 4, end) {
+                return Some(result);
+            }
+            // A byte-for-byte match on "_S5_" that isn't followed by a
+            // decodable package is treated as a false positive (AML
+            // string/name data can coincidentally contain this exact
+            // 4-byte sequence) - keep scanning rather than give up.
+        }
+        addr += 1;
+    }
+    None
+}
+
+#[inline(always)]
+unsafe fn port_outb(port: u16, value: u8) {
+    core::arch::asm!("out dx, al", in("dx") port, in("al") value,
+                      options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+unsafe fn port_outw(port: u16, value: u16) {
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") value,
+                      options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+unsafe fn port_inw(port: u16) -> u16 {
+    let value: u16;
+    core::arch::asm!("in ax, dx", in("dx") port, out("ax") value,
+                      options(nomem, nostack, preserves_flags));
+    value
+}
+
+/// Runs the real discovery path (RSDP -> RSDT -> FADT -> DSDT -> _S5)
+/// against whatever ACPI tables this machine actually provides -
+/// shared by both `rust_acpi_shutdown_info()` (logs what was found,
+/// changes nothing) and `rust_acpi_shutdown()` (acts on it). Reuses
+/// `find_rsdp()` above rather than caching Phase 44's own result:
+/// this runs at most a small handful of times per boot (an optional
+/// boot-time log, and at most one real shutdown attempt), so re-
+/// scanning is not worth adding shared mutable state to avoid.
+fn discover_shutdown_info() -> AcpiShutdownInfo {
+    let mut info = AcpiShutdownInfo::empty();
+
+    let rsdp_addr = match find_rsdp() {
+        Some(addr) => addr,
+        None => return info,
+    };
+    info.found_acpi = 1;
+
+    let rsdt_addr = unsafe { read_u32(rsdp_addr + 16) };
+    let fadt_addr = match find_fadt(rsdt_addr) {
+        Some(addr) => addr,
+        None => return info,
+    };
+    let fadt = match parse_fadt(fadt_addr) {
+        Some(f) => f,
+        None => return info,
+    };
+    info.found_fadt = 1;
+    info.pm1a_cnt_blk = fadt.pm1a_cnt_blk;
+    info.pm1b_cnt_blk = fadt.pm1b_cnt_blk;
+    info.smi_cmd = fadt.smi_cmd;
+    info.acpi_enable = fadt.acpi_enable;
+
+    if fadt.pm1a_cnt_blk != 0 && fadt.pm1a_cnt_blk <= 0xFFFF {
+        let cnt = unsafe { port_inw(fadt.pm1a_cnt_blk as u16) };
+        info.sci_en_already_set = if (cnt & PM1_SCI_EN) != 0 { 1 } else { 0 };
+    }
+
+    if let Some((slp_typa, slp_typb)) = find_s5_sleep_type(fadt.dsdt_addr) {
+        info.found_s5 = 1;
+        info.slp_typa = slp_typa;
+        info.slp_typb = slp_typb;
+    }
+
+    info
+}
+
+/// Non-destructive discovery, safe to run and log at every boot (see
+/// kernel/init/main.c's own call site): finds and reports exactly
+/// what `rust_acpi_shutdown()` below would use, without ever touching
+/// an I/O port that changes machine state. Returns -1 (no ACPI at
+/// all), -2 (ACPI found but no usable FADT), -3 (FADT found but no
+/// `_S5` package could be located in its DSDT), or 0 (everything a
+/// real shutdown needs was found) - `out` is filled in regardless of
+/// the return value, with whatever was actually discovered before the
+/// point of failure.
+#[no_mangle]
+pub extern "C" fn rust_acpi_shutdown_info(out: *mut AcpiShutdownInfo) -> i32 {
+    let info = discover_shutdown_info();
+    unsafe {
+        *out = info;
+    }
+    if info.found_acpi == 0 {
+        -1
+    } else if info.found_fadt == 0 || info.pm1a_cnt_blk == 0 {
+        -2
+    } else if info.found_s5 == 0 {
+        -3
+    } else {
+        0
+    }
+}
+
+/// The real thing: discovers this machine's own FADT/PM1_CNT/_S5
+/// values (exactly as `rust_acpi_shutdown_info()` above does - the two
+/// deliberately share `discover_shutdown_info()` rather than one
+/// trusting the other's earlier result, so this always acts on a
+/// fresh, direct read of this machine's own tables), enables ACPI if
+/// it isn't already, then writes the real S5 sleep-state request to
+/// PM1a_CNT_BLK (and PM1b_CNT_BLK too, if this machine has a second
+/// one - most, including QEMU, don't).
+///
+/// On real, working ACPI hardware this function does not return at
+/// all - the write itself powers the machine off. Every negative
+/// return value below is therefore a real, honestly-distinguished
+/// failure to get there, not a success code that was forgotten: -1 no
+/// ACPI present at all, -2 no usable FADT/PM1a_CNT_BLK, -3 no `_S5`
+/// package found in the DSDT, -4 ACPI needs enabling first but this
+/// FADT gives no SMI_CMD/ACPI_ENABLE to do it with, -5 the enable
+/// sequence was issued but SCI_EN never became set within this
+/// function's own bounded wait, -6 SLP_EN was written to PM1_CNT and
+/// this function is still running afterward - the tables claimed S5
+/// support but the real hardware didn't act on it.
+#[no_mangle]
+pub extern "C" fn rust_acpi_shutdown() -> i32 {
+    let info = discover_shutdown_info();
+
+    if info.found_acpi == 0 {
+        return -1;
+    }
+    if info.found_fadt == 0 || info.pm1a_cnt_blk == 0 || info.pm1a_cnt_blk > 0xFFFF {
+        return -2;
+    }
+    if info.found_s5 == 0 {
+        return -3;
+    }
+
+    if info.sci_en_already_set == 0 {
+        if info.smi_cmd == 0 || info.smi_cmd > 0xFFFF || info.acpi_enable == 0 {
+            return -4;
+        }
+        unsafe {
+            port_outb(info.smi_cmd as u16, info.acpi_enable);
+        }
+        let mut enabled = false;
+        let mut i = 0u32;
+        while i < BUSY_WAIT_ITERATIONS {
+            let cnt = unsafe { port_inw(info.pm1a_cnt_blk as u16) };
+            if (cnt & PM1_SCI_EN) != 0 {
+                enabled = true;
+                break;
+            }
+            i += 1;
+        }
+        if !enabled {
+            return -5;
+        }
+    }
+
+    let value_a = ((info.slp_typa & 0x7) << 10) | PM1_SLP_EN;
+    unsafe {
+        port_outw(info.pm1a_cnt_blk as u16, value_a);
+    }
+    if info.pm1b_cnt_blk != 0 && info.pm1b_cnt_blk <= 0xFFFF {
+        let value_b = ((info.slp_typb & 0x7) << 10) | PM1_SLP_EN;
+        unsafe {
+            port_outw(info.pm1b_cnt_blk as u16, value_b);
+        }
+    }
+
+    // Still executing means the write didn't actually power the
+    // machine off - spin briefly (bounded, same non-timer-based
+    // reasoning as the enable wait above) before honestly reporting
+    // failure rather than either hanging forever or returning
+    // immediately on hardware that just needed a moment.
+    let mut i = 0u32;
+    while i < BUSY_WAIT_ITERATIONS {
+        core::hint::spin_loop();
+        i += 1;
+    }
+    -6
+}
+
+/// Ring-0 self-test - the same "small, fully synthetic, hand-
+/// constructed table this test controls byte-for-byte" methodology
+/// `rust_acpi_selftest()` above already established for MADT parsing,
+/// applied here to FADT parsing and, new to this phase, the `_S5` AML
+/// decode: no real machine's DSDT is a "known correct answer" to
+/// check `find_s5_sleep_type()` against in isolation, so this builds
+/// one itself. Deliberately does NOT call `rust_acpi_shutdown()` at
+/// all - that function's entire purpose is to change real machine
+/// state (power it off), which a boot-time self-test must never risk
+/// doing by accident.
+#[no_mangle]
+pub extern "C" fn rust_acpi_fadt_selftest() -> i32 {
+    let mut code = 0;
+
+    // Synthetic DSDT: a 36-byte SDT header, immediately followed (no
+    // preceding AML filler - harmless, since find_s5_sleep_type()
+    // scans byte-by-byte regardless of what precedes a match) by
+    // `_S5_`, PackageOp, a 1-byte PkgLength (its actual value is never
+    // read by this module - only its top two bits, both 0 here,
+    // meaning "no additional length bytes"), NumElements(4), and the
+    // two SLP_TYP values (5 and 7 - arbitrary, chosen specifically to
+    // be distinguishable from each other and from 0/1, so this test
+    // cannot pass by accident) each BytePrefix-encoded, plus two more
+    // ZeroOp elements completing the realistic 4-element package
+    // (unread by the parser, present only for realism).
+    let mut dsdt = [0u8; 49];
+    dsdt[0..4].copy_from_slice(b"DSDT");
+    let dsdt_len = dsdt.len() as u32;
+    dsdt[4..8].copy_from_slice(&dsdt_len.to_le_bytes());
+    dsdt[36..40].copy_from_slice(b"_S5_");
+    dsdt[40] = 0x12; // PackageOp
+    dsdt[41] = 0x08; // PkgLength, 1-byte form (top 2 bits clear)
+    dsdt[42] = 0x04; // NumElements
+    dsdt[43] = 0x0A; // BytePrefix
+    dsdt[44] = 5; // SLP_TYPa
+    dsdt[45] = 0x0A; // BytePrefix
+    dsdt[46] = 7; // SLP_TYPb
+    dsdt[47] = 0x00; // ZeroOp (3rd element, never read by this parser)
+    dsdt[48] = 0x00; // ZeroOp (4th element, never read by this parser)
+    let dsdt_addr = dsdt.as_ptr() as u32;
+    let dsdt_sum: u8 = dsdt
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != 9) // checksum byte itself, SDT offset 9
+        .fold(0u8, |acc, (_, &b)| acc.wrapping_add(b));
+    dsdt[9] = (0u8).wrapping_sub(dsdt_sum);
+
+    match find_s5_sleep_type(dsdt_addr) {
+        Some((a, b)) if a == 5 && b == 7 => {}
+        _ => code |= 1,
+    }
+
+    // Synthetic FADT: only the fields this module actually reads are
+    // load-bearing (see FadtFields's own doc comment) - every other
+    // real FADT field is left zeroed. SMI_CMD/ACPI_ENABLE use their
+    // real, standard values (0xB2/0xA0 - the same ones QEMU/SeaBIOS
+    // itself uses), and PM1a_CNT_BLK uses QEMU's own real, standard
+    // value (0x604) - realistic, not load-bearing for what this test
+    // actually checks (this test never issues a real port write).
+    let mut fadt = [0u8; 72];
+    fadt[0..4].copy_from_slice(b"FACP");
+    let fadt_len = fadt.len() as u32;
+    fadt[4..8].copy_from_slice(&fadt_len.to_le_bytes());
+    fadt[40..44].copy_from_slice(&dsdt_addr.to_le_bytes());
+    fadt[48..52].copy_from_slice(&0xB2u32.to_le_bytes()); // SMI_CMD
+    fadt[52] = 0xA0; // ACPI_ENABLE
+    fadt[64..68].copy_from_slice(&0x604u32.to_le_bytes()); // PM1a_CNT_BLK
+    fadt[68..72].copy_from_slice(&0u32.to_le_bytes()); // PM1b_CNT_BLK: none
+    let fadt_addr = fadt.as_ptr() as u32;
+    let fadt_sum: u8 = fadt
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != 9)
+        .fold(0u8, |acc, (_, &b)| acc.wrapping_add(b));
+    fadt[9] = (0u8).wrapping_sub(fadt_sum);
+
+    match parse_fadt(fadt_addr) {
+        Some(f)
+            if f.dsdt_addr == dsdt_addr
+                && f.smi_cmd == 0xB2
+                && f.acpi_enable == 0xA0
+                && f.pm1a_cnt_blk == 0x604
+                && f.pm1b_cnt_blk == 0 => {}
+        _ => code |= 2,
+    }
+
+    // The negative case, proven directly rather than assumed: a
+    // corrupted FADT (bad checksum) must be rejected outright, not
+    // silently trusted - the same "prove the rejection case too"
+    // discipline kernel/rust/journal.rs's own two-part self-test
+    // already applies to recovery.
+    let mut bad_fadt = fadt;
+    bad_fadt[9] = bad_fadt[9].wrapping_add(1);
+    if parse_fadt(bad_fadt.as_ptr() as u32).is_some() {
+        code |= 4;
     }
 
     code

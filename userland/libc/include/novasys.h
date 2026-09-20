@@ -43,6 +43,7 @@
 #define SYS_LOGIN 29
 #define SYS_GETUID 30
 #define SYS_SUDO 31
+#define SYS_SHUTDOWN 32
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -123,5 +124,15 @@ unsigned int sys_getuid(void);
  * password, not in the admin group, or locked out, deliberately not
  * distinguished. */
 int sys_sudo(const char* password);
+
+/* Phase 55: SYS_SHUTDOWN - see kernel/arch/x86/cpu/syscall.h's own
+ * comment for the full contract. On a real, working ACPI shutdown
+ * this call does not return at all. If it does return, the machine
+ * is still running - the return value is whatever
+ * kernel/rust/acpi.rs's own rust_acpi_shutdown() reported: -1 no ACPI
+ * present, -2 no usable FADT, -3 no _S5 package found in the DSDT,
+ * -4/-5 this machine needed an ACPI-enable handshake that failed, -6
+ * the real S5 write was issued but had no effect. */
+int sys_shutdown(void);
 
 #endif

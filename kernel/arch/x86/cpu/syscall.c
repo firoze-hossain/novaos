@@ -75,6 +75,11 @@ extern int rust_pipe_read(int id, uint8_t* buf, uint32_t max_len);
 extern int rust_pipe_write(int id, const uint8_t* buf, uint32_t len);
 extern void rust_pipe_close(int id, int is_read_end);
 
+/* Phase 55: kernel/rust/acpi.rs's own real ACPI shutdown entry point -
+ * see that module's own doc comment and syscall.h's own SYS_SHUTDOWN
+ * comment for the full contract. */
+extern int rust_acpi_shutdown(void);
+
 static int str_eq_ci(const char* a, const char* b) {
     while (*a && *b) {
         char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
@@ -286,6 +291,21 @@ static void handle_sudo(registers_t* regs) {
                    "password or not in the admin group)\n", p->pid);
         regs->eax = (uint32_t)-1;
     }
+}
+
+static void handle_shutdown(registers_t* regs) {
+    process_t* p = process_current();
+    kernel_log("[SYSCALL] pid %d SYS_SHUTDOWN - attempting a real ACPI "
+               "power-off\n", p ? p->pid : -1);
+
+    int result = rust_acpi_shutdown();
+
+    /* Reached only on failure - a real, working ACPI shutdown never
+     * returns here at all (see rust_acpi_shutdown()'s own doc comment
+     * for exactly what each negative value means). */
+    kernel_log("[FAULT] SYS_SHUTDOWN: ACPI power-off failed (code %d) "
+               "- the machine is still running\n", result);
+    regs->eax = (uint32_t)result;
 }
 
 static void handle_pipe(registers_t* regs) {
@@ -782,6 +802,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_SUDO:
             handle_sudo(regs);
+            break;
+
+        case SYS_SHUTDOWN:
+            handle_shutdown(regs);
             break;
 
         default:
