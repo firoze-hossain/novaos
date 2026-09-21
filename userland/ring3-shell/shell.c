@@ -10,16 +10,12 @@
  * boots into this program via process_exec_as_shell() rather than
  * running a shell as a kernel task at all.
  *
- * Scope, stated honestly: supports ls/cat/run/echo/help/clear - the
- * commands buildable on syscalls that already exist (SYS_OPEN/READ/
- * CLOSE, SYS_EXEC/WAIT, SYS_LIST_FILES, SYS_WRITE) plus the two new
- * ones this phase added (SYS_READ_KEY for input). Networking
- * (ping/nslookup/tftp), package management, the GUI (store), sound
- * (beep), the real-time clock (date), and PCI enumeration (lspci)
- * are NOT available here - each would need its own new syscall
- * surface (SYS_PING, SYS_PKG_*, a way to launch the GUI, SYS_BEEP,
- * SYS_RTC_READ, SYS_LSPCI), deliberately not built in this pass. See
- * PROGRESS.md for the full, honest limitations list.
+ * Scope at Phase 30 (long since outgrown - kept here only as a
+ * historical marker; see the Phase 59/60 notes below for what
+ * actually ships today): supported ls/cat/run/echo/help/clear only.
+ * Every later phase mentioned below has since closed a piece of that
+ * original gap; PROGRESS.md has the full, honest phase-by-phase
+ * account.
  *
  * Phase 59: ls/cat/echo/cp/rm are now real, separate ring-3 ELF32
  * programs (userland/coreutils-rs/ls.rs, echo.rs, cp.rs, rm.rs, plus
@@ -33,7 +29,27 @@
  * to explicitly delegate its own can_open_any_file capability to
  * those three specific programs, and only those three, when it
  * launches them; `run`/ls/echo still use plain SYS_EXEC, unchanged.
- */
+ *
+ * Phase 60: closes the release-readiness doc's own 2.1 row for real -
+ * `nslookup`/`tftp` are now real, separate ring-3 ELF32 programs too
+ * (userland/net-rs/nslookup.rs, tftp.rs), following the exact same
+ * "own directory, shared ffi.rs, own build.sh" shape Phase 59 already
+ * used for coreutils-rs. `ping`/`pkg`/`gui` (a proof-of-concept demo,
+ * not the full compositor - see cmd_gui()'s own comment) were already
+ * wired in by earlier phases (33, 32, 32b respectively) by the time
+ * this phase started - only nslookup/tftp were genuinely still
+ * missing, despite what this row's own text still says (kept
+ * unedited elsewhere as the literal row this phase closes). tftp
+ * genuinely creates/overwrites a local file, so - like cp/rm - it
+ * needs SYS_EXEC_TRUSTED, not plain SYS_EXEC; nslookup needs no
+ * special capability, so plain SYS_EXEC is enough, the same as ping.
+ * The two new syscalls this phase added (SYS_DNS_RESOLVE, SYS_TFTP_
+ * FETCH) exposed a real, previously-latent hang bug in kernel/net/
+ * dns.c and kernel/net/tftp.c - the exact same "int 0x80 disables
+ * interrupts, so an un-yielding busy-wait spins forever" hazard Phase
+ * 58 found and fixed in arp_resolve(), fixed the same way here (see
+ * both files' own Phase 60 comments) before this phase's syscalls
+ * ever shipped, not after some report of a real hang. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,11 +212,13 @@ static void cmd_help(void) {
     printf("  pkg remove NAME         - remove an installed package\n");
     printf("  gui             - run a ring-3 graphics demo\n");
     printf("  ping HOST_IP    - ICMP echo (real ~3s timeout, written in Rust)\n");
+    printf("  nslookup HOST   - resolve a hostname via DNS (Rust, Phase 60)\n");
+    printf("  tftp IP REMOTE [LOCAL] - fetch a file over TFTP (Rust, Phase 60)\n");
     printf("  help            - show this message\n");
     printf("\n");
-    printf("Not yet available here: nslookup, tftp, store (the full\n");
-    printf("compositor + Software Center UI - see PROGRESS.md for why\n");
-    printf("'gui' above is a proof-of-concept, not a full port).\n");
+    printf("Not yet available here: store (the full compositor +\n");
+    printf("Software Center UI - see PROGRESS.md for why 'gui' above is\n");
+    printf("a proof-of-concept, not a full port).\n");
 }
 
 /* Phase 59: ls/cat are now real, separate ring-3 ELF32 programs
@@ -386,6 +404,58 @@ static void cmd_ping(int argc, char* argv[]) {
         return;
     }
     sys_wait(pid);
+}
+
+/* Phase 60: nslookup is a genuine ring-3 program written in Rust
+ * (userland/net-rs/nslookup.rs) - closes the release-readiness doc's
+ * own 2.1 row for this one command. Needs no special capabilities
+ * (SYS_DNS_RESOLVE isn't capability-gated - see kernel/arch/x86/cpu/
+ * syscall.h's own comment on why), so plain SYS_EXEC is enough, the
+ * same as cmd_ping() just above. */
+static void cmd_nslookup(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("usage: nslookup HOSTNAME\n");
+        return;
+    }
+    char* nslookup_argv[] = {"NSLOOKUP.ELF", argv[1]};
+    int pid = sys_exec("NSLOOKUP.ELF", nslookup_argv, 2);
+    if (pid < 0) {
+        printf("nslookup: failed to load NSLOOKUP.ELF\n");
+        return;
+    }
+    sys_wait(pid);
+}
+
+/* Phase 60: tftp is a genuine ring-3 program written in Rust
+ * (userland/net-rs/tftp.rs) - closes the release-readiness doc's own
+ * 2.1 row for this one command. Unlike cmd_nslookup() above, TFTP
+ * fetch genuinely creates/overwrites a local file at a name the user
+ * chooses (SYS_TFTP_FETCH is gated on can_open_any_file - see
+ * kernel/arch/x86/cpu/syscall.h's own comment on that syscall), so -
+ * exactly like cmd_cp()/cmd_rm() below - this needs SYS_EXEC_TRUSTED
+ * to actually work, not plain SYS_EXEC. */
+static void cmd_tftp(int argc, char* argv[]) {
+    if (argc < 3) {
+        printf("usage: tftp SERVER_IP REMOTE_FILE [LOCAL_FILE]\n");
+        return;
+    }
+    char* tftp_argv[4];
+    int tftp_argc = 0;
+    tftp_argv[tftp_argc++] = "TFTP.ELF";
+    tftp_argv[tftp_argc++] = argv[1];
+    tftp_argv[tftp_argc++] = argv[2];
+    if (argc >= 4) {
+        tftp_argv[tftp_argc++] = argv[3];
+    }
+    int pid = sys_exec_trusted("TFTP.ELF", tftp_argv, tftp_argc);
+    if (pid < 0) {
+        printf("tftp: failed to load TFTP.ELF\n");
+        return;
+    }
+    int exit_code = sys_wait(pid);
+    if (exit_code != 0) {
+        printf("tftp: failed (see TFTP.ELF's own message above, if any)\n");
+    }
 }
 
 /* Phase 59: echo is now a real, separate ring-3 ELF32 program too
@@ -854,6 +924,10 @@ int main(int argc, char** argv, char** envp) {
             cmd_gui();
         } else if (strcmp(tokens[0], "ping") == 0) {
             cmd_ping(argc2, tokens);
+        } else if (strcmp(tokens[0], "nslookup") == 0) {
+            cmd_nslookup(argc2, tokens);
+        } else if (strcmp(tokens[0], "tftp") == 0) {
+            cmd_tftp(argc2, tokens);
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

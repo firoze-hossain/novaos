@@ -386,6 +386,54 @@
  * launch. Returns the new process's pid, or -1 - same as SYS_EXEC. */
 #define SYS_EXEC_TRUSTED 38
 
+/* Phase 60: closes the release-readiness doc's own 2.1 row ("ping/
+ * nslookup/tftp/pkg/the GUI aren't reachable from the ring-3 shell
+ * yet") for its two genuinely still-missing pieces - by this phase,
+ * `ping`/`pkg`/`gui` (a proof-of-concept demo, not the full
+ * compositor - a separate, still-open gap tracked under 2.3) were
+ * already wired into userland/ring3-shell/shell.c by earlier phases;
+ * only `nslookup` and `tftp` were actually absent.
+ *
+ * EBX = hostname (NUL-terminated C string), ECX = uint32_t* out_ip.
+ * Wraps kernel/net/dns.c's existing dns_resolve(), always querying
+ * this kernel's one configured resolver (NET_DNS_SERVER_IP - see
+ * net.h) - there's no way to specify a different server, matching
+ * this kernel's "no DHCP, one fixed static config" scope everywhere
+ * else. Not capability-gated: a DNS lookup touches no local file and
+ * reaches a fixed, well-known address, not one the caller chooses -
+ * the same "read-only, no user-controlled destination" reasoning
+ * SYS_PING_START/POLL above already use un-gated. Returns 1 with
+ * *out_ip filled in on success, -1 on failure (NXDOMAIN, malformed
+ * response, or the ~3s timeout). dns_resolve() itself gained a
+ * scheduler_yield() fix this same phase (kernel/net/dns.c) - the
+ * identical int-0x80-disables-interrupts hazard Phase 58 found and
+ * fixed in arp_resolve(), latent here until this syscall made
+ * dns_resolve() reachable from inside a syscall handler for the first
+ * time. */
+#define SYS_DNS_RESOLVE 39
+
+/* EBX = server_ip (packed big-endian IPv4), ECX = remote_filename
+ * (NUL-terminated C string, TFTP 8.3-style), EDX = local_filename
+ * (NUL-terminated C string - the name to save under on this kernel's
+ * own mounted filesystem). Wraps kernel/net/tftp.c's existing
+ * tftp_get() (read into a bounded kernel-side staging buffer - see
+ * TFTP_FETCH_MAX_BYTES in syscall.c) followed by vfs_write_file() -
+ * the same "fetch into memory, then one whole-file write" shape
+ * userland/coreutils-rs/cp.rs already uses for local copies, since
+ * this kernel has no incremental/append file write either way. IS
+ * capability-gated on can_open_any_file (see process.h), the same
+ * check handle_write_file() above already applies - this syscall
+ * genuinely creates/overwrites a file at a name the caller chooses,
+ * exactly the case that check exists for; the ring-3 shell delegates
+ * its own can_open_any_file to TFTP.ELF via SYS_EXEC_TRUSTED the same
+ * way it already does for CP.ELF/RM.ELF. Returns the number of bytes
+ * fetched and written, or -1 on failure (network timeout, TFTP error
+ * reply, transfer too large for the staging buffer, or (matching
+ * handle_write_file()'s own denial) no can_open_any_file). tftp_get()
+ * itself gained the same scheduler_yield() fix as dns_resolve() above,
+ * same reasoning. */
+#define SYS_TFTP_FETCH 40
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

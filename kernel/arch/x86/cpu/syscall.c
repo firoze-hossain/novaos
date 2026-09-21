@@ -36,6 +36,9 @@
 #include "../../drivers/video/vga_graphics.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
+#include "../../net/dns.h"
+#include "../../net/tftp.h"
+#include "../../net/net.h"
 
 extern void isr128(void);
 
@@ -820,6 +823,64 @@ static void handle_exec_trusted(registers_t* regs) {
     regs->eax = (uint32_t)new_pid;
 }
 
+/* Phase 60's SYS_DNS_RESOLVE - see syscall.h's own comment on this
+ * syscall for the full reasoning (why it's ungated, why dns_resolve()
+ * itself needed a Phase-58-style scheduler_yield() fix first). */
+static void handle_dns_resolve(registers_t* regs) {
+    const char* hostname = (const char*)regs->ebx;
+    uint32_t* out_ip = (uint32_t*)regs->ecx;
+
+    bool ok = dns_resolve(hostname, NET_DNS_SERVER_IP, out_ip);
+    kernel_log("[SYSCALL] SYS_DNS_RESOLVE('%s') -> %s\n", hostname,
+               ok ? "ok" : "failed");
+    regs->eax = ok ? 1u : (uint32_t)-1;
+}
+
+/* Phase 60's SYS_TFTP_FETCH - see syscall.h's own comment on this
+ * syscall for the full reasoning. TFTP_FETCH_MAX_BYTES bounds the
+ * kernel-side staging buffer tftp_get() reads into before this
+ * function hands the whole thing to vfs_write_file() in one call -
+ * 256KB, the same bound userland/coreutils-rs/cp.rs already uses for
+ * its own local-copy buffer (see that file's own comment on why this
+ * kernel's "no incremental file write" contract makes a fixed
+ * whole-transfer buffer the only shape available either way), not a
+ * new, separately-chosen number. */
+#define TFTP_FETCH_MAX_BYTES (256 * 1024)
+static uint8_t tftp_fetch_staging[TFTP_FETCH_MAX_BYTES];
+
+static void handle_tftp_fetch(registers_t* regs) {
+    process_t* p = process_current();
+    uint32_t server_ip = regs->ebx;
+    const char* remote_filename = (const char*)regs->ecx;
+    const char* local_filename = (const char*)regs->edx;
+
+    if (p == NULL || !p->can_open_any_file) {
+        kernel_log("[SECURITY] pid %d denied SYS_TFTP_FETCH('%s' -> '%s') - "
+                   "no broad file access capability\n",
+                   p != NULL ? p->pid : -1, remote_filename, local_filename);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int n = tftp_get(server_ip, remote_filename, tftp_fetch_staging,
+                      sizeof(tftp_fetch_staging));
+    if (n < 0) {
+        kernel_log("[SYSCALL] pid %d SYS_TFTP_FETCH('%s' -> '%s') failed "
+                   "(timeout, TFTP error, or too large for the %d-byte "
+                   "staging buffer)\n", p->pid, remote_filename,
+                   local_filename, TFTP_FETCH_MAX_BYTES);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    bool wrote = vfs_write_file(local_filename, tftp_fetch_staging,
+                                 (uint32_t)n);
+    kernel_log("[SYSCALL] pid %d SYS_TFTP_FETCH('%s' -> '%s') fetched %d "
+               "bytes, write %s\n", p->pid, remote_filename, local_filename,
+               n, wrote ? "ok" : "failed");
+    regs->eax = wrote ? (uint32_t)n : (uint32_t)-1;
+}
+
 static void handle_wait(registers_t* regs) {
     int target_pid = (int)regs->ebx;
     int result = process_wait(target_pid);
@@ -1151,6 +1212,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_EXEC_TRUSTED:
             handle_exec_trusted(regs);
+            break;
+
+        case SYS_DNS_RESOLVE:
+            handle_dns_resolve(regs);
+            break;
+
+        case SYS_TFTP_FETCH:
+            handle_tftp_fetch(regs);
             break;
 
         default:
