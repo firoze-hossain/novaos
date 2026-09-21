@@ -372,9 +372,63 @@ static void cmd_pkg(const char* arg) {
         }
         vga_printf("Fetched '%s' (%d bytes). Try 'pkg list' then "
                    "'pkg install %s'.\n", pkg_filename, n, name);
+    } else if (strncmp(arg, "install-http ", 13) == 0) {
+        /* Phase 64: "pkg install-http HOST:PORT NAME" - a real HTTP
+         * fetch, from an arbitrary repository server, in one step
+         * (fetch + install together) - deliberately a separate
+         * command from "pkg fetch" above, not a replacement for it:
+         * that one speaks TFTP, fetches only (a separate "pkg
+         * install" is still needed after), and is scoped to this
+         * VM's own gateway - this one speaks real HTTP/1.1, to any
+         * host:port, and installs immediately once the fetched data
+         * is confirmed to actually be the right package. See
+         * userland/pkg/pkgmgr.h's own pkg_fetch_and_install() for the
+         * full contract, including every real failure mode this can
+         * report. */
+        if (!net_is_up()) {
+            vga_puts("pkg install-http: no network adapter present\n");
+            return;
+        }
+        const char* rest = arg + 13;
+        char host[64];
+        int hi = 0;
+        while (rest[hi] && rest[hi] != ':' && rest[hi] != ' ' &&
+               hi < (int)sizeof(host) - 1) {
+            host[hi] = rest[hi];
+            hi++;
+        }
+        host[hi] = '\0';
+        if (rest[hi] != ':') {
+            vga_puts("Usage: pkg install-http HOST:PORT NAME\n");
+            return;
+        }
+        int port = 0;
+        int pi = hi + 1;
+        while (rest[pi] >= '0' && rest[pi] <= '9') {
+            port = port * 10 + (rest[pi] - '0');
+            pi++;
+        }
+        if (rest[pi] != ' ' || port <= 0 || port > 65535) {
+            vga_puts("Usage: pkg install-http HOST:PORT NAME\n");
+            return;
+        }
+        const char* name = rest + pi + 1;
+        if (name[0] == '\0') {
+            vga_puts("Usage: pkg install-http HOST:PORT NAME\n");
+            return;
+        }
+        vga_printf("Fetching '%s' via HTTP from %s:%d...\n", name, host,
+                   port);
+        if (pkg_fetch_and_install(host, (uint16_t)port, name)) {
+            vga_printf("Installed '%s'.\n", name);
+        } else {
+            vga_printf("pkg install-http: failed - see the log above for "
+                       "the specific reason\n");
+        }
     } else {
         vga_puts("Usage: pkg list | pkg installed | pkg install NAME | "
-                  "pkg remove NAME | pkg fetch NAME\n");
+                  "pkg remove NAME | pkg fetch NAME | pkg install-http "
+                  "HOST:PORT NAME\n");
     }
 }
 

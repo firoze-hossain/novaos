@@ -110,6 +110,11 @@ static void page_fault_handler(registers_t* regs) {
                write ? "write" : "read",
                user ? "user mode" : "kernel mode",
                reserved ? ", reserved bit set" : "");
+    kernel_log("[DIAG] full state: cs=0x%x eflags=0x%x eax=0x%x ebx=0x%x "
+               "ecx=0x%x edx=0x%x esi=0x%x edi=0x%x ebp=0x%x\n",
+               (int)regs->cs, (int)regs->eflags, (int)regs->eax,
+               (int)regs->ebx, (int)regs->ecx, (int)regs->edx,
+               (int)regs->esi, (int)regs->edi, (int)regs->ebp);
     /* Kept deliberately, not temporary debug code: this is the exact
      * diagnostic that isolated two real, confirmed use-after-free
      * bugs this same investigation found and fixed (a process's own

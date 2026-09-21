@@ -63,6 +63,23 @@ bool pkg_install(const char* name);
  * INSTALL.DB record. Fails if not currently installed. */
 bool pkg_remove(const char* name);
 
+/* Phase 64: fetches "<name>.PKG" from a real HTTP repository server
+ * (repo_host:repo_port, "/packages/<NAME>.PKG") and installs it -
+ * the real network-fetch path this header's own earlier comment
+ * named as a genuine gap ("There is no network fetch... nothing to
+ * fetch a package *from* yet"), now closed. Verifies the fetched
+ * data is really a NovaOS package (magic + a payload size that
+ * actually fits what arrived) and that its own manifest name matches
+ * what was asked for, before ever writing anything to disk - the
+ * same "don't trust the network, verify before acting" discipline
+ * this project applies to file I/O over ATA/FAT32/ext2 already.
+ * Fails (returns false, with a specific, logged reason) on DNS/
+ * connect/send failure, a malformed or non-package response, a
+ * truncated payload, a name mismatch, or if `name` is already
+ * installed. */
+bool pkg_fetch_and_install(const char* repo_host, uint16_t repo_port,
+                            const char* name);
+
 bool pkg_is_installed(const char* name);
 
 #endif

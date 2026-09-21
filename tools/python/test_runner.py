@@ -393,6 +393,24 @@ ASSERTIONS: list[Assertion] = [
     Assertion("tcp_selftest_recv", r"Kernel-side Rust TCP self-test.*recv=pass",
               "kernel/rust/tcp.rs correctly delivered synthetic inbound data "
               "to rust_tcp_recv()"),
+    Assertion("http_selftest_parsing",
+              r"Kernel-side Rust HTTP self-test \(1/2\): "
+              r"header-body-split=pass truncated-detected=pass "
+              r"copy-truncation=pass",
+              "kernel/rust/http.rs's own response-parsing logic correctly "
+              "splits headers from body, detects a truncated (headerless) "
+              "response, and never overflows the caller's own output "
+              "buffer"),
+    Assertion("http_selftest_ip_literal",
+              r"Kernel-side Rust HTTP self-test \(2/2\): "
+              r"ip-literal-parsed=pass hostname-not-misidentified=pass "
+              r"digit-prefixed-hostname-ok=pass bad-octet-rejected=pass "
+              r"too-few-segments-rejected=pass",
+              "kernel/rust/http.rs's own IPv4-literal detection correctly "
+              "parses a real dotted-quad host, never misidentifies a real "
+              "hostname (including one starting with a digit) as an IP, "
+              "and rejects malformed, IP-shaped input rather than "
+              "accepting garbage"),
     Assertion("exec_trusted_delegation_passed",
               r"sandbox. PASS: SYS_EXEC_TRUSTED delegates can_open_any_file "
               r"correctly",
