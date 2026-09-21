@@ -294,3 +294,23 @@ int sys_exec_trusted(const char* path, char** argv, int argc) {
                        : "memory", "cc");
     return result;
 }
+
+int sys_dns_resolve(const char* hostname, unsigned int* out_ip) {
+    int result = SYS_DNS_RESOLVE;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(hostname), "c"(out_ip)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_tftp_fetch(unsigned int server_ip, const char* remote_filename,
+                    const char* local_filename) {
+    int result = SYS_TFTP_FETCH;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(server_ip), "c"(remote_filename),
+                         "d"(local_filename)
+                       : "memory", "cc");
+    return result;
+}

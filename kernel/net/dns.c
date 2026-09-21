@@ -7,6 +7,7 @@
 #include "net.h"
 #include "../drivers/timer/timer.h"
 #include "../lib/string.h"
+#include "../task/scheduler.h"
 
 #define DNS_PORT 53
 #define DNS_QTYPE_A   1
@@ -118,6 +119,21 @@ bool dns_resolve(const char* hostname, uint32_t dns_server_ip,
                                                      in this tree */
     while (timer_get_ticks() < deadline) {
         net_poll();
+
+        /* Phase 60 fix, same reasoning and same fix as arp_resolve()'s
+         * own Phase 58 comment (kernel/net/arp.c): this function is
+         * now reachable from inside a syscall handler (the ring-3
+         * shell's new `nslookup`, via SYS_DNS_RESOLVE), and int 0x80's
+         * interrupt gate keeps this CPU's interrupts disabled for the
+         * syscall's entire duration - without yielding, timer_get_
+         * ticks() can never advance (the timer IRQ that would advance
+         * it is exactly what's disabled), so `deadline` above would
+         * never be reached and this would spin forever, hanging the
+         * whole machine, not just the calling process. Calling this
+         * from kernel/boot context (main.c's own self-test, before or
+         * without a running scheduler) is unaffected: scheduler_yield()
+         * safely no-ops whenever current[cpu] == NULL. */
+        scheduler_yield();
 
         uint32_t src_ip;
         uint16_t src_port;

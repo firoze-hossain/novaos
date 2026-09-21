@@ -6627,7 +6627,90 @@ build.sh` followed by `make disk.img` will actually produce
 `LS.ELF`/`ECHO.ELF`/`CP.ELF`/`RM.ELF` and let `ls`/`echo`/`cp`/`rm`
 run for real at the shell prompt.
 
-## Phase 60 and beyond
+## Phase 60: closing the rest of "a shell and coreutils that feel
+complete"
+
+What this phase actually closes: the release-readiness doc's own 2.1
+row's second bullet - "`ping`/`nslookup`/`tftp`/`pkg`/the GUI aren't
+reachable from the ring-3 shell yet." Checking the shell before
+starting found that bullet was already stale: `ping` (Phase 33),
+`pkg` (Phase 32), and `gui` (Phase 32b, a proof-of-concept demo, not
+the full compositor - that's a separate, still-open gap under 2.3)
+were all already wired into `userland/ring3-shell/shell.c`'s dispatch
+chain by the time this phase started - the row's own text just hadn't
+been updated since. Only `nslookup` and `tftp` were genuinely absent.
+Both are now real, separate ring-3 ELF32 programs, written entirely
+in Rust, following Phase 59's own "own directory, shared `ffi.rs`,
+own `build.sh`" shape exactly - `userland/net-rs/{ffi,nslookup,
+tftp}.rs` plus `userland/net-rs/build.sh`, not `userland/coreutils-rs/`
+or `userland/ping-rs/`, since nslookup/tftp are network utilities like
+ping, not coreutils, and overloading either existing directory would
+have blurred that grouping.
+
+Two new syscalls back them, `SYS_DNS_RESOLVE` (39) and `SYS_TFTP_
+FETCH` (40) (`kernel/arch/x86/cpu/syscall.h`/`.c`), each a thin
+wrapper around an existing kernel C function that had only ever been
+called from kernel/boot context before this phase: `kernel/net/dns.c`'s
+`dns_resolve()` and `kernel/net/tftp.c`'s `tftp_get()`, both already
+proven correct by main.c's own long-standing self-tests (the `ping_ok`/
+`tftp_fetch_ok` assertions this project already had). `SYS_DNS_RESOLVE`
+is ungated, the same "read-only, no user-controlled destination"
+reasoning `SYS_PING_START`/`POLL` already use; `SYS_TFTP_FETCH` is
+gated on `can_open_any_file` (it creates/overwrites a local file at a
+name the caller chooses, into a 256KB kernel-side staging buffer
+before one `vfs_write_file()` call - the same "fetch into memory, then
+one whole-file write" shape `cp.rs` already uses, for the same reason:
+no incremental file write exists on this kernel either way), so `tftp`
+launches via `SYS_EXEC_TRUSTED` the same way `cp`/`rm` do; `nslookup`
+needs no special capability, so plain `SYS_EXEC` is enough, like
+`ping`.
+
+Exposing `dns_resolve()`/`tftp_get()` to a syscall caller for the
+first time surfaced a real, latent bug in both - caught by working
+through the interrupt-gate reasoning before writing either syscall
+handler, not discovered by a hang during testing. Both functions'
+wait loops (`while (timer_get_ticks() < deadline) { net_poll(); ... }`)
+had no `scheduler_yield()` call, and `int 0x80`'s gate is an interrupt
+gate that keeps the calling CPU's interrupts disabled for the entire
+syscall - exactly the hazard Phase 58 found and fixed in `arp_resolve()`
+(see that phase's own PROGRESS.md entry): without yielding, the timer
+IRQ that would advance `timer_get_ticks()` is exactly what's disabled,
+so the deadline is never reached and the call spins forever, hanging
+the whole machine, not just the calling process. Both loops got the
+identical fix `arp_resolve()` already proved correct: a `scheduler_
+yield()` call each iteration, safe to call from kernel/boot context
+too (where these functions are still also used, unchanged) since
+`scheduler_yield()` already no-ops whenever the scheduler hasn't
+started.
+
+`userland/ring3-shell/shell.c` gained `cmd_nslookup()`/`cmd_tftp()`
+and their dispatch entries, `cmd_help()`'s text was updated to list
+both, and the file's own long-stale Phase-30-era header comment
+(still describing a scope - "networking/pkg/gui not available" - that
+every phase since 32 had already outgrown) was rewritten to actually
+match what the file does today, with a proper phase-by-phase account
+rather than one paragraph frozen at Phase 30.
+
+**Verified**: the kernel (the two new syscalls, the `dns.c`/`tftp.c`
+fixes) built and linked cleanly; the full boot-test suite shows no
+regressions - the same 9 pre-existing, environment-caused failures as
+before this phase (this sandbox's QEMU networking never delivers a
+real ARP reply at all, so `ping_ok`/`tftp_fetch_ok` were already
+failing here before this phase touched either file, unrelated to the
+`scheduler_yield()` fix itself); `shell.c`'s new dispatch code
+compiles with zero new warnings (`sh userland/ring3-shell/build.sh`);
+and `nslookup.rs`/`tftp.rs` both pass a host-target `--emit=metadata`
+check with zero errors and zero warnings, the same technique this
+project's Rust work has used since Phase 35 for the reason repeated
+in every phase since 33: this sandbox's pre-existing rustc/`compiler_
+builtins` rlib mismatch still blocks producing real bare-metal `.ELF`
+binaries here. The user's own machine, where this project's Rust
+sysroot has previously built real binaries, is where `sh userland/
+net-rs/build.sh` + `make disk.img` will produce `NSLOOKUP.ELF`/
+`TFTP.ELF` and let `nslookup`/`tftp` run for real at the shell prompt -
+the same honest gap Phase 59's four coreutils are already in.
+
+## Phase 61 and beyond
 
 Candidates: extending `SYS_EXEC_TRUSTED`'s delegation beyond
 `can_open_any_file` alone (`allowed_files[]`/`allowed_hosts[]`/

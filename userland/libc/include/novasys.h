@@ -50,6 +50,8 @@
 #define SYS_ACCEPT   36
 #define SYS_CONNECT  37
 #define SYS_EXEC_TRUSTED 38
+#define SYS_DNS_RESOLVE 39
+#define SYS_TFTP_FETCH 40
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -179,5 +181,17 @@ int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port);
  * only meaningfully different when the caller already has that
  * capability itself (in practice, only the interactive ring-3 shell). */
 int sys_exec_trusted(const char* path, char** argv, int argc);
+
+/* Phase 60: closes the release-readiness doc's own 2.1 row - see
+ * kernel/arch/x86/cpu/syscall.h's own comments on SYS_DNS_RESOLVE/
+ * SYS_TFTP_FETCH for the full reasoning. sys_dns_resolve() is
+ * un-gated and safe for any program to call; sys_tftp_fetch() needs
+ * the calling process's own can_open_any_file (it creates/overwrites
+ * a local file), so - like sys_write_file()/sys_delete_file() - it
+ * only actually succeeds when launched via sys_exec_trusted() rather
+ * than plain sys_exec(). */
+int sys_dns_resolve(const char* hostname, unsigned int* out_ip);
+int sys_tftp_fetch(unsigned int server_ip, const char* remote_filename,
+                    const char* local_filename);
 
 #endif

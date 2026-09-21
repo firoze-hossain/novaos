@@ -6,6 +6,7 @@
 #include "net.h"
 #include "../drivers/timer/timer.h"
 #include "../lib/string.h"
+#include "../task/scheduler.h"
 
 #define TFTP_OPCODE_RRQ   1
 #define TFTP_OPCODE_DATA  3
@@ -79,6 +80,21 @@ int tftp_get(uint32_t server_ip, const char* remote_filename, void* buf,
         }
 
         net_poll();
+
+        /* Phase 60 fix, same reasoning and same fix as arp_resolve()'s
+         * own Phase 58 comment (kernel/net/arp.c) and dns_resolve()'s
+         * own matching fix just above in this same phase: this
+         * function is now reachable from inside a syscall handler (the
+         * ring-3 shell's new `tftp`, via SYS_TFTP_FETCH), and int
+         * 0x80's interrupt gate keeps this CPU's interrupts disabled
+         * for the syscall's entire duration - without yielding,
+         * timer_get_ticks() can never advance, so `overall_deadline`
+         * above would never be reached and this would spin forever,
+         * hanging the whole machine. Calling this from kernel/boot
+         * context (main.c's own self-test) is unaffected:
+         * scheduler_yield() safely no-ops whenever current[cpu] ==
+         * NULL. */
+        scheduler_yield();
 
         uint32_t src_ip;
         uint16_t src_port;
