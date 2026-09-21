@@ -55,10 +55,73 @@ extern "C" {
 /// this project's existing kernel panic handler's own intent
 /// (kernel/init/main.c's panic path), just for the Rust side
 /// specifically.
+///
+/// Also reports the panic's own file:line (`core::panic::Location`,
+/// always available in a debug or release build - unlike the panic
+/// *message* itself, which needs `core::fmt` formatting machinery
+/// this freestanding, allocator-optional environment doesn't carry).
+/// A permanent addition, not a one-off debugging aid: found directly
+/// useful investigating a real, non-deterministic memory-corruption
+/// bug in this kernel's own SYS_EXEC/ELF-loading path (see
+/// PROGRESS.md's own notes on that investigation) - a bare "kernel-
+/// side Rust code panicked" with no location was the first thing that
+/// made narrowing that bug down slower than it needed to be. Written
+/// with a fixed, bounded stack buffer and manual byte-by-byte
+/// formatting rather than `core::fmt::Write` - deliberately: this
+/// runs in a context where something has already gone wrong badly
+/// enough to panic, so pulling in more of Rust's own formatting
+/// machinery here is the wrong tradeoff versus a small, easy-to-
+/// audit hand-written loop.
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
     unsafe {
         serial_puts(b"[RUST PANIC] kernel-side Rust code panicked\n\0".as_ptr());
+        if let Some(loc) = info.location() {
+            // 200 bytes is generous for "[RUST PANIC] at " (16) +
+            // any real source path in this tree (the longest,
+            // kernel/rust/net_irq.rs, is 24) + ":" + up to 10 digits
+            // of line number + "\n" + the NUL terminator - real
+            // headroom, not a tight fit, so the saturating writes
+            // below (each stops rather than overflows once `pos`
+            // nears the end) are a defensive backstop, not something
+            // any real call here is expected to actually hit.
+            let mut buf = [0u8; 200];
+            let mut pos = 0usize;
+
+            let mut write_bytes = |bytes: &[u8]| {
+                for &b in bytes {
+                    if pos < buf.len() - 1 {
+                        buf[pos] = b;
+                        pos += 1;
+                    }
+                }
+            };
+
+            write_bytes(b"[RUST PANIC] at ");
+            write_bytes(loc.file().as_bytes());
+            write_bytes(b":");
+
+            let mut line = loc.line();
+            let mut digits = [0u8; 10];
+            let mut ndig = 0usize;
+            if line == 0 {
+                digits[0] = b'0';
+                ndig = 1;
+            } else {
+                while line > 0 && ndig < digits.len() {
+                    digits[ndig] = b'0' + (line % 10) as u8;
+                    line /= 10;
+                    ndig += 1;
+                }
+            }
+            for i in (0..ndig).rev() {
+                write_bytes(&[digits[i]]);
+            }
+            write_bytes(b"\n");
+
+            buf[pos] = 0;
+            serial_puts(buf.as_ptr());
+        }
     }
     loop {
         unsafe {

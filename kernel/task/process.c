@@ -480,13 +480,44 @@ void process_exit_current(int exit_code) {
         kernel_log("[ OK ] Process '%s' (pid %d) exited with code %d\n",
                    p->name, p->pid, exit_code);
 
-        if (p->kernel_stack_alloc != NULL) {
-            kfree(p->kernel_stack_alloc);
-            p->kernel_stack_alloc = NULL;
-        }
-        if (p->is_user) {
-            free_user_address_space(p->page_directory_phys);
-        }
+        /* A real, confirmed use-after-free bug used to be here: this
+         * function runs ON the exiting process's own kernel stack
+         * (reached via the SYS_EXIT syscall handler, still executing
+         * on that same stack) - kfree()'ing p->kernel_stack_alloc at
+         * this exact point frees the very memory the CPU is currently
+         * using for local variables and return addresses, which the
+         * heap allocator can then hand out to any other allocation
+         * that happens to run before this function's own remaining
+         * code (including scheduler_yield() itself, just below)
+         * finishes using it - silently corrupting this stack's
+         * contents out from under itself. Confirmed directly, not
+         * theorized: forcing -smp 1 did NOT make the resulting crashes
+         * (a different fault type and address on nearly every run -
+         * General Protection Fault, Invalid Opcode at eip values as
+         * implausibly low as 0x7, page faults at addresses that
+         * decode as fragments of nearby ASCII strings) go away,
+         * ruling out an SMP race and pointing directly at genuine
+         * memory corruption instead - exactly what a live stack being
+         * freed and reused produces.
+         *
+         * free_user_address_space() used to be called here too, and
+         * was first assumed safe (it frees a *different* mapping than
+         * the kernel stack, the reasoning went) - that assumption was
+         * wrong, found on further investigation after the kernel-stack
+         * fix alone reduced but did not eliminate the same class of
+         * crash: that function's own last step frees the page
+         * directory's own physical frame, which for a user process is
+         * still this exact CPU's actively loaded CR3 at this point in
+         * execution - handing that frame back to the PMM while it's
+         * still translating every memory access this code (and
+         * scheduler_yield() right after it) makes. Both frees now
+         * happen together in process_wait() below, once it observes
+         * PROCESS_TERMINATED - at that point this process has already
+         * reached scheduler_yield() and can never be scheduled again
+         * (so its page directory is never reloaded into CR3 again
+         * either), and process_wait() itself runs on its *caller's*
+         * own stack and own, different, already-active page
+         * directory - not this one, either way. */
     }
     scheduler_yield();
     /* Should never reach here - a TERMINATED process is never picked
@@ -843,6 +874,65 @@ int process_wait(int pid) {
                            behavior regardless) */
         }
         if (target->state == PROCESS_TERMINATED) {
+            /* The actual kernel-stack free lives here now, not in
+             * process_exit_current() - see that function's own
+             * comment for the full account of the real, confirmed
+             * use-after-free this replaces. Safe specifically because:
+             * this code runs on process_wait()'s OWN caller's stack,
+             * never on `target`'s; and by the time state is observed
+             * as PROCESS_TERMINATED, `target` has already reached its
+             * own scheduler_yield() call and - since a TERMINATED
+             * process is never returned by pick_next_locked() - can
+             * never be scheduled again, so nothing will ever execute
+             * on its kernel stack after this point. Guarded with the
+             * same null-check-then-null-out pattern the original,
+             * unsafe version already used, since process_wait() can
+             * genuinely be called more than once for the same pid
+             * (this project's own sandbox_demo.c does exactly that in
+             * several of its own tests) and this must stay safe to
+             * call repeatedly, not just once. */
+            if (target->kernel_stack_alloc != NULL) {
+                kfree(target->kernel_stack_alloc);
+                target->kernel_stack_alloc = NULL;
+            }
+            /* A second, more severe instance of the exact same class
+             * of bug the kernel-stack free above already fixed - found
+             * on further investigation after that first fix reduced
+             * but did not eliminate a still-observed, non-deterministic
+             * corruption. free_user_address_space() used to be called
+             * directly from process_exit_current(), which - for a
+             * user process - means it ran while that process's own
+             * page directory was still the CPU's *actively loaded*
+             * CR3 value. That function's own last step is
+             * pmm_free_frame(page_directory_phys) - handing the exact
+             * physical frame the CPU is using *right now* to translate
+             * every single memory access (including the rest of
+             * process_exit_current() and scheduler_yield() finishing
+             * their own execution) back to the PMM's free list, where
+             * any other pmm_alloc_frame() call anywhere in the kernel
+             * could immediately claim and overwrite it - silently
+             * corrupting the live page directory out from under the
+             * still-running CPU. This explains the wide, seemingly
+             * unrelated variety of symptoms better than the kernel-
+             * stack bug alone did: a corrupted page directory produces
+             * unpredictable translation failures for whatever gets
+             * accessed next, not a single consistent failure mode.
+             * Moved here for the identical reason and with the
+             * identical safety argument as the kernel-stack free just
+             * above - by this point `target` is guaranteed to have
+             * already switched away (a TERMINATED process's own page
+             * directory is never reloaded into CR3 again, since
+             * do_schedule() only loads `next`'s), and this code runs
+             * on the *caller's* own, different, already-active page
+             * directory, not `target`'s. page_directory_phys is set to
+             * 0 after freeing (0 is never a valid page directory
+             * physical address) as this function's own guard against
+             * a second process_wait() call on the same pid trying to
+             * free it again. */
+            if (target->is_user && target->page_directory_phys != 0) {
+                free_user_address_space(target->page_directory_phys);
+                target->page_directory_phys = 0;
+            }
             return target->exit_code;
         }
         scheduler_yield();
