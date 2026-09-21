@@ -63,3 +63,9 @@ void spinlock_release(spinlock_t* lock, uint32_t saved_eflags) {
         __asm__ volatile ("sti" ::: "memory");
     }
 }
+
+void spinlock_release_no_restore(spinlock_t* lock) {
+    __atomic_store_n(&lock->locked, 0u, __ATOMIC_RELEASE);
+    /* Deliberately does not touch EFLAGS at all - see this function's
+     * own doc comment in spinlock.h for why. */
+}

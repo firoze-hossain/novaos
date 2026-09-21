@@ -56,5 +56,9 @@ irq_common_stub:
 
     popa
     add esp, 8
-    sti
+    ; See kernel/arch/x86/cpu/syscall_stub.asm's own comment on
+    ; syscall_return_point for the full account: `sti` here was a
+    ; real, confirmed bug (redundant with - and actively unsafe
+    ; before - `iret`'s own EFLAGS restore), fixed identically in all
+    ; three of this kernel's interrupt/exception/syscall return paths.
     iret

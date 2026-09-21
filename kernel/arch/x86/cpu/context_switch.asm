@@ -65,6 +65,26 @@ switch_context:
 
 global enter_usermode
 enter_usermode:
+    ; A real, confirmed bug: switch_context()'s own popfd (just before
+    ; its `ret` that lands here) already restored THIS task's own
+    ; saved eflags - for a brand new task like this one, that's the
+    ; 0x202 process_create_user_task_common()/process_exec_internal()/
+    ; process_fork() baked in, with IF=1 - meaning interrupts are
+    ; already enabled for the entire multi-instruction stretch below,
+    ; not just at the final `iret` the way syscall_return_point/
+    ; irq_common_stub/isr_common_stub (kernel/arch/x86/cpu/
+    ; syscall_stub.asm, irq_stubs.asm, isr_stubs.asm - see their own,
+    ; identical fix) already ensure for every *other* return-to-
+    ; userspace path. A timer tick firing in this exact window -
+    ; before this function's own segment-register setup and `iret`
+    ; complete - is a real, unguarded hazard for exactly this reason,
+    ; on a task that (being brand new) has no prior suspended call
+    ; chain to safely unwind back through if preempted here. `cli`
+    ; closes the same gap the other three paths already close, by the
+    ; same means: `iret` below still correctly re-enables interrupts
+    ; on its own, since it restores this task's real, intended eflags
+    ; (IF=1) from the fake stack frame process_create_*() built.
+    cli
     mov ax, 0x23            ; GDT_USER_DATA (0x20 | ring 3)
     mov ds, ax
     mov es, ax
