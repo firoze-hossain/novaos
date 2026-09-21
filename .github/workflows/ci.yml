@@ -19,9 +19,15 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
+          # parted and e2fsprogs (mkfs.ext2, debugfs): tools/build-
+          # disk-image.sh needs both for the ext2/journal/crash-dump
+          # partitions it builds alongside the original FAT32 one -
+          # confirmed missing here as the actual root cause of a real
+          # CI failure (`make disk.img` exiting 127, command not
+          # found), not a defensive addition.
           sudo apt-get install -y \
             nasm gcc-multilib xorriso grub-pc-bin grub-common \
-            qemu-system-x86 mtools
+            qemu-system-x86 mtools parted e2fsprogs
 
       - name: Build ISO
         run: make

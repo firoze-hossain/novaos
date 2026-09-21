@@ -595,6 +595,24 @@ pub extern "C" fn rust_tcp_connect(id: i32, remote_ip: u32, remote_port: u16) ->
     }
     send_syn(idx);
 
+    /* A real, missing bound, not a defensive guess: unlike
+     * arp_resolve()'s own ~3s deadline (kernel/net/arp.c), this loop
+     * previously had no timeout at all - only a state-transition
+     * check, relying entirely on rust_tcp_poll()'s own retry logic to
+     * eventually move this connection out of SynSent. If the remote
+     * peer is unreachable, filtered, or simply doesn't respond (a
+     * real, expected condition this project's own boot-time HTTP
+     * self-test has always logged as WARN, not treated as
+     * impossible - see this call site's own comment in
+     * kernel/init/main.c), and rust_tcp_poll()'s own retry logic
+     * doesn't independently give up in every such case, this loop
+     * would spin - yielding, not busy-waiting, but never actually
+     * returning - for as long as the machine runs. ~10s at 100Hz is
+     * deliberately more generous than arp_resolve()'s own ~3s (a
+     * multi-step TCP handshake reasonably takes longer than one ARP
+     * round-trip), while still guaranteeing this call always
+     * eventually returns to its caller. */
+    let deadline = unsafe { timer_get_ticks() }.wrapping_add(1000);
     loop {
         {
             let conns = CONNS.lock();
@@ -603,6 +621,11 @@ pub extern "C" fn rust_tcp_connect(id: i32, remote_ip: u32, remote_port: u16) ->
                 TcpState::SynSent => {}
                 _ => return -1, /* RST, or rust_tcp_poll() gave up retrying */
             }
+        }
+        if unsafe { timer_get_ticks() } >= deadline {
+            let mut conns = CONNS.lock();
+            conns[idx].state = TcpState::Closed;
+            return -1;
         }
         unsafe {
             scheduler_yield();

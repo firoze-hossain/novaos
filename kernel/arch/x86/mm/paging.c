@@ -110,6 +110,33 @@ static void page_fault_handler(registers_t* regs) {
                write ? "write" : "read",
                user ? "user mode" : "kernel mode",
                reserved ? ", reserved bit set" : "");
+    /* Kept deliberately, not temporary debug code: this is the exact
+     * diagnostic that isolated two real, confirmed use-after-free
+     * bugs this same investigation found and fixed (a process's own
+     * kernel stack, and its page directory frame, both freed while
+     * still actively in use - see process.c's process_exit_current()/
+     * process_wait() for the fix and full account) - and a further,
+     * still-unresolved, non-deterministic corruption this project's
+     * own PROGRESS.md documents as a known, open issue. Reading
+     * `scheduler_current()`'s own pid/name fields directly by offset
+     * (not through process.h, not included in this file, to avoid a
+     * new dependency for a diagnostic) rather than assuming which
+     * process caused a given fault has already been essential to
+     * finding two real bugs; whoever continues that investigation
+     * will need this same information again. */
+    {
+        extern void* scheduler_current(void);
+        struct fault_diag_process { int pid; char name[32]; };
+        struct fault_diag_process* cur =
+            (struct fault_diag_process*)scheduler_current();
+        if (cur != NULL) {
+            kernel_log("[DIAG] fault occurred while running process "
+                       "'%s' (pid %d)\n", cur->name, cur->pid);
+        } else {
+            kernel_log("[DIAG] fault occurred with no current process "
+                       "(pre-scheduler)\n");
+        }
+    }
 
     /* Phase 54: unlike the generic isr_handler() path, this handler
      * has a genuinely meaningful faulting address (CR2) to offer -

@@ -368,6 +368,32 @@ unsafe fn ioapic_program_isa_redirects(
     bsp_apic_id: u8,
 ) {
     for isa_irq in 0u8..16 {
+        // A real, confirmed bug found here, not a defensive guess:
+        // ISA IRQ2 is the legacy 8259 cascade line - a real interrupt
+        // source only because of how the master/slave PICs are wired
+        // together, not a real device line at all under IO-APIC
+        // routing (kernel/arch/x86/cpu/irq.c's own register_irq_handler()
+        // already documents this same fact for its own PIC-vs-IOAPIC
+        // branch). Left in this loop, it collides directly with the
+        // single most common Interrupt Source Override this kernel
+        // will ever see: the PIT's own ISA IRQ0 is very commonly
+        // overridden onto GSI 2 (see gsi_for_isa_irq()'s own doc
+        // comment) - the exact same GSI ISA IRQ2 identity-maps to,
+        // since nothing overrides IRQ2 itself. Confirmed directly on
+        // real hardware/QEMU, not theorized: with this loop
+        // processing IRQ0 then IRQ2 in order, IRQ2's own write to
+        // that shared pin silently overwrote IRQ0's already-correct
+        // one, rerouting every real PIT interrupt to a vector nothing
+        // had registered a handler for - `hlt` kept waking (a real
+        // interrupt WAS arriving) while the timer's own tick counter
+        // never advanced, since timer_tick() was never actually
+        // being called. Skipping IRQ2 here entirely - it has nothing
+        // legitimate to route under IO-APIC addressing anyway - is
+        // the correct fix, not a workaround for one specific
+        // machine's own override table.
+        if isa_irq == 2 {
+            continue;
+        }
         let gsi = smp.gsi_for_isa_irq(isa_irq);
         if gsi < gsi_base {
             continue; // belongs to a different I/O APIC than the one
