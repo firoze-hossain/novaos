@@ -174,6 +174,58 @@ void pkg_list_installed(pkg_list_callback_t callback) {
     }
 }
 
+/* Phase 64: the actual "install" logic, shared between pkg_install()
+ * (payload already sitting in a local .PKG file on disk) and
+ * pkg_fetch_and_install() (payload just arrived over the network) -
+ * both end up with the exact same thing, a pkg_header_t + payload
+ * bytes sitting in memory, and from that point on installing one is
+ * identical to installing the other: write the payload out to a new
+ * .APP file, record it in INSTALL.DB. Extracted rather than
+ * duplicated, matching this file's own established practice
+ * elsewhere (derive_app_filename(), load_install_db()/
+ * save_install_db()). `filename_hint` is used only to derive the
+ * installed .APP's own name (see derive_app_filename()) - for a
+ * network fetch there is no real on-disk source filename, so the
+ * caller synthesizes one from the package's own manifest name. */
+static bool install_from_buffer(const pkg_header_t* header,
+                                 const uint8_t* payload,
+                                 const char* filename_hint) {
+    char app_filename[13];
+    derive_app_filename(filename_hint, app_filename, sizeof(app_filename));
+
+    if (!vfs_write_file(app_filename, payload, header->payload_size)) {
+        kernel_log("[FAULT] pkg_install: failed to write '%s'\n",
+                   app_filename);
+        return false;
+    }
+
+    install_record_t records[MAX_INSTALLED];
+    int count = load_install_db(records, MAX_INSTALLED);
+    if (count >= MAX_INSTALLED) {
+        kernel_log("[FAULT] pkg_install: install database full\n");
+        vfs_delete_file(app_filename);
+        return false;
+    }
+
+    bounded_copy(records[count].name, header->name, PKG_NAME_MAX);
+    bounded_copy(records[count].version, header->version, PKG_VERSION_MAX);
+    bounded_copy(records[count].description, header->description,
+                 PKG_DESC_MAX);
+    bounded_copy(records[count].app_filename, app_filename, 13);
+    count++;
+
+    if (!save_install_db(records, count)) {
+        kernel_log("[FAULT] pkg_install: failed to update " INSTALL_DB_FILENAME
+                   "\n");
+        vfs_delete_file(app_filename);
+        return false;
+    }
+
+    kernel_log("[ OK ] Installed package '%s' -> %s\n", header->name,
+               app_filename);
+    return true;
+}
+
 bool pkg_install(const char* name) {
     if (pkg_is_installed(name)) {
         kernel_log("[WARN] pkg_install: '%s' already installed\n", name);
@@ -224,40 +276,136 @@ bool pkg_install(const char* name) {
         return false;
     }
 
-    char app_filename[13];
-    derive_app_filename(found_filename, app_filename, sizeof(app_filename));
-
     const uint8_t* payload = filebuf + sizeof(pkg_header_t);
-    if (!vfs_write_file(app_filename, payload, found_header.payload_size)) {
-        kernel_log("[FAULT] pkg_install: failed to write '%s'\n", app_filename);
+    return install_from_buffer(&found_header, payload, found_filename);
+}
+
+/* kernel/rust/http.rs's own exported HTTP/1.1 GET client - see that
+ * file's own doc comment for the full contract (why each negative
+ * return value means what it means). */
+extern int rust_http_get(const uint8_t* host_ptr, uint32_t host_len,
+                          uint16_t port, const uint8_t* path_ptr,
+                          uint32_t path_len, uint8_t* out_buf,
+                          uint32_t out_buf_cap);
+
+#define MAX_FETCH_SIZE (256 * 1024)
+
+bool pkg_fetch_and_install(const char* repo_host, uint16_t repo_port,
+                            const char* name) {
+    if (pkg_is_installed(name)) {
+        kernel_log("[WARN] pkg_fetch_and_install: '%s' already "
+                   "installed\n", name);
         return false;
     }
 
-    install_record_t records[MAX_INSTALLED];
-    int count = load_install_db(records, MAX_INSTALLED);
-    if (count >= MAX_INSTALLED) {
-        kernel_log("[FAULT] pkg_install: install database full\n");
-        vfs_delete_file(app_filename);
+    /* Repository shape deliberately the simplest one that still
+     * genuinely works end to end, matching NovaOS-Release-Readiness-
+     * Kernel-and-Userland.md's own explicit guidance ("copy the
+     * shape" of a real, proven package manager rather than invent a
+     * new one) at the smallest real scale: one fixed path convention,
+     * "/packages/<NAME>.PKG" - the exact same on-disk .PKG format
+     * (pkg_header_t + payload) this file already parses for local
+     * installs, just fetched over HTTP instead of read from FAT32.
+     * Dependency resolution and package signing are real, honestly
+     * out-of-scope follow-up work, not attempted here - see
+     * PROGRESS.md's own entry for this phase. */
+    char path[64];
+    int pos = 0;
+    const char* prefix = "/packages/";
+    while (prefix[pos] && pos < (int)sizeof(path) - 1) {
+        path[pos] = prefix[pos];
+        pos++;
+    }
+    int i = 0;
+    while (name[i] && pos < (int)sizeof(path) - 5) {
+        char c = name[i];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 32); /* uppercase, matching this FAT32-
+                                    rooted project's own 8.3 filename
+                                    convention every other .PKG/.APP
+                                    file already uses */
+        }
+        path[pos++] = c;
+        i++;
+    }
+    const char* suffix = ".PKG";
+    for (int s = 0; suffix[s] && pos < (int)sizeof(path) - 1; s++) {
+        path[pos++] = suffix[s];
+    }
+    path[pos] = '\0';
+
+    static uint8_t fetch_buf[MAX_FETCH_SIZE];
+    int received = rust_http_get(
+        (const uint8_t*)repo_host, (uint32_t)strlen(repo_host), repo_port,
+        (const uint8_t*)path, (uint32_t)strlen(path), fetch_buf,
+        sizeof(fetch_buf));
+
+    if (received < 0) {
+        const char* reason;
+        switch (received) {
+            case -1: reason = "DNS resolution failed"; break;
+            case -2: reason = "could not connect to repository"; break;
+            case -3: reason = "send failed after connecting"; break;
+            case -4: reason = "no data received"; break;
+            case -5: reason = "malformed response (no header/body "
+                               "boundary)"; break;
+            default: reason = "unknown error"; break;
+        }
+        kernel_log("[WARN] pkg_fetch_and_install: fetching '%s' from "
+                   "%s:%d%s failed - %s\n", name, repo_host,
+                   (int)repo_port, path, reason);
         return false;
     }
 
-    bounded_copy(records[count].name, found_header.name, PKG_NAME_MAX);
-    bounded_copy(records[count].version, found_header.version, PKG_VERSION_MAX);
-    bounded_copy(records[count].description, found_header.description,
-                 PKG_DESC_MAX);
-    bounded_copy(records[count].app_filename, app_filename, 13);
-    count++;
-
-    if (!save_install_db(records, count)) {
-        kernel_log("[FAULT] pkg_install: failed to update " INSTALL_DB_FILENAME
-                   "\n");
-        vfs_delete_file(app_filename);
+    if (received < (int)sizeof(pkg_header_t)) {
+        kernel_log("[FAULT] pkg_fetch_and_install: response too short to "
+                   "be a real package (%d bytes)\n", received);
         return false;
     }
 
-    kernel_log("[ OK ] Installed package '%s' -> %s\n", found_header.name,
-               app_filename);
-    return true;
+    pkg_header_t header;
+    memcpy(&header, fetch_buf, sizeof(header));
+    if (memcmp(header.magic, "NVPK", 4) != 0) {
+        kernel_log("[FAULT] pkg_fetch_and_install: fetched data is not a "
+                   "real .PKG (bad magic) - the repository path may be "
+                   "wrong, or this isn't really a NovaOS package "
+                   "server\n");
+        return false;
+    }
+    if (received < (int)(sizeof(pkg_header_t) + header.payload_size)) {
+        kernel_log("[FAULT] pkg_fetch_and_install: '%s' payload "
+                   "truncated in transit (got %d bytes, header claims "
+                   "%d)\n", name, received,
+                   (int)(sizeof(pkg_header_t) + header.payload_size));
+        return false;
+    }
+    if (!str_eq_ci(header.name, name)) {
+        kernel_log("[FAULT] pkg_fetch_and_install: fetched package's own "
+                   "manifest name ('%s') doesn't match what was "
+                   "requested ('%s') - refusing to install a different "
+                   "package than the one asked for\n", header.name, name);
+        return false;
+    }
+
+    /* Synthesize an 8.3 filename hint for derive_app_filename() -
+     * there's no real on-disk source filename for a network fetch,
+     * so build the same shape a local one would have (<NAME>.PKG). */
+    char filename_hint[13];
+    bounded_copy(filename_hint, header.name, 9);
+    size_t hlen = strlen(filename_hint);
+    if (hlen < sizeof(filename_hint) - 4) {
+        filename_hint[hlen] = '.';
+        filename_hint[hlen + 1] = 'P';
+        filename_hint[hlen + 2] = 'K';
+        filename_hint[hlen + 3] = 'G';
+        filename_hint[hlen + 4] = '\0';
+    }
+
+    const uint8_t* payload = fetch_buf + sizeof(pkg_header_t);
+    kernel_log("[ OK ] pkg_fetch_and_install: fetched '%s' v%s (%d bytes) "
+               "from %s:%d%s\n", header.name, header.version,
+               (int)header.payload_size, repo_host, (int)repo_port, path);
+    return install_from_buffer(&header, payload, filename_hint);
 }
 
 bool pkg_remove(const char* name) {

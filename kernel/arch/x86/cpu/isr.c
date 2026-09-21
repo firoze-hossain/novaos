@@ -80,6 +80,19 @@ void isr_handler(registers_t* regs) {
     kernel_log("[FAULT] %s (vector %d, error code 0x%x) at eip=0x%x\n",
                exception_names[regs->int_no], (int)regs->int_no,
                (int)regs->err_code, (int)regs->eip);
+    /* cs reveals which ring the fault occurred in (0x8 = kernel,
+     * 0x1B = user) - useresp/ss are deliberately not printed here:
+     * the CPU only pushes them for a real ring3->ring0 transition, so
+     * for a ring0-originating fault (cs=0x8) they're stale, unrelated
+     * stack bytes this fixed-size registers_t struct still "reads"
+     * anyway - genuinely useful information the first time this was
+     * investigated (confirmed a fault was a real ring0 exception, not
+     * corrupted execution, by checking cs), not something to keep
+     * printing misleadingly. */
+    kernel_log("[DIAG] full state: cs=0x%x eflags=0x%x eax=0x%x ebx=0x%x "
+               "ecx=0x%x edx=0x%x\n",
+               (int)regs->cs, (int)regs->eflags, (int)regs->eax,
+               (int)regs->ebx, (int)regs->ecx, (int)regs->edx);
     {
         extern void* scheduler_current(void);
         struct fault_diag_process { int pid; char name[32]; };

@@ -38,6 +38,7 @@ mod journal;
 mod crashdump;
 mod apic;
 mod tcp;
+mod http;
 
 use core::panic::PanicInfo;
 

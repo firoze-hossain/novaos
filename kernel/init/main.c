@@ -616,6 +616,38 @@ void kernel_late_init(void) {
                        (result & 16) ? "FAIL" : "pass",
                        (result & 32) ? "FAIL" : "pass");
         }
+
+        /* Phase 64: kernel/rust/http.rs's own self-test - proves the
+         * request-formatting/response-parsing logic directly (a
+         * hand-built response, the three real edge cases that logic
+         * has to get right), the same "unit-test the logic, prove the
+         * real network integration separately" split this project
+         * already uses for pbkdf2/TCP. The real, end-to-end network
+         * proof is `pkg install` itself now genuinely being able to
+         * fetch a real package over this exact function - see
+         * userland/pkg/pkgmgr.c's own pkg_fetch_and_install(). */
+        {
+            extern int rust_http_selftest(void);
+            int result = rust_http_selftest();
+            kernel_log("[ %s ] Kernel-side Rust HTTP self-test (1/2): "
+                       "header-body-split=%s truncated-detected=%s "
+                       "copy-truncation=%s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       (result & 1) ? "FAIL" : "pass",
+                       (result & 2) ? "FAIL" : "pass",
+                       (result & 4) ? "FAIL" : "pass");
+            kernel_log("[ %s ] Kernel-side Rust HTTP self-test (2/2): "
+                       "ip-literal-parsed=%s hostname-not-misidentified=%s "
+                       "digit-prefixed-hostname-ok=%s "
+                       "bad-octet-rejected=%s "
+                       "too-few-segments-rejected=%s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       (result & 8) ? "FAIL" : "pass",
+                       (result & 16) ? "FAIL" : "pass",
+                       (result & 32) ? "FAIL" : "pass",
+                       (result & 64) ? "FAIL" : "pass",
+                       (result & 128) ? "FAIL" : "pass");
+        }
     }
 }
 
