@@ -57,4 +57,21 @@ uint32_t spinlock_acquire(spinlock_t* lock);
  * section began, not unconditionally. */
 void spinlock_release(spinlock_t* lock, uint32_t saved_eflags);
 
+/* Releases the lock's own atomic state ONLY - deliberately leaves
+ * interrupts exactly as they currently are, touching nothing.
+ * kernel/task/scheduler.c's own do_schedule() is the one, narrow
+ * reason this exists: it must release scheduler_lock (so a second CPU
+ * spinning on it isn't blocked) *before* calling switch_context(),
+ * but must NOT let spinlock_release()'s own conditional `sti` re-
+ * enable interrupts on THIS CPU in that same gap - doing so lets a
+ * timer tick fire and recursively re-enter do_schedule() before
+ * switch_context() has actually saved the current task's own context,
+ * a real, confirmed source of corruption (a second, nested scheduling
+ * decision running on top of a task whose own state was never
+ * properly saved). The caller is responsible for restoring interrupts
+ * itself, with the *original* saved_eflags from its own
+ * spinlock_acquire() call, only once switch_context() actually
+ * returns - see do_schedule()'s own comment for the exact sequence. */
+void spinlock_release_no_restore(spinlock_t* lock);
+
 #endif

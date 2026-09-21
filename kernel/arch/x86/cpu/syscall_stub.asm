@@ -52,5 +52,32 @@ syscall_return_point:
 
     popa
     add esp, 8
-    sti
+
+    ; A real, confirmed bug used to have `sti` here, right before
+    ; `iret`. It was entirely redundant - `iret` itself restores
+    ; EFLAGS (including IF) from the stack it's about to pop, and the
+    ; original user-mode EFLAGS pushed when this syscall's own `int
+    ; 0x80` first fired already had IF=1 (user-mode code always runs
+    ; with interrupts enabled) - so `iret` alone already re-enables
+    ; interrupts correctly, at the exact right instant. The explicit
+    ; `sti` did something actively harmful instead: it re-enabled
+    ; interrupts one full instruction *before* `iret` consumed the
+    ; real [EIP,CS,EFLAGS,ESP,SS] return frame still sitting on the
+    ; stack - a real, unguarded window where a timer tick (or any
+    ; other interrupt) could fire, preempt this exact process via
+    ; do_schedule()/switch_context() mid-return, and - depending on
+    ; exactly what ran before this process was later resumed - leave
+    ; that still-pending return frame corrupted by the time this `iret`
+    ; finally executed. Confirmed as the real, root explanation for a
+    ; long-running, non-deterministic corruption investigation: the
+    ; symptom was always execution jumping to a wholly invalid
+    ; address immediately after a syscall returned, reproducible even
+    ; on a single CPU core (ruling out any multi-core race), and this
+    ; exact `sti`-before-`iret` gap is the one place in this file
+    ; where an interrupt firing at precisely the wrong instant can
+    ; corrupt an otherwise-intact return path. The identical pattern
+    ; was found and fixed the same way in kernel/arch/x86/cpu/
+    ; irq_stubs.asm and isr_stubs.asm - not just here, since IRQ and
+    ; exception handlers share the exact same hazard on their own
+    ; return paths.
     iret

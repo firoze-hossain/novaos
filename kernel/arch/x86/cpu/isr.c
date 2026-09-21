@@ -80,6 +80,19 @@ void isr_handler(registers_t* regs) {
     kernel_log("[FAULT] %s (vector %d, error code 0x%x) at eip=0x%x\n",
                exception_names[regs->int_no], (int)regs->int_no,
                (int)regs->err_code, (int)regs->eip);
+    {
+        extern void* scheduler_current(void);
+        struct fault_diag_process { int pid; char name[32]; };
+        struct fault_diag_process* cur =
+            (struct fault_diag_process*)scheduler_current();
+        if (cur != NULL) {
+            kernel_log("[DIAG] fault occurred while running process "
+                       "'%s' (pid %d)\n", cur->name, cur->pid);
+        } else {
+            kernel_log("[DIAG] fault occurred with no current process "
+                       "(pre-scheduler)\n");
+        }
+    }
 
     /* Phase 54: this exception handler already has the one thing a
      * software-detected kernel_panic() call never does - the CPU's own

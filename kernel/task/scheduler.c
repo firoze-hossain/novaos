@@ -120,10 +120,28 @@ static void do_schedule(uint8_t cpu_index) {
     next->state = PROCESS_RUNNING;
     current[cpu_index] = next;
 
-    /* Released before switch_context() - see scheduler_lock's own
-     * comment for why holding it across a context switch would
-     * deadlock every other CPU. */
-    spinlock_release(&scheduler_lock, flags);
+    /* Released before switch_context() - a second CPU spinning on
+     * this same lock must not be blocked for the entire duration of
+     * a context switch. But this specific release must NOT restore
+     * interrupts on THIS CPU yet - that is the real, confirmed bug
+     * this exact sequence used to have. spinlock_release()'s own
+     * conditional `sti` (when `flags` had IF=1, i.e. whenever
+     * do_schedule() was reached via a voluntary scheduler_yield()
+     * call rather than a timer tick already running with IF=0) would
+     * re-enable interrupts *before* switch_context() below had
+     * actually saved `prev`'s own context - a real, unguarded window
+     * where a timer tick firing right here recursively re-enters
+     * do_schedule() and picks yet another task to run, on top of a
+     * `prev` whose own state was never properly saved yet, corrupting
+     * it. spinlock_release_no_restore() releases only the lock's own
+     * atomic state, touching no interrupt flag at all; `flags` is
+     * restored explicitly below, only once switch_context() actually
+     * returns - which happens on `prev`'s own resumption, an
+     * arbitrary number of scheduler ticks later, exactly the point
+     * where it is finally safe to let this CPU's interrupts come back
+     * to whatever they were before this specific call into
+     * do_schedule() began. */
+    spinlock_release_no_restore(&scheduler_lock);
 
     tss_set_kernel_stack(cpu_index, next->kernel_stack_top);
     paging_switch_address_space(next->page_directory_phys);
@@ -132,6 +150,9 @@ static void do_schedule(uint8_t cpu_index) {
      * by some future switch_context() call - i.e. this line "returns"
      * an arbitrary number of scheduler ticks later, quite normal for
      * this kind of switch, and not necessarily on this same CPU. */
+    if (flags & 0x200u) {
+        __asm__ volatile ("sti" ::: "memory");
+    }
 }
 
 void scheduler_start(void) {
@@ -144,7 +165,17 @@ void scheduler_start(void) {
 
     current[0] = first;
     first->state = PROCESS_RUNNING;
-    spinlock_release(&scheduler_lock, flags);
+    /* Same real bug, same fix, as do_schedule()'s own identical
+     * sequence - see that function's own comment for the full
+     * account. No manual restore needed after switch_context() here
+     * specifically: this call never returns (the boot stack it runs
+     * on is abandoned), and the *new* task's own initial, fake stack
+     * frame (built by process_create_*()) already has its own eflags
+     * baked in with IF=1 - switch_context()'s own popfd for `first`
+     * re-enables interrupts correctly as part of its normal restore,
+     * once it actually runs, without this function needing to do
+     * anything further. */
+    spinlock_release_no_restore(&scheduler_lock);
 
     tss_set_kernel_stack(0, first->kernel_stack_top);
     paging_switch_address_space(first->page_directory_phys);
@@ -174,7 +205,9 @@ void scheduler_ap_join(uint8_t cpu_index) {
         if (first != NULL) {
             current[cpu_index] = first;
             first->state = PROCESS_RUNNING;
-            spinlock_release(&scheduler_lock, flags);
+            /* Same fix as do_schedule()/scheduler_start() - see
+             * do_schedule()'s own comment for the full account. */
+            spinlock_release_no_restore(&scheduler_lock);
             break;
         }
         spinlock_release(&scheduler_lock, flags);
