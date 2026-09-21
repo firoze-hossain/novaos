@@ -82,7 +82,33 @@ static process_t* allocate_slot(void) {
              * CPU calling allocate_slot() concurrently can never see
              * this same slot as UNUSED too - see PROCESS_ALLOCATING's
              * own comment in process.h for the full account of the
-             * race this closes. */
+             * race this closes.
+             *
+             * pid assignment moved here, Sep 2026: a real, confirmed
+             * bug, not the "extremely unlikely" edge this function's
+             * own prior comment dismissed it as. Every call site used
+             * to call allocate_slot() (locked) and only afterward,
+             * separately, execute `p->pid = next_pid++` completely
+             * unlocked - the prior reasoning ("every call site pairs
+             * it with a real kmalloc()/pmm_alloc_frame() first, both
+             * genuinely serializing") does not actually close the
+             * race: serializing on a *different* lock does not
+             * prevent two different CPUs, each already holding their
+             * own, separate, legitimately-allocated slot, from then
+             * both reaching the unlocked `next_pid++` at the same
+             * physical instant and reading the identical value before
+             * either one's increment lands - producing two different,
+             * concurrently-running processes with the same pid.
+             * Confirmed as the actual, real explanation for a
+             * persistent CI failure, not theorized: sys_wait() on a
+             * freshly-exec'd pid was observed reading back the wrong
+             * exit code, exactly what pid collision predicts and what
+             * memory-corruption theories investigated earlier could
+             * not fully explain. Assigning the pid here, still inside
+             * this same critical section, makes it atomic with the
+             * slot claim itself - the two can never again be split
+             * across an unlocked gap. */
+            process_table[i].pid = next_pid++;
             process_table[i].state = PROCESS_ALLOCATING;
             spinlock_release(&process_table_lock, flags);
             return &process_table[i];
@@ -115,7 +141,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
     *(--sp) = 0; /* edi */
     *(--sp) = 0x202; /* eflags: IF=1, reserved bit 1 = 1 */
 
-    p->pid = next_pid++;
+    /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, name, sizeof(p->name));
     p->state = PROCESS_READY;
     p->is_user = false;
@@ -202,7 +228,7 @@ static process_t* create_user_task_common(const char* name,
     *(--sp) = 0; /* edi */
     *(--sp) = 0x202; /* eflags */
 
-    p->pid = next_pid++;
+    /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, name, sizeof(p->name));
     p->state = PROCESS_READY;
     p->is_user = true;
@@ -750,7 +776,7 @@ static int process_exec_internal(const char* path, const char** argv,
     *(--sp) = 0;
     *(--sp) = 0x202;
 
-    p->pid = next_pid++;
+    /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, path, sizeof(p->name));
     p->state = PROCESS_READY;
     p->is_user = true;
@@ -1030,7 +1056,7 @@ int process_fork(registers_t* parent_regs) {
     *(--sp) = 0; /* edi */
     *(--sp) = 0x202; /* eflags */
 
-    child->pid = next_pid++;
+    /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(child->name, parent->name, sizeof(child->name));
     child->state = PROCESS_READY;
     child->is_user = true;

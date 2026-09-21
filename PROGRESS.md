@@ -6754,7 +6754,83 @@ The most specific, best-supported remaining lead: a repeatable "Debug" exception
 
 The three CI-blocking fixes and the two use-after-free fixes are all individually confirmed correct by direct reasoning and targeted testing, not assumed. The full test suite does not yet pass reliably in this configuration due to the open issue above - stated plainly rather than presented as resolved.
 
-## Phase 62 and beyond
+## Phase 62: a real, confirmed pid-assignment race found and fixed; the deeper corruption now confirmed NOT SMP-related
+
+**Status: One more real bug found and fixed; the remaining issue's
+scope narrowed further, still open.** Triggered by CI failing again
+on top of Phase 61's fixes.
+
+### A genuine SMP race, found and fixed
+
+`next_pid` (`kernel/task/process.c`) was a plain, unprotected global
+counter, incremented via `p->pid = next_pid++` at four separate call
+sites, each *after* `allocate_slot()` released its own lock. Phase
+57's own locking audit had already reasoned about this and explicitly,
+honestly documented it as a dismissed, "extremely unlikely" edge - but
+that reasoning was flawed: serializing on a *different* lock
+(kmalloc's own, or pmm_alloc_frame's own) does not stop two different
+CPUs, each already holding their own separate, legitimately-allocated
+process slot, from then both reaching the *unlocked* `next_pid++` at
+the same instant and reading the identical value before either
+increment lands - two concurrently-running processes ending up with
+the same pid. Confirmed as real, not theorized: `sys_wait()` on a
+freshly-`SYS_EXEC`'d pid was observed reading back the wrong exit
+code, exactly what pid collision predicts. Fixed by moving the pid
+assignment inside `allocate_slot()` itself, still under
+`process_table_lock`, making slot claim and pid assignment atomic
+together - the four old, separately-timed assignments removed
+entirely.
+
+### The remaining corruption: now confirmed genuinely NOT an SMP issue
+
+Re-tested with `-smp 1`, with this new fix *and* both of Phase 61's
+process-lifetime fixes all applied together: still fails, reliably,
+with the same general signature (execution jumping to a wholly
+invalid address - confirmed directly this time by checking the
+faulting address against this kernel's own linked symbol range and
+finding it falls far outside any real code at all, not just "some
+other function"). This is a real, useful negative result: whatever
+remains is not a multi-core race of any kind, on top of the SMP race
+already found and fixed above - it is reproducible on a single core,
+meaning it is a genuine, deterministic logic bug somewhere in this
+kernel's own code, not a timing artifact.
+
+Consistently triggered immediately after a successful `SYS_LOGIN` in
+`sandbox_demo_task`'s own test sequence. `process_login()`,
+`process_set_identity()`, and `handle_login()` (the actual `SYS_LOGIN`
+syscall handler) were all re-read directly this phase and found simple
+and correct on their own terms - not yet the explanation. One real,
+separate, honestly-flagged observation made along the way, not yet
+connected to this bug: `kernel/rust/users.rs`'s own user database
+(`static mut USERS`/`USER_COUNT`) has no lock at all, unlike the
+process table/scheduler/PMM/heap Phase 57's own audit covered - though
+since this same crash reproduces on a single core, a missing lock
+there cannot be the sole explanation either.
+
+### Verification
+
+The pid-race fix itself is confirmed correct by direct reasoning about
+the exact interleaving it closes, and the specific "wrong exit code"
+symptom it was found from did not recur after the fix. The full test
+suite still does not pass reliably - stated plainly. Time pressure
+required stopping mid-investigation rather than continuing indefinitely
+without a concrete, honest checkpoint; the diagnostic infrastructure
+from Phase 61 (page-fault handler reporting the current process) and
+this phase's own finding (verify a suspicious address against the
+kernel's actual symbol range before assuming it's "some function," not
+just guessing from proximity) are both left in place for whoever
+continues this next.
+
+## Phase 63 and beyond
+
+Immediate priority: continue from the `SYS_LOGIN`-adjacent,
+single-core-reproducible corruption above - `kernel/rust/users.rs`'s
+own missing lock is worth closing regardless of whether it's connected
+(real, honest gap on its own terms, matching Phase 57's own audit
+scope); next most direct lead is tracing exactly what runs between
+`handle_login()` returning and the fault, instruction by instruction,
+now that the immediate suspects (the syscall handler itself, the
+identity-setting function) are confirmed clean.
 
 Immediate priority: locate and fix the third "resource still in use" bug the Debug-exception lead points toward, using the same diagnostic infrastructure and bisection discipline that found the first two. Once genuinely stable, revisit the `printf()`/`format_uint()` bounds-check bug found but not fixed above (real, but a different, unrelated issue - it needs its own fix on its own merits regardless of the outcome of the corruption investigation). Also candidates: extending `SYS_EXEC_TRUSTED`'s delegation beyond
 `can_open_any_file` alone (`allowed_files[]`/`allowed_hosts[]`/
