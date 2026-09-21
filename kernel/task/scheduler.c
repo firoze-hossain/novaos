@@ -201,7 +201,55 @@ void scheduler_on_tick(void) {
 }
 
 void scheduler_yield(void) {
-    do_schedule(rust_smp_current_cpu_index());
+    uint8_t cpu = rust_smp_current_cpu_index();
+    do_schedule(cpu);
+
+    /* Phase 60 CI-hang fix: do_schedule() no-ops in one tick-of-time
+     * for the exact case documented at its own "this CPU hasn't
+     * started scheduling yet" early return - true for every
+     * scheduler_yield() call made from kernel/boot context (e.g.
+     * arp_resolve()/dns_resolve()/tftp_get()'s own wait loops, called
+     * from main.c's self-test sequence before scheduler_start() has
+     * ever run). Before this fix, that made scheduler_yield() a pure
+     * no-op there: those wait loops' only other work per iteration is
+     * net_poll(), which - for whichever NIC is attached - means real
+     * PCI I/O port reads/writes, each trapped and emulated by the
+     * hypervisor. With nothing to slow the loop down, it re-polls as
+     * fast as the CPU can retire instructions: hundreds of thousands
+     * of iterations, each paying that same trap cost, before the
+     * timer can even advance the handful of ticks the loop is
+     * actually waiting for. Under real hardware or a KVM-accelerated
+     * VM this is wasteful but survivable; under plain (TCG, no-KVM)
+     * QEMU - exactly what a GitHub Actions runner uses, having no
+     * nested-virtualization support - each trapped I/O access costs
+     * enough wall-clock time that a nominal "3 real seconds" wait (a
+     * mere 300 ticks) measured in guest time stretched past a full
+     * CI test run's timeout budget with the loop never once reaching
+     * its own deadline check as satisfied - not a logic bug, an
+     * emulation-speed one, but a genuine hang from the outside.
+     *
+     * The fix: once it's established there's no real scheduling to do
+     * (current[cpu] still NULL), actually wait for the next interrupt
+     * - hlt - instead of immediately re-entering the caller's loop.
+     * The timer IRQ (100Hz) or a NIC RX IRQ both wake this CPU right
+     * back up, so a real reply is noticed just as fast as before;
+     * what changes is that an idle iteration costs one halted CPU
+     * doing nothing instead of a busy-spin hammering hardware
+     * registers. Gated on IF actually being set (never assumed): a
+     * `hlt` with interrupts disabled never wakes on its own, and
+     * while every call this can reach is already documented as
+     * IF=1-only (current[cpu] is only ever NULL pre-scheduler-start,
+     * a context that unconditionally runs with interrupts enabled -
+     * see kernel_late_init()'s own "sti right at the end" comment),
+     * checking directly costs nothing and removes the need to trust
+     * that invariant never changes underneath this function. */
+    if (cpu < SCHED_MAX_CPUS && current[cpu] == NULL) {
+        uint32_t eflags;
+        __asm__ volatile ("pushf\n\tpop %0" : "=r"(eflags) : : "memory");
+        if (eflags & 0x200u) {
+            __asm__ volatile ("hlt");
+        }
+    }
 }
 
 process_t* scheduler_current(void) {
