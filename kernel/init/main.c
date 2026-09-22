@@ -1,6 +1,7 @@
 #include "../include/kernel.h"
 #include "../drivers/vga/vga.h"
 #include "../drivers/serial/serial.h"
+#include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
 #include "../drivers/driver.h"
 #include "../arch/x86/cpu/gdt.h"
@@ -42,14 +43,36 @@
  * always goes to serial (visible in `make debug`, CI, and
  * scripts/test.sh's boot-log assertions) and is intentionally silent
  * on the VGA console so boot messages don't clutter the screen the
- * user actually interacts with. */
+ * user actually interacts with.
+ *
+ * A real, confirmed bug used to be here: no lock protected
+ * serial_puts() itself. Each call's own `buffer` is stack-local (safe
+ * on its own - no shared formatting state to race on), but the actual
+ * byte-by-byte write to the serial port's own hardware register is a
+ * genuinely shared resource. Two CPUs calling kernel_log() at close
+ * to the same moment (a real, common case under -smp 2 - almost every
+ * confirmed fault this project has chased logs from inside an
+ * exception handler, which can genuinely interrupt one CPU while
+ * another is mid log line) could interleave their own output bytes at
+ * the hardware level, confirmed directly: real CI runs showed log
+ * lines like "[[FAULT]" and "F[FAULT]" - fragments of two different
+ * messages' own bytes landing back to back. Beyond making the log
+ * itself harder to read, this can cause a genuinely misleading test
+ * result: tools/python/test_runner.py's own assertions match exact
+ * strings, so a real, successful operation's own log line arriving
+ * garbled by an unrelated, concurrent write reads as a false failure,
+ * not evidence the operation itself did anything wrong. */
 void kernel_log(const char* format, ...) {
     va_list args;
     va_start(args, format);
 
     char buffer[256];
     vsnprintf(buffer, sizeof(buffer), format, args);
+
+    static spinlock_t log_lock;
+    uint32_t flags = spinlock_acquire(&log_lock);
     serial_puts(buffer);
+    spinlock_release(&log_lock, flags);
 
     va_end(args);
 }

@@ -176,28 +176,52 @@ RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
 # kept getting silently re-committed with whatever format happened to
 # work on whichever machine last touched it. A user on a different
 # rustc would then `git pull` a target JSON that's simply wrong for
-# their own machine, with nothing to regenerate it: the marker rule
-# alone only re-triggers build-sysroot.sh if the *sysroot itself* (the
-# compiled core/compiler_builtins rlibs) is missing, not if just this
-# JSON file is stale or absent - a real, independent failure mode the
-# marker alone never covered. Untracking the file (this same patch)
-# fixes future commits; giving the JSON its own real, file-based
-# target too (deliberately two separate rules, not GNU Make 4.3+'s
-# grouped-targets syntax, since this project doesn't want to assume a
-# recent make) fixes it structurally: if the JSON is ever missing - a
-# fresh clone, or an old commit's now-removed copy sitting next to an
-# already-built sysroot from a *different* rustc - it gets regenerated
-# correctly before anything downstream tries to use it, even in the
-# case an existing sysroot's own marker would otherwise have masked.
-# build-sysroot.sh running twice in the rare case both are missing at
-# once (a genuinely fresh build) is a real, accepted trade-off for
-# that portability - correct either way, just not maximally efficient
-# in that one, already-slow-regardless case.
+# their own machine, with nothing to regenerate it: a marker keyed only
+# to the sysroot's own compiled rlibs never re-triggers build-sysroot.sh
+# if just this JSON file is stale or absent - a real, independent
+# failure mode a marker alone never covers. Untracking the file (a
+# separate, earlier patch) fixes future commits; giving the JSON its
+# own real, file-based target too fixes it structurally: if the JSON
+# is ever missing - a fresh clone, or an old commit's now-removed copy
+# sitting next to an already-built sysroot from a *different* rustc -
+# it gets regenerated correctly before anything downstream tries to
+# use it.
+#
+# A second, real, confirmed bug used to be here too, found from a real
+# user's own local build failure (rustup + `cargo -Z build-std`, not
+# this project's own bootstrap fallback): with two separate rules each
+# unconditionally invoking build-sysroot.sh, a build starting from
+# neither the JSON nor the sysroot existing ran the script *twice* -
+# once to satisfy $(RUST_TARGET_JSON)'s own rule, once more for this
+# marker's own recipe. `cargo -Z build-std` compiles compiler_builtins/
+# core tagged with a hash derived from the target JSON's own on-disk
+# content at that moment; the final, direct `rustc --target
+# tools/rust-sysroot/i686-novaos.json` compile step (kernel/rust/
+# lib.rs, below) hashes the file as it exists by the time *that* runs.
+# Two separate script invocations regenerating the same *logical*
+# target spec can still produce two different on-disk byte sequences
+# (this project's own build-sysroot-bootstrap.sh probes rustc across
+# several candidate JSON variants before settling on one, so which
+# exact bytes land on disk isn't guaranteed identical run to run) -
+# enough for cargo's own hash-based cache key to legitimately differ
+# between the sysroot's own build and the later compile, producing
+# exactly the real error a user hit: "couldn't find crate
+# `compiler_builtins` with expected target triple i686-novaos" (cargo
+# reporting the hash-suffixed triple it actually built against,
+# mismatching the one rustc computed fresh). Fixed by making this
+# recipe conditional: build-sysroot.sh only runs here if the sysroot's
+# own compiled rlibs are still genuinely missing - the normal case
+# (JSON present, sysroot built from it, needing only its marker
+# touched) no longer re-invokes the script a second time at all, so
+# there is only ever one on-disk copy of the JSON in play for any
+# single build.
 $(RUST_TARGET_JSON):
 	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
 
 $(RUST_SYSROOT_MARKER): $(RUST_TARGET_JSON)
-	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
+	@if [ ! -f "$(RUST_CORE_RLIB)" ] || [ ! -f "$(RUST_COMPILER_BUILTINS_RLIB)" ]; then \
+		./$(RUST_SYSROOT_DIR)/build-sysroot.sh; \
+	fi
 	@touch $@
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)

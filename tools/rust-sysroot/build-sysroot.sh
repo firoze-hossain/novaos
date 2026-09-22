@@ -92,7 +92,8 @@ write_target_json_variant() {
   "panic-strategy": "abort",
   "disable-redzone": true,
   "features": "-mmx,-sse",
-  "max-atomic-width": 32
+  "max-atomic-width": 32,
+  "relocation-model": "static"
 }
 EOF
 }
