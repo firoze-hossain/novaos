@@ -174,12 +174,7 @@ RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
 # despite .gitignore already correctly listing it - `git add -A`
 # doesn't respect .gitignore for a file that's already tracked, so it
 # kept getting silently re-committed with whatever format happened to
-# work on whichever machine last touched it. A user on a different
-# rustc would then `git pull` a target JSON that's simply wrong for
-# their own machine, with nothing to regenerate it: a marker keyed only
-# to the sysroot's own compiled rlibs never re-triggers build-sysroot.sh
-# if just this JSON file is stale or absent - a real, independent
-# failure mode a marker alone never covers. Untracking the file (a
+# work on whichever machine last touched it. Untracking the file (a
 # separate, earlier patch) fixes future commits; giving the JSON its
 # own real, file-based target too fixes it structurally: if the JSON
 # is ever missing - a fresh clone, or an old commit's now-removed copy
@@ -187,42 +182,59 @@ RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
 # it gets regenerated correctly before anything downstream tries to
 # use it.
 #
-# A second, real, confirmed bug used to be here too, found from a real
-# user's own local build failure (rustup + `cargo -Z build-std`, not
-# this project's own bootstrap fallback): with two separate rules each
-# unconditionally invoking build-sysroot.sh, a build starting from
-# neither the JSON nor the sysroot existing ran the script *twice* -
-# once to satisfy $(RUST_TARGET_JSON)'s own rule, once more for this
-# marker's own recipe. `cargo -Z build-std` compiles compiler_builtins/
-# core tagged with a hash derived from the target JSON's own on-disk
-# content at that moment; the final, direct `rustc --target
-# tools/rust-sysroot/i686-novaos.json` compile step (kernel/rust/
-# lib.rs, below) hashes the file as it exists by the time *that* runs.
-# Two separate script invocations regenerating the same *logical*
-# target spec can still produce two different on-disk byte sequences
-# (this project's own build-sysroot-bootstrap.sh probes rustc across
-# several candidate JSON variants before settling on one, so which
-# exact bytes land on disk isn't guaranteed identical run to run) -
-# enough for cargo's own hash-based cache key to legitimately differ
-# between the sysroot's own build and the later compile, producing
-# exactly the real error a user hit: "couldn't find crate
-# `compiler_builtins` with expected target triple i686-novaos" (cargo
-# reporting the hash-suffixed triple it actually built against,
-# mismatching the one rustc computed fresh). Fixed by making this
-# recipe conditional: build-sysroot.sh only runs here if the sysroot's
-# own compiled rlibs are still genuinely missing - the normal case
-# (JSON present, sysroot built from it, needing only its marker
-# touched) no longer re-invokes the script a second time at all, so
-# there is only ever one on-disk copy of the JSON in play for any
-# single build.
+# A second, real, confirmed bug: a plain marker file, keyed only to
+# "do the rlib files exist", used to gate the rebuild below. That's
+# not the same question as "do the rlib files match the *current*
+# target JSON" - and this project's target JSON has genuinely changed
+# content release to release (relocation-model added, the quoted-vs-
+# unquoted pointer-width fix). A real user's own machine hit this
+# directly: a `tools/rust-sysroot/sysroot/` directory already built
+# from an *older* target JSON (before this exact fix) satisfied "files
+# exist", so the stale rlibs were kept and never rebuilt against the
+# new JSON - `cargo -Z build-std` had tagged them with a hash of the
+# old JSON's own content, but the final compile step hashed the new
+# file fresh, producing exactly the real error hit: "couldn't find
+# crate `compiler_builtins` with expected target triple i686-novaos".
+# `make clean` intentionally never touches this directory at all (a
+# real, 40MB+, slow-to-rebuild sysroot shouldn't be thrown away on
+# every ordinary rebuild) - so nothing about a normal `make clean &&
+# make` was ever going to fix this on its own; the sysroot needed to
+# either be rebuilt because the JSON changed, or the person needed to
+# know to delete it by hand, and this project should not depend on
+# either happening by luck.
+#
+# Fixed for good, not by asking anyone to remember a manual step: the
+# marker now records a checksum of the target JSON's own content
+# alongside the "built" fact, and the rebuild rule compares today's
+# checksum against that recorded one - a real, content-aware
+# invalidation instead of the mere existence check this replaces. A
+# JSON that has changed *at all* since the sysroot was last built -
+# whether from a fresh `git pull`, `relocation-model` added, or any
+# future field this JSON ever gains - correctly triggers a rebuild
+# every time, without needing another patch like this one for the
+# next such change. sha256sum is used since every environment this
+# project already targets (a bare apt-get Linux CI/dev box, this
+# project's own sandboxed test environment) has it as part of
+# coreutils (a bare apt-get Linux CI/dev box, this project's own
+# sandboxed test environment) has it as part of coreutils; a machine
+# that somehow lacks it falls back to `cksum` (POSIX-standard,
+# universally present) rather than failing outright. Computed inside
+# the recipe itself, at execution time - not as a plain Makefile
+# variable - since $(RUST_TARGET_JSON) is only guaranteed to actually
+# exist on disk once make has already resolved this rule's own
+# prerequisite, which a variable evaluated at parse time (before that
+# resolution ever runs) cannot rely on.
 $(RUST_TARGET_JSON):
 	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
 
 $(RUST_SYSROOT_MARKER): $(RUST_TARGET_JSON)
-	@if [ ! -f "$(RUST_CORE_RLIB)" ] || [ ! -f "$(RUST_COMPILER_BUILTINS_RLIB)" ]; then \
+	@json_hash=$$( (command -v sha256sum >/dev/null 2>&1 && sha256sum "$(RUST_TARGET_JSON)" | cut -d' ' -f1) || cksum "$(RUST_TARGET_JSON)" ); \
+	if [ ! -f "$(RUST_CORE_RLIB)" ] || [ ! -f "$(RUST_COMPILER_BUILTINS_RLIB)" ] || \
+	   [ ! -f "$@" ] || [ "$$(cat "$@" 2>/dev/null)" != "$$json_hash" ]; then \
 		./$(RUST_SYSROOT_DIR)/build-sysroot.sh; \
-	fi
-	@touch $@
+		json_hash=$$( (command -v sha256sum >/dev/null 2>&1 && sha256sum "$(RUST_TARGET_JSON)" | cut -d' ' -f1) || cksum "$(RUST_TARGET_JSON)" ); \
+	fi; \
+	echo "$$json_hash" > $@
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
 
