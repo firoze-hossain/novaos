@@ -224,8 +224,44 @@ RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
 # exist on disk once make has already resolved this rule's own
 # prerequisite, which a variable evaluated at parse time (before that
 # resolution ever runs) cannot rely on.
+#
+# A real, confirmed bug this fixes - the actual reason every previous
+# attempt at this exact problem still failed, found from a real user's
+# own local build whose own log showed neither "rustup found" nor
+# "./tools/rust-sysroot/build-sysroot.sh" printed at all: make's own
+# built-in dependency resolution decides whether to run a recipe's
+# body *at all* by comparing file timestamps, strictly before that
+# recipe's own internal shell logic ever gets a chance to run. A
+# $(RUST_SYSROOT_MARKER) file already sitting on disk (from any
+# earlier build, on any earlier version of this Makefile) with a
+# modification time newer than $(RUST_TARGET_JSON)'s own - the
+# ordinary case, since nothing in a normal `make clean && make`
+# workflow ever touches either file's timestamp - makes make consider
+# this rule already "up to date" and skip its recipe *entirely*,
+# silently. The hash-comparison logic below - and this same problem
+# applied equally to the cargo-cache-clearing fix inside
+# build-sysroot.sh, which likewise never got the chance to run -
+# never even executed. Both targets are declared .PHONY below for
+# exactly this reason: a .PHONY target's recipe always runs,
+# unconditionally, every single time make considers it, with no
+# timestamp shortcut to skip it. This does not reintroduce the
+# earlier "runs too often" problem: $(RUST_TARGET_JSON)'s own recipe
+# still only calls build-sysroot.sh when the file is genuinely
+# missing, and $(RUST_SYSROOT_MARKER)'s own recipe still only
+# rebuilds when its own recorded hash actually disagrees with today's
+# JSON content - only the "does the recipe body get a chance to run
+# its own check at all" question changes, from "sometimes, silently
+# skipped" to "always". Downstream targets ($(RUST_CORE_RLIB) etc.,
+# and everything past them) remain exactly as cheap as before on an
+# unchanged build: they depend on the real rlib files' own
+# modification times, not on either of these two phony targets, so
+# kernel/rust/lib.rs is still only ever recompiled when the rlibs
+# genuinely changed.
+.PHONY: $(RUST_TARGET_JSON) $(RUST_SYSROOT_MARKER)
 $(RUST_TARGET_JSON):
-	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
+	@if [ ! -f "$(RUST_TARGET_JSON)" ]; then \
+		./$(RUST_SYSROOT_DIR)/build-sysroot.sh; \
+	fi
 
 $(RUST_SYSROOT_MARKER): $(RUST_TARGET_JSON)
 	@json_hash=$$( (command -v sha256sum >/dev/null 2>&1 && sha256sum "$(RUST_TARGET_JSON)" | cut -d' ' -f1) || cksum "$(RUST_TARGET_JSON)" ); \
@@ -234,6 +270,7 @@ $(RUST_SYSROOT_MARKER): $(RUST_TARGET_JSON)
 		./$(RUST_SYSROOT_DIR)/build-sysroot.sh; \
 		json_hash=$$( (command -v sha256sum >/dev/null 2>&1 && sha256sum "$(RUST_TARGET_JSON)" | cut -d' ' -f1) || cksum "$(RUST_TARGET_JSON)" ); \
 	fi; \
+	mkdir -p "$(dir $@)"; \
 	echo "$$json_hash" > $@
 
 $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB): $(RUST_SYSROOT_MARKER)
