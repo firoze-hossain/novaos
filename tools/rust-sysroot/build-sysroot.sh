@@ -136,6 +136,32 @@ cat > "$NIGHTLY_PROJECT_DIR/src/lib.rs" << 'EOF'
 // this project links against this crate itself.
 EOF
 
+# A real, confirmed bug this fixes, found from a real user's own local
+# build failure that persisted even after Makefile-level detection of
+# a changed target JSON correctly re-invoked this entire script: cargo
+# keeps its own persistent build cache under $NIGHTLY_PROJECT_DIR/
+# target/, independent of anything the Makefile tracks. Re-running
+# this script (correctly, in response to the JSON having changed) is
+# not enough on its own - cargo's own -Z build-std caching can still
+# consider a previous build "fresh" by whatever internal fingerprint
+# it uses, silently reusing an old compiler_builtins/core pair built
+# against a *different* target JSON's own content, without recompiling
+# either crate at all (visible directly as this step finishing in
+# under a second - real compilation of compiler_builtins alone takes
+# closer to 20-30s). The final, direct `rustc --target
+# tools/rust-sysroot/i686-novaos.json` compile step then hashes
+# *today's* JSON fresh, mismatching whatever hash cargo's own stale
+# artifact was actually tagged with - exactly the real error a user
+# hit ("couldn't find crate `compiler_builtins` with expected target
+# triple i686-novaos"), even with the Makefile's own content-hash
+# check already working correctly and already re-triggering this
+# script. Fixed at the real source: this script deletes cargo's own
+# target/ directory immediately before building, every single time it
+# runs, so there is never a stale artifact left for cargo's own cache
+# to find and reuse - whatever this step produces is guaranteed freshly
+# compiled against the exact JSON sitting on disk right now.
+rm -rf "$NIGHTLY_PROJECT_DIR/target"
+
 echo "Building core + compiler_builtins via cargo -Z build-std (this can"
 echo "take a minute the first time)..."
 (cd "$NIGHTLY_PROJECT_DIR" && \
