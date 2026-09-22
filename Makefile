@@ -364,6 +364,32 @@ test: $(ISO_FILE) $(DISK_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG)
 
+# A real, direct fix for a problem that kept recurring despite several
+# increasingly complex attempts at detecting a stale sysroot
+# (existence checks, then a content-hash comparison, then forcing
+# those checks to actually run via .PHONY) - all real, all individually
+# verified working in isolation, and none of them reliably fixed a
+# real user's own machine. Rather than add yet another layer chasing
+# whatever specific reason the hash-based detection still wasn't
+# working there, this is the direct fix: `make clean` now removes
+# tools/rust-sysroot/sysroot/ and the target JSON outright, exactly
+# like every other build artifact this target already removes. For
+# the exact workflow this project's own README and every report of
+# this bug have shown (`make clean && make && make run`), this
+# guarantees a fully fresh sysroot, built fresh against whatever
+# target JSON build-sysroot.sh generates *this* run, every time -
+# no marker, no hash, no timestamp for anything to go wrong with.
+# The real cost is real too, stated plainly: a nightly + `cargo -Z
+# build-std` rebuild takes on the order of 20-30 seconds, not
+# nothing - but `make clean` already signals "start over completely"
+# on every other artifact this project produces, and a sysroot that
+# might silently mismatch the code it's about to compile is a far
+# worse outcome than a slower clean build.
+clean-sysroot:
+	rm -rf $(RUST_SYSROOT_DIR)/sysroot $(RUST_TARGET_JSON)
+
+clean: clean-sysroot
+
 # Setup
 setup:
 	@./scripts/setup-$(shell ./scripts/detect-os.sh).sh
