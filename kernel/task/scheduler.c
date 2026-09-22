@@ -188,6 +188,25 @@ static void do_schedule(uint8_t cpu_index) {
                        next->name, next->pid, (int)next->kernel_stack_alloc,
                        (int)next->kernel_stack_top, (int)next->esp,
                        (int)next->esp - (int)next->kernel_stack_alloc);
+            /* Full memory map of every process's own kernel stack, to
+             * find whatever is adjacent to next's own (particularly
+             * anything whose own alloc/top is close to next's own top
+             * - the corruption sits near next's own top, so an
+             * adjacent task's stack overflowing downward past its own
+             * low end is the most direct remaining explanation once
+             * next's own headroom above rules out next overflowing
+             * itself). */
+            extern process_t* process_table_entry(int index);
+            for (int pi = 0; pi < 16; pi++) {
+                process_t* p = process_table_entry(pi);
+                if (p != NULL && p->kernel_stack_alloc != NULL) {
+                    kernel_log("[DIAG]   table[%d]: '%s' (pid %d) "
+                               "alloc=0x%x top=0x%x state=%d\n",
+                               pi, p->name, p->pid,
+                               (int)p->kernel_stack_alloc,
+                               (int)p->kernel_stack_top, (int)p->state);
+                }
+            }
         }
     }
     switch_context(&prev->esp, next->esp);
