@@ -165,7 +165,38 @@ KERNEL_RUST_OBJ = $(BUILD_DIR)/kernel/rust/lib.o
 
 RUST_SYSROOT_MARKER = $(RUST_LIB_DIR)/.built
 
-$(RUST_SYSROOT_MARKER):
+# A real, confirmed bug this fixes: $(RUST_TARGET_JSON) is a real,
+# environment-specific artifact - the correct JSON type (string vs
+# number) for target-pointer-width/target-c-int-width genuinely
+# differs between rustc versions (see build-sysroot-bootstrap.sh's own
+# detection logic), and this file itself was, for a real stretch of
+# this project's own history, accidentally committed to the repo
+# despite .gitignore already correctly listing it - `git add -A`
+# doesn't respect .gitignore for a file that's already tracked, so it
+# kept getting silently re-committed with whatever format happened to
+# work on whichever machine last touched it. A user on a different
+# rustc would then `git pull` a target JSON that's simply wrong for
+# their own machine, with nothing to regenerate it: the marker rule
+# alone only re-triggers build-sysroot.sh if the *sysroot itself* (the
+# compiled core/compiler_builtins rlibs) is missing, not if just this
+# JSON file is stale or absent - a real, independent failure mode the
+# marker alone never covered. Untracking the file (this same patch)
+# fixes future commits; giving the JSON its own real, file-based
+# target too (deliberately two separate rules, not GNU Make 4.3+'s
+# grouped-targets syntax, since this project doesn't want to assume a
+# recent make) fixes it structurally: if the JSON is ever missing - a
+# fresh clone, or an old commit's now-removed copy sitting next to an
+# already-built sysroot from a *different* rustc - it gets regenerated
+# correctly before anything downstream tries to use it, even in the
+# case an existing sysroot's own marker would otherwise have masked.
+# build-sysroot.sh running twice in the rare case both are missing at
+# once (a genuinely fresh build) is a real, accepted trade-off for
+# that portability - correct either way, just not maximally efficient
+# in that one, already-slow-regardless case.
+$(RUST_TARGET_JSON):
+	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
+
+$(RUST_SYSROOT_MARKER): $(RUST_TARGET_JSON)
 	./$(RUST_SYSROOT_DIR)/build-sysroot.sh
 	@touch $@
 
