@@ -547,9 +547,32 @@ void process_exit_current(int exit_code) {
     }
     scheduler_yield();
     /* Should never reach here - a TERMINATED process is never picked
-     * again - but fail safe rather than fall into undefined behavior. */
+     * again - but fail safe rather than fall into undefined behavior.
+     *
+     * A real, confirmed bug used to be here: this looped on `hlt`
+     * alone, on the assumption that scheduler_yield() always actually
+     * switches away once a process is TERMINATED. On the BSP that's
+     * true - the idle task is always eligible there, so
+     * pick_next_locked() never comes back empty. On an AP it isn't:
+     * idle is deliberately bsp_only (see process_t's own comment -
+     * idle's hlt loop only ever wakes via the BSP-only timer
+     * interrupt, so it can never safely run on an AP), and
+     * pick_next_locked() skips bsp_only processes for AP callers. If
+     * this exiting process's own AP has no *other* eligible task
+     * ready at this exact moment, do_schedule() finds nothing, does
+     * not switch, and simply returns - right back here, into a
+     * process that's already PROCESS_TERMINATED. hlt on an AP then
+     * waits forever for a timer interrupt that, on this kernel, is
+     * never routed there at all - a genuine, silent, unrecoverable
+     * hang, not a crash (nothing faults; there is simply nothing left
+     * that will ever run). scheduler_ap_join() already established
+     * the correct fix for this identical situation (an AP with
+     * nothing yet eligible to run): busy-spin with `pause`, retrying
+     * the scheduler, rather than ever halting - reused here instead
+     * of duplicated differently. */
     for (;;) {
-        __asm__ volatile ("hlt");
+        scheduler_yield();
+        __asm__ volatile ("pause" ::: "memory");
     }
 }
 
