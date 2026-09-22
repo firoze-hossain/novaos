@@ -7194,7 +7194,74 @@ Every process this fault was observed against was named `'sandbox'`
 past a local buffer's own bounds first, though this is not yet
 confirmed, only the next most direct lead.
 
-## Phase 66 and beyond
+## Phase 66: relocation-model regression fixed at the real source; a genuine, confirmed missing-lock bug in kernel_log() found and fixed; the AP-scheduling hang still recurs elsewhere, not yet fully closed
+
+**Status: two more real, confirmed bugs found and fixed. Investigation
+continues - honestly not yet fully green.**
+
+Phase 64's own `relocation-model: static` fix had silently regressed:
+it was only ever applied to the *committed* `i686-novaos.json`, never
+to the scripts that actually generate it. Once that file was correctly
+untracked (closing the earlier build-error bug), the regenerated
+version never had this field at all - confirmed directly, the
+Global Offset Table this fix was meant to eliminate was still present
+in the built binary. Fixed at the real source this time:
+`build-sysroot.sh` and `build-sysroot-bootstrap.sh`'s own generated
+JSON templates. Rebuilt from a fully clean sysroot and confirmed:
+`_GLOBAL_OFFSET_TABLE_` no longer appears in `nm`'s own output at all.
+
+Separately, found and fixed a real, confirmed missing lock: `kernel_
+log()`'s own call to `serial_puts()` had no lock protecting the shared
+serial port hardware, letting two CPUs' own output bytes interleave
+under real, observed load - confirmed directly from garbled log
+fragments like `"[[FAULT]"` and `"F[FAULT]"` in actual CI/local runs
+(two different messages' own bytes landing back to back). Beyond
+making the log harder to read, this could cause a real, successful
+operation's own log line to arrive corrupted, failing `test_runner.
+py`'s own exact-string assertions for a reason that had nothing to do
+with whether the operation itself worked - a genuine, if unusual,
+source of false test failures. Fixed with the same `static spinlock_t`
+pattern this codebase already uses elsewhere (`scheduler_lock`, `vfs_
+lock`). Confirmed directly: zero garbled lines across 5 consecutive
+test runs after the fix, versus a real, repeated occurrence before it.
+
+Honest account of what's still open: the AP-scheduling hang Phase 65
+fixed in `process_exit_current()` still recurs in at least one
+observed run, at the same "process exits, nothing else eligible"
+point but via a different path this session did not have time to
+trace to its own root cause - `process_wait()`'s own polling loop was
+checked directly and looks structurally correct (it does call `scheduler_
+yield()` on every non-terminated iteration), so this is very likely
+still the same underlying "an AP with nothing bsp_only-exempt eligible"
+gap, just reached from a second call site Phase 65 didn't cover, not a
+new, different mechanism - the next session's own most direct next
+step, not yet confirmed.
+
+A second, genuinely new and precise lead found this same session,
+directly from a real, reproduced fault: a repeated `0x5c` byte pattern
+appeared as both the faulting address and several register values in
+one crash (`eax`, `esi`, `edi`, `ebp` all reading `0x5C5C5C5C`). Traced
+directly, not guessed: `0x5c` is HMAC-SHA256's own standard "opad"
+constant (`kernel/rust/hmac_sha256.rs`'s own `key_block[i] ^ 0x5c`
+line) - meaning this is genuine HMAC-SHA256 internal state, not random
+corruption, landing somewhere it has no business being. `pbkdf2.rs` ->
+`hmac_sha256.rs` -> `sha256.rs` is exactly the password-hashing path
+`users.rs`'s own login/sudo checks use, and every fault this entire
+investigation has observed names the `sandbox` task specifically -
+consistent with this call path, though not yet proven to be its exact
+source. Checked the most obvious hypothesis directly rather than
+leaving it untested: quadrupling `KERNEL_STACK_SIZE` (8KB -> 32KB, the
+same test tried and ruled out much earlier in this investigation, but
+worth re-checking given how much code has been added since) did not
+produce a clear, consistent improvement (2-16 failures across 5 runs,
+no better than the existing range) - reverted rather than kept on the
+strength of an inconclusive result. This specific `0x5c`-pattern lead
+itself remains open and unexplained - worth checking `hmac_sha256()`'s
+own buffers for something more specific than plain stack exhaustion
+(an off-by-one, a slice bound that's technically in range but wrong)
+before ruling this call path out entirely.
+
+## Phase 67 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a
