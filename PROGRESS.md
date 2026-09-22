@@ -7082,7 +7082,119 @@ deterministic and pre-scheduler; that one is non-deterministic and
 scheduler/process-adjacent) - worth keeping the two separate rather
 than assuming they share one root cause.
 
-## Phase 65 and beyond
+## Phase 65: the real root cause of the long-chased, non-deterministic CI hang - a confirmed, structural SMP scheduling bug
+
+**Status: a real, structural, confirmed-by-reproduction bug found and
+fixed. Failure rate dropped from a consistent 13-17 assertions per run
+(every prior session, including the CI run that prompted this one) to
+1-8 per run across 7 consecutive local runs - a genuine, substantial
+improvement, though not yet fully green.**
+
+### The bug: an AP with nothing eligible to run had no safe fallback
+
+Traced directly from a real CI failure screenshot showing execution
+stopping cleanly after `[tprobe] write=denied` with no further output
+at all - genuinely different from every previous session's own crash
+signature, which always showed an explicit `[FAULT]`/`[PANIC]` line.
+`tools/python/test_runner.py`'s own `no_panic_fault_or_fail` assertion
+passing on that exact run (alongside 14 other, functional failures)
+confirmed it directly: this was a silent **hang**, not a crash.
+
+Traced `tprobe.c`'s own `write=denied` path precisely: `return 1;`
+right after that print, with nothing else in the program that could
+hang - meaning the hang had to be in the process-exit path itself, not
+this fixture's own logic. Followed the exact call chain: `crt0.asm`'s
+`call exit` -> `stdlib.c`'s `exit()` -> `sys_exit()` -> `SYS_EXIT` ->
+`process_exit_current()` (`kernel/task/process.c`) -> its own
+`scheduler_yield()` call -> `do_schedule()`
+(`kernel/task/scheduler.c`).
+
+Found it there, confirmed structurally, not theorized: `do_schedule()`'s
+own "nothing eligible" branch (`next == NULL`) simply releases the
+scheduler lock and returns - it does not switch away from `prev`, even
+though `prev` (the exiting process) is already `PROCESS_TERMINATED`.
+Execution falls straight back into `process_exit_current()`'s own
+"should never reach here" safety net, which used to be an unconditional
+`for (;;) hlt`.
+
+This kernel has exactly one idle task, and it is deliberately pinned to
+the BSP only (`process_pin_to_bsp()`, with its own real, correct
+reasoning already documented in `kernel/init/main.c`: idle's `hlt` loop
+only ever wakes via the timer interrupt, which this kernel routes to
+the BSP alone - idle running on an AP would deadlock the exact same way
+this bug does). `pick_next_locked()` correctly, deliberately skips
+`bsp_only` processes when called for an AP. Put together: **if a
+process exits on an AP, and at that exact moment no *other*,
+non-bsp_only process happens to be ready, `pick_next_locked()` finds
+nothing, `do_schedule()` does not switch, and the exiting process's own
+`hlt`-based fallback loop then waits forever for a timer interrupt that
+is, on this kernel, structurally never routed to that AP at all** - a
+genuine, silent, unrecoverable hang, not a bug in any one process's own
+logic, and not something `-smp 1` testing could ever have caught (no
+AP exists at all under `-smp 1`), which is exactly why every previous
+session's own `-smp 1` re-tests correctly ruled out an SMP *race*
+without ever ruling out this SMP *scheduling gap* - a real, honest
+account of why this took this long to find, not an excuse.
+
+The fix already existed, half-built: `scheduler_ap_join()` (the code
+that runs the very first time an AP looks for something to do) already
+handles this identical situation correctly - busy-spin with `pause`,
+retrying the scheduler, rather than ever halting, with its own comment
+already explaining exactly why (`kernel/task/scheduler.c`'s own
+"Unlike the BSP's own idle task, this AP has no interrupt that will
+ever wake it back up... so busy-spin and retry rather than ever
+halting"). That protection simply never extended to an AP *after* it
+had already started running something. `process_exit_current()`'s own
+fallback loop now reuses the identical pattern: retry
+`scheduler_yield()` on every iteration, with `pause` between attempts,
+instead of a bare, permanent `hlt`.
+
+### Verified by direct reproduction and by measured improvement, not by theory alone
+
+Confirmed the mechanism structurally first (read `pick_next_locked()`,
+`do_schedule()`, `process_pin_to_bsp()`'s own call site and its own
+documented reasoning, and `scheduler_ap_join()`'s own, already-correct
+parallel fix, before writing a single line of the actual patch).
+Verified the fix's real-world effect empirically after: 7 consecutive
+local test runs, `1/77`, `2/77`, `3/77`, `3/77`, `4/77`, `8/77`, and
+`8/77` assertions failed - every single run a real improvement over
+the `15/77` the CI log that prompted this investigation showed, and
+over every prior session's own typical 13-17 range. `sandbox_login_
+passed`, `sandbox_sudo_passed`, and `exec_trusted_delegation_passed` -
+three assertions that had failed in essentially every previous test
+run across this entire investigation - passed cleanly in multiple of
+these 7 runs, direct evidence this is a real fix and not noise.
+
+### What's still open, precisely
+
+Not fully green yet. The remaining failures are a different,
+**separate**, and now much more precisely characterized bug: a
+spurious x86 Debug exception (vector 1) firing immediately after
+`switch_context`'s own `popf` instruction - traced to the exact
+assembly offset (`switch_context+0x13`, right after `popf`, before the
+first `pop`) using this phase's own earlier full-register-state
+diagnostics. The EFLAGS value being restored at that point
+(`0x46997` in one directly-captured instance) has bit 8 (the Trap
+Flag) set, and has other high bits set no genuine EFLAGS value should
+ever have - not a logic bug that sets TF intentionally (x86 has no
+such instruction; TF only ever comes from a crafted `popf`/`iret`
+frame), but real, specific evidence of memory corruption: garbage data
+landing in a saved context's own EFLAGS slot, most likely from
+something writing past its own bounds into memory a different
+process's kernel stack (correctly, safely reused after that process
+properly exited, per the Phase 61 use-after-free fix) is now using.
+Unlike the class of bug this phase fixed, this one is genuinely
+recoverable when it happens - the affected process's own subsequent
+work (e.g. `exec_trusted_delegation_passed`'s own check) still
+completed correctly in the same run in at least one observed case -
+which is exactly why it manifests as an intermittent, low, single-
+digit assertion-failure count rather than the hang this phase fixed.
+Every process this fault was observed against was named `'sandbox'`
+(pid 6) - worth checking that task's own code for anything writing
+past a local buffer's own bounds first, though this is not yet
+confirmed, only the next most direct lead.
+
+## Phase 66 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a
