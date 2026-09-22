@@ -145,6 +145,51 @@ static void do_schedule(uint8_t cpu_index) {
 
     tss_set_kernel_stack(cpu_index, next->kernel_stack_top);
     paging_switch_address_space(next->page_directory_phys);
+    /* TEMPORARY diagnostic: check this CPU's own, live eflags right
+     * before switch_context() ever runs - if TF (bit 8) is already
+     * set HERE, the corruption happened before this point (somewhere
+     * earlier in do_schedule(), or before do_schedule() was even
+     * called) rather than inside switch_context() or in previously-
+     * saved stack data. */
+    {
+        extern void kernel_log(const char* format, ...);
+        uint32_t live_eflags;
+        __asm__ volatile ("pushf\n\tpop %0" : "=r"(live_eflags) : : "memory");
+        if (live_eflags & 0x100u) {
+            kernel_log("[DIAG] TF already set on live CPU eflags "
+                       "(0x%x) BEFORE switch_context, switching from "
+                       "'%s' (pid %d) to '%s' (pid %d)\n",
+                       (int)live_eflags, prev->name, prev->pid,
+                       next->name, next->pid);
+        }
+    }
+    /* TEMPORARY diagnostic: check next's own SAVED eflags (the exact
+     * value switch_context's own popfd is about to consume, sitting
+     * at *next->esp since pushfd is the last of switch_context's own
+     * pushes - see context_switch.asm) directly, before the switch
+     * itself ever runs. If TF is already set HERE, the corruption
+     * exists in next's own, already-saved stack memory - pointing at
+     * something overwriting it while next was suspended, not a bug in
+     * switch_context's own logic. */
+    {
+        extern void kernel_log(const char* format, ...);
+        uint32_t saved_eflags = *(uint32_t*)next->esp;
+        if (saved_eflags & 0x100u) {
+            kernel_log("[DIAG] TF already set in '%s' (pid %d)'s own "
+                       "SAVED eflags (0x%x) at *next->esp=0x%x, before "
+                       "switch_context even runs (switching from '%s' "
+                       "pid %d)\n",
+                       next->name, next->pid, (int)saved_eflags,
+                       (int)next->esp, prev->name, prev->pid);
+            kernel_log("[DIAG] '%s' (pid %d) stack bounds: alloc=0x%x "
+                       "top=0x%x esp=0x%x (esp - alloc = %d bytes of "
+                       "headroom remaining above the allocation's own "
+                       "low end)\n",
+                       next->name, next->pid, (int)next->kernel_stack_alloc,
+                       (int)next->kernel_stack_top, (int)next->esp,
+                       (int)next->esp - (int)next->kernel_stack_alloc);
+        }
+    }
     switch_context(&prev->esp, next->esp);
     /* Execution only reaches here once `prev` is chosen to run again
      * by some future switch_context() call - i.e. this line "returns"
