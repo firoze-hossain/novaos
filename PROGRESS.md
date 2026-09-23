@@ -7359,7 +7359,110 @@ retry loop from Phase 67 is left in place too (harmless, and a small
 extra layer for the rare case a genuinely new, also-transient issue
 appears).
 
-## Phase 69 and beyond
+## Phase 69: package signing/verification, fully in Rust - the real gap this project's own release-readiness doc named, now closed
+
+**Status: real, working, verified end to end. Every existing fixture
+package migrated and signed; a corrupted signature is genuinely,
+demonstrably refused; the underlying security property directly
+tested, not assumed.**
+
+### The gap and the honest trade-off made to close it
+
+The release-readiness doc's own "Package signing / verification" row
+named the real problem directly: "No code-signing of any kind exists
+yet - any ELF that parses, runs." Its own reference points - macOS's
+Gatekeeper and Windows' Authenticode - are both built on asymmetric
+(public/private key) signatures. A full, correct, constant-time RSA or
+Ed25519 implementation from scratch is a substantial, high-stakes
+undertaking on its own - real asymmetric-crypto bugs are a genuinely
+common source of severe breaks in the real world, and this kernel has
+no bignum or elliptic-curve arithmetic to build one on top of yet.
+Shipping a broken implementation with false confidence would be worse
+than shipping none.
+
+This phase instead builds real, working, *symmetric* verification on
+`kernel/rust/hmac_sha256.rs`'s own already-proven HMAC-SHA256
+(verified against RFC 4231, Phase 50) - genuine, unbroken cryptography,
+not a toy. The honest limitation, stated in `pkgsign.rs`'s own module
+doc comment rather than hidden: HMAC is symmetric, so the same key
+signs and verifies - a real, weaker trust boundary than Gatekeeper/
+Authenticode's own, made deliberately in exchange for something
+actually finished and actually verified. True asymmetric signing
+remains real, explicitly-tracked follow-up work.
+
+### What was built
+
+`kernel/rust/sha256.rs`: added `Sha256Streaming` alongside the
+existing one-shot `sha256()` - a real package payload is far larger
+than that API's own 440-byte bound. Built on the identical, already-
+proven `process_block()` the one-shot API itself uses, not a second
+implementation. Verified directly against `sha256()` across four
+chunking patterns (single-call, byte-at-a-time, a real 64-byte-block-
+boundary split, empty) - all pass.
+
+`kernel/rust/pkgsign_core.rs` (new): the one, shared definition of the
+signing key and the hash-then-MAC construction (hash the arbitrarily-
+large header+payload with `Sha256Streaming` first, since `hmac_
+sha256()`'s own 256-byte bound is also too small for a real payload,
+then HMAC only the fixed 32-byte digest - security-equivalent to
+MAC-ing the message directly, given SHA-256's own collision
+resistance) - `include!`'d identically by both the kernel and the host
+signing tool via matching `#[path]` module declarations, so the exact
+same code signs and verifies rather than two hand-written copies that
+could quietly drift apart.
+
+`kernel/rust/pkgsign.rs` (new): the kernel-side verifier -
+`rust_pkg_verify_signature()`, with a real, deliberate constant-time
+comparison (`constant_time_eq()` - `[u8; N]`'s own `PartialEq` is not
+guaranteed constant-time and commonly compiles to a short-circuiting
+`memcmp`, a genuine timing side-channel that could otherwise leak a
+valid signature one byte at a time). Self-test covers the actual point
+of a signature scheme - not just "a good signature verifies" (which a
+scheme that verified everything would also satisfy) but three distinct
+rejection cases: a tampered payload, a tampered header field, and a
+syntactically-valid-but-wrong signature. All four cases pass.
+
+`userland/pkg/pkgmgr.h`/`pkgmgr.c`: `pkg_header_t` gains a 32-byte
+`signature` field. Verification wired into `install_from_buffer()` -
+the single, shared choke point both `pkg_install()` (local) and
+`pkg_fetch_and_install()` (network, Phase 64) already funnel through -
+so every install path is covered by one check, not two that could
+diverge. Refuses before `vfs_write_file()` ever runs: nothing is
+written to disk for an unsigned or tampered package.
+
+`tools/pkgsign/` (new): a standalone host-side Rust binary (`sign`/
+`verify` subcommands), `#[path]`-including the same kernel source
+files directly rather than a separate reimplementation. Also handles a
+real migration case found while using it for real: every existing
+fixture package was still in the pre-Phase-69, 96-byte-header format
+(no signature field) - `migrate_if_old_format()` detects this by
+checking the file's own total length against what each format's own
+header would predict, and inserts the new 32-byte field before
+signing, leaving every other byte (including the entire payload)
+untouched.
+
+### Verified end to end, not just in isolation
+
+All three real fixture packages (`GAME.PKG`, `EDITOR.PKG`, `tftproot/
+WEATHER.PKG`) migrated and signed with the actual tool. Full kernel
+rebuild and boot: `pkg_install_ok`/`pkg_remove_ok` both pass, with the
+log showing the real, new behavior directly - `"Installed package
+'Editor' -> EDITOR.APP (signature verified)"` - not inferred from the
+tests passing alone. Confirmed stable across two separate clean
+rebuild-and-test cycles.
+
+The actual security property was directly tested, not assumed: copied
+`EDITOR.PKG`, flipped one byte of its own signature, rebuilt, and
+confirmed `pkg_install_ok` **genuinely fails** with the exact,
+expected log line - `"[SECURITY] pkg install refused: 'Editor' has no
+valid signature - either it was never signed, or it has been modified
+since signing. Nothing was written to disk."` - then restored the
+real, correctly-signed fixture and confirmed both tests pass again.
+This is the concrete, observable version of the property the release-
+readiness doc's own row asked for: an ELF (or any package) that merely
+parses no longer runs - it has to verify first.
+
+## Phase 70 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

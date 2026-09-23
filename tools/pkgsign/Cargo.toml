@@ -1,0 +1,17 @@
+[package]
+name = "pkgsign"
+version = "0.1.0"
+edition = "2021"
+
+# A plain host binary (compiled for whatever machine runs it, not
+# i686-novaos) - unlike everything under kernel/rust/, this crate
+# links the standard library normally, since it does real file I/O
+# and runs at package-build time on a developer's own machine, not
+# inside the freestanding kernel. No external dependencies: the only
+# crypto it needs (kernel/rust/sha256.rs, hmac_sha256.rs,
+# pkgsign_core.rs) is included directly from the kernel's own source
+# below - the exact same code that verifies inside the kernel, not a
+# crates.io implementation that could subtly disagree with it.
+[[bin]]
+name = "pkgsign"
+path = "src/main.rs"

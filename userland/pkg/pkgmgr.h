@@ -19,16 +19,25 @@
  * the raw payload bytes. "Installing" a package copies its payload
  * out to a new file "<NAME>.APP" and records the install in a simple
  * on-disk database file (INSTALL.DB); "removing" it deletes that file
- * and the database record. There is no network fetch - packages must
- * already exist on the mounted disk (see tools/fixtures/ for the demo
- * packages baked into the test image by `make disk.img`) - NovaOS's
- * network stack (Phase 6) only speaks ICMP, not HTTP/FTP, so there is
- * nothing to fetch a package *from* yet.
+ * and the database record. Packages can come from the mounted disk
+ * (see tools/fixtures/ for the demo packages baked into the test
+ * image by `make disk.img`) or, since Phase 64, from a real HTTP
+ * repository server (see pkg_fetch_and_install() below).
+ *
+ * Phase 69: every package, from either source, must carry a valid
+ * signature (pkg_header_t's own `signature` field) or installation is
+ * refused outright - see kernel/rust/pkgsign.rs's own module doc
+ * comment for the full scheme (and its honest, symmetric-HMAC trust-
+ * model limitations) and tools/pkgsign/ for the host-side tool that
+ * signs a package before it's ever shipped.
  */
 
 #define PKG_NAME_MAX 16
 #define PKG_VERSION_MAX 8
 #define PKG_DESC_MAX 64
+#define PKG_SIGNATURE_LEN 32 /* matches kernel/rust/pkgsign.rs's own
+                                PKG_SIGNATURE_LEN exactly - if that
+                                ever changes, this must too */
 
 typedef struct __attribute__((packed)) {
     char magic[4]; /* "NVPK" */
@@ -36,6 +45,17 @@ typedef struct __attribute__((packed)) {
     char version[PKG_VERSION_MAX];
     char description[PKG_DESC_MAX];
     uint32_t payload_size;
+    /* Phase 69: an HMAC-SHA256 tag over this entire header (with this
+     * field itself zeroed) followed by the payload - see kernel/rust/
+     * pkgsign.rs's own module doc comment for the full signing scheme
+     * and its honest trust-model limitations. Placed last so a
+     * pre-Phase-69 package's own payload_size/description etc. still
+     * parse at the same offsets they always have; a package built
+     * before this phase simply has 32 zero bytes here, which
+     * pkg_install()'s own verification correctly treats as "not
+     * signed, refuse to install" (see PKG_ALLOW_UNSIGNED_INSTALL's
+     * own comment for the one, deliberate, explicit exception). */
+    uint8_t signature[PKG_SIGNATURE_LEN];
 } pkg_header_t;
 
 typedef void (*pkg_list_callback_t)(const char* filename, const char* name,
@@ -73,10 +93,14 @@ bool pkg_remove(const char* name);
  * what was asked for, before ever writing anything to disk - the
  * same "don't trust the network, verify before acting" discipline
  * this project applies to file I/O over ATA/FAT32/ext2 already.
+ * Since Phase 69, this also means a genuinely fetched-over-the-
+ * network package still needs a valid signature to actually install
+ * - fetching successfully and passing signature verification are two
+ * separate, both-required checks, not one implying the other.
  * Fails (returns false, with a specific, logged reason) on DNS/
  * connect/send failure, a malformed or non-package response, a
- * truncated payload, a name mismatch, or if `name` is already
- * installed. */
+ * truncated payload, a name mismatch, a missing/invalid signature, or
+ * if `name` is already installed. */
 bool pkg_fetch_and_install(const char* repo_host, uint16_t repo_port,
                             const char* name);
 

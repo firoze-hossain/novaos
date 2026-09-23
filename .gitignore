@@ -90,6 +90,10 @@ $RECYCLE.BIN/
 compile_commands.json
 .ccls-cache/
 
+# ---- Phase 69: tools/pkgsign's own cargo build output - a normal
+# host-side Rust binary's target/ directory, not a source artifact ----
+tools/pkgsign/target/
+
 # ---- Env / secrets (never commit) ----
 .env
 *.pem

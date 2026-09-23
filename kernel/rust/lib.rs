@@ -39,6 +39,8 @@ mod crashdump;
 mod apic;
 mod tcp;
 mod http;
+mod pkgsign_core;
+mod pkgsign;
 
 use core::panic::PanicInfo;
 

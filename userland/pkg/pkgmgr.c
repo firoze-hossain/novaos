@@ -174,6 +174,44 @@ void pkg_list_installed(pkg_list_callback_t callback) {
     }
 }
 
+/* kernel/rust/pkgsign.rs's own exported verification function - see
+ * that file's own module doc comment for the full signing scheme and
+ * its honest, symmetric-HMAC trust-model limitations. */
+extern bool rust_pkg_verify_signature(const uint8_t* header_ptr,
+                                       uint32_t header_len,
+                                       uint32_t signature_offset,
+                                       const uint8_t* payload_ptr,
+                                       uint32_t payload_len);
+
+/* Phase 69: the real point of this whole feature - Gatekeeper/
+ * Authenticode's own core idea ("verify a signature before trusting a
+ * binary") applied here. Every package, from every source (a local
+ * .PKG file or a network fetch), passes through this exact check
+ * before install_from_buffer() ever writes a single byte to disk -
+ * the same "verify first, act only if it checks out" shape this
+ * project already uses for on-disk file I/O and network data
+ * elsewhere. `offsetof` isn't available without <stddef.h>'s own
+ * broader C library assumptions this freestanding kernel doesn't
+ * make, so the signature field's own offset is computed the same way
+ * every other fixed-layout offset in this codebase is: from the
+ * struct's own field sizes directly, not a magic number. */
+#define PKG_SIGNATURE_OFFSET \
+    (4 + PKG_NAME_MAX + PKG_VERSION_MAX + PKG_DESC_MAX + 4)
+
+static bool verify_package_signature(const pkg_header_t* header,
+                                      const uint8_t* payload) {
+    bool ok = rust_pkg_verify_signature(
+        (const uint8_t*)header, (uint32_t)sizeof(pkg_header_t),
+        (uint32_t)PKG_SIGNATURE_OFFSET, payload, header->payload_size);
+    if (!ok) {
+        kernel_log("[SECURITY] pkg install refused: '%s' has no valid "
+                   "signature - either it was never signed, or it has "
+                   "been modified since signing. Nothing was written "
+                   "to disk.\n", header->name);
+    }
+    return ok;
+}
+
 /* Phase 64: the actual "install" logic, shared between pkg_install()
  * (payload already sitting in a local .PKG file on disk) and
  * pkg_fetch_and_install() (payload just arrived over the network) -
@@ -190,6 +228,10 @@ void pkg_list_installed(pkg_list_callback_t callback) {
 static bool install_from_buffer(const pkg_header_t* header,
                                  const uint8_t* payload,
                                  const char* filename_hint) {
+    if (!verify_package_signature(header, payload)) {
+        return false;
+    }
+
     char app_filename[13];
     derive_app_filename(filename_hint, app_filename, sizeof(app_filename));
 
@@ -221,8 +263,8 @@ static bool install_from_buffer(const pkg_header_t* header,
         return false;
     }
 
-    kernel_log("[ OK ] Installed package '%s' -> %s\n", header->name,
-               app_filename);
+    kernel_log("[ OK ] Installed package '%s' -> %s (signature "
+               "verified)\n", header->name, app_filename);
     return true;
 }
 
