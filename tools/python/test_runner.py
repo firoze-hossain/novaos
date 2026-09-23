@@ -411,6 +411,22 @@ ASSERTIONS: list[Assertion] = [
               "hostname (including one starting with a digit) as an IP, "
               "and rejects malformed, IP-shaped input rather than "
               "accepting garbage"),
+    Assertion("sha256_streaming_selftest",
+              r"Kernel-side Rust SHA-256 self-test \(2/2, streaming API "
+              r"matches one-shot\): single-call=pass byte-at-a-time=pass "
+              r"block-boundary-split=pass empty=pass",
+              "kernel/rust/sha256.rs's own new Sha256Streaming API "
+              "produces results identical to the existing, proven one-"
+              "shot sha256() for the same input, regardless of how that "
+              "input is chunked across update() calls"),
+    Assertion("pkgsign_selftest",
+              r"Kernel-side Rust package-signature self-test: genuine-"
+              r"signature-verifies=pass tampered-payload-rejected=pass "
+              r"tampered-header-rejected=pass wrong-signature-rejected=pass",
+              "kernel/rust/pkgsign.rs's own signature verification "
+              "correctly accepts a genuine signature and rejects three "
+              "distinct kinds of tampering (payload, header field, and "
+              "a syntactically-valid-but-wrong signature)"),
     Assertion("exec_trusted_delegation_passed",
               r"sandbox. PASS: SYS_EXEC_TRUSTED delegates can_open_any_file "
               r"correctly",

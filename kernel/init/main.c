@@ -1321,12 +1321,41 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     {
         extern int rust_sha256_selftest(void);
         int result = rust_sha256_selftest();
-        kernel_log("[ %s ] Kernel-side Rust SHA-256 self-test: "
+        kernel_log("[ %s ] Kernel-side Rust SHA-256 self-test (1/2): "
                    "empty-string=%s abc=%s multi-block=%s\n",
                    result == 0 ? "OK" : "FAIL",
                    (result & 1) ? "FAIL" : "pass",
                    (result & 2) ? "FAIL" : "pass",
                    (result & 4) ? "FAIL" : "pass");
+        kernel_log("[ %s ] Kernel-side Rust SHA-256 self-test (2/2, "
+                   "streaming API matches one-shot): single-call=%s "
+                   "byte-at-a-time=%s block-boundary-split=%s empty=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 8) ? "FAIL" : "pass",
+                   (result & 16) ? "FAIL" : "pass",
+                   (result & 32) ? "FAIL" : "pass",
+                   (result & 64) ? "FAIL" : "pass");
+    }
+
+    /* Phase 69: kernel/rust/pkgsign.rs's own self-test - a genuine
+     * signature verifies, and three distinct kinds of tampering
+     * (payload, header field, and a syntactically-valid-but-wrong
+     * signature) are each correctly rejected. See that file's own
+     * module doc comment for the full, honest trust-model account
+     * (symmetric HMAC, not true asymmetric public-key signing). */
+    {
+        extern int rust_pkgsign_selftest(void);
+        int result = rust_pkgsign_selftest();
+        kernel_log("[ %s ] Kernel-side Rust package-signature self-"
+                   "test: genuine-signature-verifies=%s "
+                   "tampered-payload-rejected=%s "
+                   "tampered-header-rejected=%s "
+                   "wrong-signature-rejected=%s\n",
+                   result == 0 ? "OK" : "FAIL",
+                   (result & 1) ? "FAIL" : "pass",
+                   (result & 2) ? "FAIL" : "pass",
+                   (result & 4) ? "FAIL" : "pass",
+                   (result & 8) ? "FAIL" : "pass");
     }
 
     /* Phase 50: kernel/rust/hmac_sha256.rs's own self-test - verifies

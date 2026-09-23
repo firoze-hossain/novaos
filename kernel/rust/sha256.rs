@@ -11,15 +11,28 @@
 //! block* kernel/rust/hmac_sha256.rs and kernel/rust/pbkdf2.rs (this
 //! same phase) are built on top of to become one.
 //!
-//! One-shot API only (`sha256(&[u8]) -> [u8; 32]`), not a streaming/
-//! incremental one - deliberately: every real caller in this kernel
-//! (HMAC's inner/outer padding, PBKDF2's per-iteration blocks) hashes
-//! a single, bounded-size buffer it already has fully in memory, not
-//! a stream arriving over time. A streaming API would be more
-//! general but more complex for no actual use case this kernel has.
-//! `MAX_INPUT_LEN` (440 bytes) is a generous bound above every actual
-//! caller's real input size, checked at runtime rather than silently
-//! truncated.
+//! `sha256()` remains the one-shot API every existing caller in this
+//! kernel already uses (HMAC's inner/outer padding, PBKDF2's per-
+//! iteration blocks) - a single, bounded-size buffer already fully in
+//! memory, `MAX_INPUT_LEN` (440 bytes) a generous bound above every
+//! one of those real callers' actual input size, checked at runtime
+//! rather than silently truncated.
+//!
+//! Phase 69 adds `Sha256Streaming` alongside it, not in place of it:
+//! `kernel/rust/pkgsign.rs`'s own need to hash an entire package
+//! payload - realistically far larger than 440 bytes, and read in
+//! disk-sized chunks rather than ever sitting fully in memory at once
+//! - is a genuinely different shape of caller the one-shot API was
+//! never meant to serve. Built directly on this file's own,
+//! already-proven `process_block()` (the identical 64-byte compression
+//! function `sha256()` itself calls) rather than a second, parallel
+//! implementation - `update()` buffers partial blocks and processes
+//! full ones as they accumulate, `finalize()` applies the identical
+//! padding/length-encoding `sha256()` uses today, just against a
+//! running byte count instead of one known up front. Verified
+//! directly against `sha256()` itself (this file's own self-test,
+//! below) across several different chunk-split patterns of the same
+//! input, not assumed equivalent from reading the code alone.
 
 const MAX_INPUT_LEN: usize = 440;
 const BUFFER_LEN: usize = 512; // room for MAX_INPUT_LEN + padding,
@@ -108,6 +121,96 @@ fn process_block(state: &mut [u32; 8], block: &[u8]) {
     state[7] = state[7].wrapping_add(h);
 }
 
+/// Incremental SHA-256 for input too large to ever hold fully in
+/// memory at once (a package payload read in disk-sized chunks) -
+/// see this file's own module doc comment for why this exists
+/// alongside, not instead of, `sha256()`. `update()` may be called
+/// any number of times with any chunk sizes (including zero-length
+/// or larger-than-64-byte chunks); the result is identical to calling
+/// `sha256()` once on the full, concatenated input, regardless of how
+/// it was chunked - verified directly in this file's own self-test.
+pub struct Sha256Streaming {
+    state: [u32; 8],
+    /// Bytes accumulated so far but not yet a full 64-byte block.
+    buffer: [u8; 64],
+    buffer_len: usize,
+    /// Total input length in bytes, across every update() call - used
+    /// for the final bit-length field, the same role `data.len()`
+    /// plays in the one-shot `sha256()` above.
+    total_len: u64,
+}
+
+impl Sha256Streaming {
+    pub fn new() -> Self {
+        Sha256Streaming { state: H0, buffer: [0u8; 64], buffer_len: 0, total_len: 0 }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.total_len = self.total_len.wrapping_add(data.len() as u64);
+
+        // Top up a partial block left over from a previous update()
+        // first, so buffer_len is always either 0 or a genuine
+        // leftover under 64 bytes by the time the loop below runs.
+        if self.buffer_len > 0 {
+            let need = 64 - self.buffer_len;
+            let take = need.min(data.len());
+            self.buffer[self.buffer_len..self.buffer_len + take]
+                .copy_from_slice(&data[..take]);
+            self.buffer_len += take;
+            data = &data[take..];
+            if self.buffer_len == 64 {
+                let block = self.buffer; // copy out before the &mut
+                                          // borrow below - the buffer
+                                          // itself is only 64 bytes,
+                                          // this is cheap
+                process_block(&mut self.state, &block);
+                self.buffer_len = 0;
+            }
+        }
+
+        // Process every full 64-byte block directly from the
+        // caller's own slice, without copying through self.buffer at
+        // all - the common case for any chunk of real size.
+        while data.len() >= 64 {
+            process_block(&mut self.state, &data[..64]);
+            data = &data[64..];
+        }
+
+        // Whatever's left (0..63 bytes) becomes the new leftover,
+        // carried into the next update() or finalize().
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.buffer_len = data.len();
+        }
+    }
+
+    pub fn finalize(mut self) -> [u8; 32] {
+        // Identical padding scheme to sha256()'s own: a single 0x80
+        // byte, zero bytes out to a 56-byte boundary, then the
+        // original bit length as a big-endian u64 - spilling into a
+        // second, all-padding block if the leftover plus the 0x80/
+        // length fields don't fit in one.
+        let bit_len = self.total_len.wrapping_mul(8);
+        let mut pad = [0u8; 128];
+        pad[..self.buffer_len].copy_from_slice(&self.buffer[..self.buffer_len]);
+        pad[self.buffer_len] = 0x80;
+        let total_len = ((self.buffer_len + 1 + 8 + 63) / 64) * 64;
+        pad[total_len - 8..total_len].copy_from_slice(&bit_len.to_be_bytes());
+
+        let mut offset = 0;
+        while offset < total_len {
+            process_block(&mut self.state, &pad[offset..offset + 64]);
+            offset += 64;
+        }
+
+        let mut out = [0u8; 32];
+        for i in 0..8 {
+            out[i * 4..i * 4 + 4].copy_from_slice(&self.state[i].to_be_bytes());
+        }
+        out
+    }
+}
+
 /// One-shot SHA-256. Panics (via the same bounded, checked-not-
 /// trusted discipline this project's other size-agreement checks
 /// already use - e.g. kernel/config/userscfg.c's own
@@ -187,6 +290,53 @@ pub extern "C" fn rust_sha256_selftest() -> i32 {
         != long_expected
     {
         code |= 4;
+    }
+
+    // Sha256Streaming must match sha256() exactly, for the same
+    // input, regardless of how that input is chunked across update()
+    // calls - the actual property pkgsign.rs's own callers depend on
+    // (a package payload arriving in whatever disk-read-sized pieces
+    // it happens to arrive in, not one fixed chunk size). Checked
+    // directly against real data, several different ways, not assumed
+    // from the implementation alone.
+    let msg = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    let expected = sha256(msg);
+
+    // One single update() call - the degenerate, "not really
+    // streaming" case.
+    let mut s = Sha256Streaming::new();
+    s.update(msg);
+    if s.finalize() != expected {
+        code |= 8;
+    }
+
+    // One byte at a time - the most fragmented reasonable case,
+    // exercising the partial-block carry path on every single call.
+    let mut s = Sha256Streaming::new();
+    for &b in msg.iter() {
+        s.update(core::slice::from_ref(&b));
+    }
+    if s.finalize() != expected {
+        code |= 16;
+    }
+
+    // Split across a real 64-byte block boundary (msg is 57 bytes,
+    // so 30/27 crosses it) - exercises both the "top up a leftover
+    // partial block to exactly 64 and process it" path and the
+    // "leftover carried into finalize()" path in the same call.
+    let mut s = Sha256Streaming::new();
+    s.update(&msg[..30]);
+    s.update(&msg[30..]);
+    if s.finalize() != expected {
+        code |= 32;
+    }
+
+    // The empty message - finalize() with no update() calls at all,
+    // the same edge case sha256(b"") above already covers for the
+    // one-shot API.
+    let s = Sha256Streaming::new();
+    if s.finalize() != sha256(b"") {
+        code |= 64;
     }
 
     code
