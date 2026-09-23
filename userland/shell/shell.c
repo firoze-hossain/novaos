@@ -73,6 +73,9 @@ static void cmd_help(void) {
     vga_puts("  nslookup HOSTNAME - resolve a hostname to an IP via DNS\n");
     vga_puts("  gui       - enter graphics mode; drag windows with the "
               "mouse, ESC to exit\n");
+    vga_puts("  wm        - a real, interactive ring-3 window manager: "
+              "drag titlebars, click the taskbar to focus, drag to a "
+              "screen edge to snap; q to exit\n");
     vga_puts("  store     - Software Center GUI: install/remove packages "
               "with the mouse\n");
     vga_puts("  pkg list  - show available packages (pkg installed, "
@@ -572,6 +575,36 @@ static void cmd_gui(void) {
     vga_clear();
 }
 
+/* Phase 70: launches userland/wm-rs/wm.rs - the real, interactive
+ * ring-3 window manager, built entirely on the SYS_GFX_* /
+ * SYS_MOUSE_READ/SYS_READ_KEY syscalls `gui` above's own ring-0
+ * compositor never needed (it has direct kernel-side framebuffer
+ * access instead). A thin wrapper around the same process_exec()/
+ * process_wait() pair `run` already uses below - `wm` exists
+ * separately, and first, purely for discoverability (matching how
+ * `gui` gets its own dedicated command rather than requiring `run
+ * GUI.ELF`), not because launching a ring-3 program needs anything
+ * `run` doesn't already do. */
+static void cmd_wm(void) {
+    if (!ps2mouse_is_present()) {
+        vga_puts("wm: no PS/2 mouse detected - nothing to interact with\n");
+        return;
+    }
+    if (!vfs_is_mounted()) {
+        vga_puts("wm: no filesystem mounted\n");
+        return;
+    }
+
+    const char* argv0 = "WM.ELF";
+    int pid = process_exec("WM.ELF", &argv0, 1);
+    if (pid < 0) {
+        vga_puts("wm: failed to load WM.ELF\n");
+        return;
+    }
+    process_wait(pid);
+    vga_clear();
+}
+
 static void cmd_reboot(void) {
     vga_puts("Rebooting...\n");
     /* 8042 keyboard controller "pulse output line" reset - the classic
@@ -609,6 +642,8 @@ static void dispatch(char* line) {
         cmd_ps();
     } else if (strcmp(line, "gui") == 0) {
         cmd_gui();
+    } else if (strcmp(line, "wm") == 0) {
+        cmd_wm();
     } else if (strcmp(line, "store") == 0) {
         store_run();
     } else if (strncmp(line, "cat ", 4) == 0) {

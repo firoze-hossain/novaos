@@ -201,6 +201,14 @@ ASSERTIONS: list[Assertion] = [
               "a real, libc-linked C program ran to completion with its expected exit code"),
     Assertion("sys_exec_real_c_program", r"SYS_EXEC loaded and ran a real C program",
               "SYS_EXEC correctly loaded and ran a full C program, not just a toy"),
+    Assertion("wm_selftest_passed",
+              r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
+              r"click-to-focus, taskbar focus, and edge snap/un-snap all "
+              r"behaved correctly",
+              "userland/wm-rs/wm.rs's own real window-manager logic - "
+              "titlebar dragging, click-to-focus, taskbar-click focus, "
+              "and edge snap/un-snap - all behaved correctly against "
+              "synthetic mouse input, run through the real SYS_EXEC path"),
     Assertion("fork_created_child", r"process_fork: pid .* forked",
               "fork() actually created a new process"),
     Assertion("fork_child_ran", r"sandbox-child. I am the child",
@@ -592,7 +600,7 @@ def run_checks(log_path: Path) -> bool:
             "sandbox_pipe_syscall_path", "sandbox_login_passed",
             "sandbox_sudo_passed", "exec_trusted_delegation_passed",
             "unprivileged_spawn_denied", "usb_device_enumerated",
-            "no_panic_fault_or_fail",
+            "no_panic_fault_or_fail", "wm_selftest_passed",
         }
         unexpected = [a for a in failures if a.name not in known_flaky]
         if unexpected:
