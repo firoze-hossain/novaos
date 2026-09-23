@@ -145,6 +145,47 @@ void sandbox_demo_task(void) {
     sys_write("\n[sandbox] Starting; my capability list only grants "
               "HELLO.TXT and the gateway (10.0.2.2).\n");
 
+    /* Phase 70: userland/wm-rs/wm.rs's own --selftest mode - run
+     * first, deliberately, before every other test in this task - see
+     * that file's own run_selftest() doc comment for why a synthetic-
+     * mouse-input self-test, run through the exact same real SYS_EXEC
+     * path every other ELF test in this file already uses, is the
+     * only practical way to automatically verify a real, interactive
+     * program's own actual dragging/focus/snapping logic in this
+     * project's existing headless test harness (which has no way to
+     * inject real mouse movement into a running QEMU instance).
+     * run_selftest() itself never calls sys_gfx_enter() or touches
+     * real hardware state at all - exit code 0 means every one of its
+     * five sub-cases passed. Placed here, first, rather than after
+     * HELLO.ELF/HELLOC.ELF (where it originally lived) for a real,
+     * honest reason: this project's own, separate, still-open
+     * scheduling-corruption bug (PROGRESS.md) has repeatedly struck
+     * this exact task right around that later point during this
+     * phase's own testing, and confirmed (via directly removing this
+     * exact call and observing the identical crash still occur) to be
+     * completely unrelated to this new code - but running first, while
+     * this task's own state is freshest, gives this real, new self-
+     * test the best practical chance of actually executing and being
+     * observed, rather than being just as likely to get silently
+     * starved of a clean run as everything already known to sit in
+     * that same, already-tracked blast radius. */
+    const char* exec_argv_wm[] = {"WM.ELF", "--selftest"};
+    int exec_pid_wm = sys_exec("WM.ELF", exec_argv_wm, 2);
+    if (exec_pid_wm >= 0) {
+        int exit_code_wm = sys_wait(exec_pid_wm);
+        if (exit_code_wm == 0) {
+            sys_write("[sandbox] PASS: WM.ELF --selftest - real window "
+                      "dragging, click-to-focus, taskbar focus, and edge "
+                      "snap/un-snap all behaved correctly.\n");
+        } else {
+            sys_write("[sandbox] FAIL: WM.ELF --selftest reported at "
+                      "least one failing case.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_EXEC(\"WM.ELF\") failed to "
+                  "start.\n");
+    }
+
     /* The allowed file: should succeed. */
     int h = sys_open("HELLO.TXT");
     if (h >= 0) {

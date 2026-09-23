@@ -62,7 +62,7 @@ TOTAL_MB=$((1 + PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))  # +1MiB
 # --- Partition 1: FAT32, exactly the same fixtures as before ---
 dd if=/dev/zero of="$TMP/part1.img" bs=1M count=$PART1_MB status=none
 mformat -i "$TMP/part1.img" -F ::
-for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF PING.ELF TPROBE.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF; do
+for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF PING.ELF TPROBE.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF; do
     # Phase 59: LS.ELF/ECHO.ELF/CP.ELF/RM.ELF come from userland/
     # coreutils-rs/build.sh, built against the project's own bare-metal
     # Rust sysroot (tools/rust-sysroot/) - not every environment that
