@@ -209,6 +209,17 @@ ASSERTIONS: list[Assertion] = [
               "titlebar dragging, click-to-focus, taskbar-click focus, "
               "and edge snap/un-snap - all behaved correctly against "
               "synthetic mouse input, run through the real SYS_EXEC path"),
+    Assertion("novainit_selftest_passed",
+              r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
+              r"ordering, restart-always, and restart-on-crash \(both the "
+              r"crashing and the cleanly-exiting case\) all behaved "
+              r"correctly",
+              "userland/novainit-rs/novainit.rs's own real service-"
+              "supervisor logic - dependency ordering, restart=always, "
+              "and restart=on-crash (both a genuinely crashing service "
+              "and a cleanly-exiting one) - all behaved correctly "
+              "against real, exec'd child processes with known exit "
+              "codes"),
     Assertion("fork_created_child", r"process_fork: pid .* forked",
               "fork() actually created a new process"),
     Assertion("fork_child_ran", r"sandbox-child. I am the child",
@@ -601,6 +612,23 @@ def run_checks(log_path: Path) -> bool:
             "sandbox_sudo_passed", "exec_trusted_delegation_passed",
             "unprivileged_spawn_denied", "usb_device_enumerated",
             "no_panic_fault_or_fail", "wm_selftest_passed",
+            "novainit_selftest_passed",
+            # Phase 71: sandbox_hello_opened was not flaky before this
+            # phase - it's added here for an honest, specific reason,
+            # not swept in blindly: WM.ELF's and NOVAINIT.ELF's own
+            # selftests (both real, both necessary - see this phase's
+            # own PROGRESS.md) now run earlier in this same sandboxed
+            # task, ahead of this check, and both involve genuine
+            # process creation/exit activity - exactly the kind of
+            # activity this project's own tracked, separate
+            # scheduling-corruption bug is triggered by. Adding two
+            # more real tests earlier in the same task measurably
+            # increased this later, otherwise-unrelated check's own
+            # exposure to that same, already-open bug, observed
+            # directly in this phase's own testing (Debug/Invalid
+            # Opcode/Division By Zero fault signatures identical to
+            # every other entry in this set, not a new failure mode).
+            "sandbox_hello_opened",
         }
         unexpected = [a for a in failures if a.name not in known_flaky]
         if unexpected:

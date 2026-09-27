@@ -656,9 +656,23 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
  * never be called with a lock held). */
 static spinlock_t exec_lock;
 
+/* Phase 71: grant_spawn is deliberately a separate parameter from
+ * grant_any_file, not folded into it - process_exec_trusted() below
+ * needs to delegate can_spawn independently of can_open_any_file,
+ * since a real, legitimate caller can have one without the other
+ * (userland/novainit-rs/'s own service supervisor, exec'd from within
+ * a sandboxed task that has real, explicitly-granted can_spawn - see
+ * kernel/task/sandbox_demo.c's own sandbox_caps - but no file access
+ * beyond its own, narrow, explicit allow-list at all). Tying spawn
+ * delegation to file-access delegation would have meant either
+ * granting broad file access no caller here actually needs just to
+ * unlock spawn delegation, or not being able to delegate spawn at
+ * all without it - neither is the real, least-privilege grant this
+ * situation actually calls for. */
 static int process_exec_internal(const char* path, const char** argv,
                                   int argc, const char** filenames,
-                                  int file_count, bool grant_any_file) {
+                                  int file_count, bool grant_any_file,
+                                  bool grant_spawn) {
     if (argc > MAX_EXEC_ARGS) {
         argc = MAX_EXEC_ARGS;
     }
@@ -820,11 +834,15 @@ static int process_exec_internal(const char* path, const char** argv,
     }
     p->can_open_any_file = grant_any_file;
     p->allowed_host_count = 0;
-    /* A trusted, general-purpose shell needs both broad file access
-     * and the ability to run programs - the same single grant_any_file
-     * flag covers both, since they're both part of the same "this is
-     * the shell, not a sandboxed program" trust decision. */
-    p->can_spawn = grant_any_file;
+    /* Phase 71: grant_spawn is its own, independent parameter now -
+     * see this function's own doc comment above for why. A trusted,
+     * general-purpose shell (process_exec_as_shell(), which still
+     * passes true for both) needs both broad file access and the
+     * ability to run programs, and for that one, fully-trusted case
+     * they really are the same underlying trust decision - but that
+     * is no longer the only real, legitimate shape a caller's own
+     * grants can take. */
+    p->can_spawn = grant_spawn;
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
@@ -852,7 +870,7 @@ static int process_exec_internal(const char* path, const char** argv,
 }
 
 int process_exec(const char* path, const char** argv, int argc) {
-    return process_exec_internal(path, argv, argc, NULL, 0, false);
+    return process_exec_internal(path, argv, argc, NULL, 0, false, false);
 }
 
 /* Phase 29: for trusted (ring-0) callers only - lets a caller grant
@@ -873,7 +891,7 @@ int process_exec(const char* path, const char** argv, int argc) {
 int process_exec_with_files(const char* path, const char** argv, int argc,
                              const char** filenames, int file_count) {
     return process_exec_internal(path, argv, argc, filenames, file_count,
-                                  false);
+                                  false, false);
 }
 
 /* Phase 30: exec's a process with broad, "may open any file" access
@@ -885,107 +903,174 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
  * userland/coreutils/cat.c) receives even indirectly - only the
  * kernel's own boot sequence calls this, for the shell specifically. */
 int process_exec_as_shell(const char* path, const char** argv, int argc) {
-    return process_exec_internal(path, argv, argc, NULL, 0, true);
+    return process_exec_internal(path, argv, argc, NULL, 0, true, true);
 }
 
 /* Phase 59: SYS_EXEC_TRUSTED's own implementation - see process.h's
  * own comment on this function, and kernel/arch/x86/cpu/syscall.h's
  * comment on SYS_EXEC_TRUSTED, for the full reasoning. Unlike every
- * process_exec_*() variant above, the grant passed to process_exec_
- * internal() here is not a fixed constant (false, or true only for
- * the one kernel-boot-time shell exec) - it is read from the calling
- * process itself, so this function's own behavior is entirely
+ * process_exec_*() variant above, the grants passed to process_exec_
+ * internal() here are not fixed constants (false, or true only for
+ * the one kernel-boot-time shell exec) - each is read from the
+ * calling process itself, so this function's own behavior is entirely
  * determined by who calls it: an ordinary process delegates "false"
- * (a no-op, identical to plain process_exec()), while a process that
- * already has can_open_any_file (only the interactive shell, today)
- * delegates that same real grant to the child it's choosing to run. */
+ * for both (a no-op, identical to plain process_exec()), while a
+ * process that already has can_open_any_file and/or can_spawn
+ * delegates that same real grant to the child it's choosing to run -
+ * independently of each other (Phase 71: see process_exec_internal()'s
+ * own doc comment on why grant_spawn is a separate parameter now, not
+ * folded into grant_any_file - a caller can genuinely have can_spawn
+ * without can_open_any_file, such as a sandboxed task explicitly
+ * granted spawn but nothing broader, and this must still be able to
+ * delegate the one real capability it actually has). */
 int process_exec_trusted(const char* path, const char** argv, int argc) {
     process_t* caller = process_current();
-    bool grant = (caller != NULL) && caller->can_open_any_file;
-    return process_exec_internal(path, argv, argc, NULL, 0, grant);
+    bool grant_files = (caller != NULL) && caller->can_open_any_file;
+    bool grant_spawn = (caller != NULL) && caller->can_spawn;
+    return process_exec_internal(path, argv, argc, NULL, 0, grant_files,
+                                  grant_spawn);
+}
+
+/* Phase 71: the actual "check once, reap if terminated" logic shared
+ * between process_wait() (below, unchanged in observable behavior -
+ * loops calling this until it succeeds) and process_wait_nonblock()
+ * (kernel/task/process.h - Phase 71's own service supervisor needs to
+ * check on several children without blocking on any single one, which
+ * process_wait()'s own infinite loop can't do). Every safety argument
+ * in the two, real, previously-fixed use-after-free bugs this
+ * function's own body still carries in full (the kernel-stack free
+ * and the page-directory free, both explained in detail just below)
+ * applies identically regardless of which of the two callers reaches
+ * this point - neither one ever runs on `target`'s own stack or with
+ * `target`'s own page directory loaded, whether they got here by
+ * blocking-and-retrying or by a single, immediate check. Returns
+ * `true` (with `*out_exit_code` set) if `pid` was found and had
+ * already reached PROCESS_TERMINATED - reaping it, exactly once, the
+ * same as process_wait() always has; `false` (leaving
+ * `*out_exit_code` untouched) if `pid` doesn't exist at all, or
+ * exists but hasn't terminated yet - the caller's own job to tell
+ * those two, genuinely different cases apart if it cares to (process_
+ * wait_nonblock()'s own doc comment shows how). */
+static bool try_reap_process(int pid, int* out_exit_code) {
+    process_t* target = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_t* candidate = &process_table[i];
+        if (candidate->pid == pid && candidate->state != PROCESS_UNUSED) {
+            target = candidate;
+            break;
+        }
+    }
+    if (target == NULL) {
+        return false; /* no such process - never existed, or already
+                          reaped and its slot is unused again (slots
+                          are never actually recycled today - see
+                          PROGRESS.md - but this check is the correct
+                          behavior regardless) */
+    }
+    if (target->state != PROCESS_TERMINATED) {
+        return false;
+    }
+
+    /* The actual kernel-stack free lives here now, not in
+     * process_exit_current() - see that function's own comment for
+     * the full account of the real, confirmed use-after-free this
+     * replaces. Safe specifically because: this code runs on this
+     * function's own caller's stack, never on `target`'s; and by the
+     * time state is observed as PROCESS_TERMINATED, `target` has
+     * already reached its own scheduler_yield() call and - since a
+     * TERMINATED process is never returned by pick_next_locked() -
+     * can never be scheduled again, so nothing will ever execute on
+     * its kernel stack after this point. Guarded with the same
+     * null-check-then-null-out pattern the original, unsafe version
+     * already used, since this function - and process_wait() itself,
+     * before this refactor, and process_wait_nonblock() now too - can
+     * genuinely be called more than once for the same pid (this
+     * project's own sandbox_demo.c does exactly that in several of
+     * its own tests) and this must stay safe to call repeatedly, not
+     * just once. */
+    if (target->kernel_stack_alloc != NULL) {
+        kfree(target->kernel_stack_alloc);
+        target->kernel_stack_alloc = NULL;
+    }
+    /* A second, more severe instance of the exact same class of bug
+     * the kernel-stack free above already fixed - found on further
+     * investigation after that first fix reduced but did not
+     * eliminate a still-observed, non-deterministic corruption.
+     * free_user_address_space() used to be called directly from
+     * process_exit_current(), which - for a user process - means it
+     * ran while that process's own page directory was still the
+     * CPU's *actively loaded* CR3 value. That function's own last
+     * step is pmm_free_frame(page_directory_phys) - handing the
+     * exact physical frame the CPU is using *right now* to translate
+     * every single memory access (including the rest of process_exit_
+     * current() and scheduler_yield() finishing their own execution)
+     * back to the PMM's free list, where any other pmm_alloc_frame()
+     * call anywhere in the kernel could immediately claim and
+     * overwrite it - silently corrupting the live page directory out
+     * from under the still-running CPU. This explains the wide,
+     * seemingly unrelated variety of symptoms better than the
+     * kernel-stack bug alone did: a corrupted page directory produces
+     * unpredictable translation failures for whatever gets accessed
+     * next, not a single consistent failure mode. Moved here for the
+     * identical reason and with the identical safety argument as the
+     * kernel-stack free just above - by this point `target` is
+     * guaranteed to have already switched away (a TERMINATED
+     * process's own page directory is never reloaded into CR3 again,
+     * since do_schedule() only loads `next`'s), and this code runs on
+     * the *caller's* own, different, already-active page directory,
+     * not `target`'s. page_directory_phys is set to 0 after freeing
+     * (0 is never a valid page directory physical address) as this
+     * function's own guard against a second reap attempt on the same
+     * pid trying to free it again. */
+    if (target->is_user && target->page_directory_phys != 0) {
+        free_user_address_space(target->page_directory_phys);
+        target->page_directory_phys = 0;
+    }
+    *out_exit_code = target->exit_code;
+    return true;
 }
 
 int process_wait(int pid) {
     for (;;) {
-        process_t* target = NULL;
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            process_t* candidate = &process_table[i];
-            if (candidate->pid == pid && candidate->state != PROCESS_UNUSED) {
-                target = candidate;
-                break;
-            }
+        int exit_code;
+        bool exists;
+        if (process_wait_nonblock(pid, &exit_code, &exists)) {
+            return exit_code;
         }
-        if (target == NULL) {
+        if (!exists) {
             return -1; /* no such process - never existed, or already
                            reaped and its slot is unused again (slots
                            are never actually recycled today - see
                            PROGRESS.md - but this check is the correct
-                           behavior regardless) */
-        }
-        if (target->state == PROCESS_TERMINATED) {
-            /* The actual kernel-stack free lives here now, not in
-             * process_exit_current() - see that function's own
-             * comment for the full account of the real, confirmed
-             * use-after-free this replaces. Safe specifically because:
-             * this code runs on process_wait()'s OWN caller's stack,
-             * never on `target`'s; and by the time state is observed
-             * as PROCESS_TERMINATED, `target` has already reached its
-             * own scheduler_yield() call and - since a TERMINATED
-             * process is never returned by pick_next_locked() - can
-             * never be scheduled again, so nothing will ever execute
-             * on its kernel stack after this point. Guarded with the
-             * same null-check-then-null-out pattern the original,
-             * unsafe version already used, since process_wait() can
-             * genuinely be called more than once for the same pid
-             * (this project's own sandbox_demo.c does exactly that in
-             * several of its own tests) and this must stay safe to
-             * call repeatedly, not just once. */
-            if (target->kernel_stack_alloc != NULL) {
-                kfree(target->kernel_stack_alloc);
-                target->kernel_stack_alloc = NULL;
-            }
-            /* A second, more severe instance of the exact same class
-             * of bug the kernel-stack free above already fixed - found
-             * on further investigation after that first fix reduced
-             * but did not eliminate a still-observed, non-deterministic
-             * corruption. free_user_address_space() used to be called
-             * directly from process_exit_current(), which - for a
-             * user process - means it ran while that process's own
-             * page directory was still the CPU's *actively loaded*
-             * CR3 value. That function's own last step is
-             * pmm_free_frame(page_directory_phys) - handing the exact
-             * physical frame the CPU is using *right now* to translate
-             * every single memory access (including the rest of
-             * process_exit_current() and scheduler_yield() finishing
-             * their own execution) back to the PMM's free list, where
-             * any other pmm_alloc_frame() call anywhere in the kernel
-             * could immediately claim and overwrite it - silently
-             * corrupting the live page directory out from under the
-             * still-running CPU. This explains the wide, seemingly
-             * unrelated variety of symptoms better than the kernel-
-             * stack bug alone did: a corrupted page directory produces
-             * unpredictable translation failures for whatever gets
-             * accessed next, not a single consistent failure mode.
-             * Moved here for the identical reason and with the
-             * identical safety argument as the kernel-stack free just
-             * above - by this point `target` is guaranteed to have
-             * already switched away (a TERMINATED process's own page
-             * directory is never reloaded into CR3 again, since
-             * do_schedule() only loads `next`'s), and this code runs
-             * on the *caller's* own, different, already-active page
-             * directory, not `target`'s. page_directory_phys is set to
-             * 0 after freeing (0 is never a valid page directory
-             * physical address) as this function's own guard against
-             * a second process_wait() call on the same pid trying to
-             * free it again. */
-            if (target->is_user && target->page_directory_phys != 0) {
-                free_user_address_space(target->page_directory_phys);
-                target->page_directory_phys = 0;
-            }
-            return target->exit_code;
+                           behavior regardless). Preserved exactly from
+                           this function's own pre-Phase-71 behavior -
+                           a real regression this refactor introduced
+                           once already (looping forever here instead,
+                           since try_reap_process() alone can't tell
+                           "doesn't exist" apart from "not terminated
+                           yet") and then caught and fixed before ever
+                           shipping it, not after. */
         }
         scheduler_yield();
     }
+}
+
+bool process_wait_nonblock(int pid, int* out_exit_code, bool* out_exists) {
+    bool exists = false;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].pid == pid &&
+            process_table[i].state != PROCESS_UNUSED) {
+            exists = true;
+            break;
+        }
+    }
+    if (out_exists != NULL) {
+        *out_exists = exists;
+    }
+    if (!exists) {
+        return false;
+    }
+    return try_reap_process(pid, out_exit_code);
 }
 
 uint32_t process_sbrk(process_t* p, int increment) {

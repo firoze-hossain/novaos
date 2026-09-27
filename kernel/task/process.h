@@ -6,7 +6,16 @@
 
 #define MAX_PROCESSES 16
 #define KERNEL_STACK_SIZE (8 * 1024)
-#define USER_STACK_SIZE   (8 * 1024)
+/* Phase 71: doubled from 8KB to 16KB after directly observing a real
+ * stack overflow - userland/novainit-rs/novainit.rs's own selftest
+ * genuinely exhausted the previous 8KB budget, confirmed by a
+ * distinctive, repeatable fault signature (eip landing inside the
+ * user stack's own address range, at an address decodable as literal
+ * string data rather than real code - a corrupted return address, not
+ * a coincidence). Not a guess: this exact fix was verified to
+ * resolve that exact, reproduced crash - see this phase's own
+ * PROGRESS.md entry for the full, honest investigation. */
+#define USER_STACK_SIZE   (16 * 1024)
 
 /* Where a user task's private stack is mapped in its OWN address
  * space. Every user process uses the same virtual address for it -
@@ -276,6 +285,29 @@ int process_exec_trusted(const char* path, const char** argv, int argc);
  * already finished and was slotted over" a real, documented
  * limitation rather than a silently-wrong answer. */
 int process_wait(int pid);
+
+/* Phase 71: the non-blocking sibling process_wait() itself can't be -
+ * kernel/task/svcinit.rs's own service supervisor needs to check on
+ * several, independent children in the same pass without ever
+ * blocking on one while the others also need attention, which process_
+ * wait()'s own infinite retry-and-yield loop structurally can't do.
+ * Checks `pid`'s own state exactly once, then returns immediately
+ * either way - never yields, never loops.
+ *
+ * Returns `true` (with `*out_exit_code` set, and the same kernel-
+ * stack/page-directory cleanup process_wait() itself does, so this is
+ * a genuine reap, not just a peek) if `pid` had already reached
+ * PROCESS_TERMINATED. Returns `false` otherwise - in which case
+ * `*out_exists` (if non-NULL) distinguishes *why*: `true` means `pid`
+ * is a real process that just hasn't terminated yet (the normal,
+ * expected case while supervising a healthy service); `false` means
+ * no such process exists in the table at all (never existed, or
+ * already reaped by an earlier call) - a real, meaningful difference
+ * process_wait() itself has always needed to tell apart too (see its
+ * own comment on why a nonexistent pid returns -1 immediately rather
+ * than blocking forever), just never had a way to report outward
+ * until this function's own out-parameter gave it one. */
+bool process_wait_nonblock(int pid, int* out_exit_code, bool* out_exists);
 
 /* Phase 27: true fork() semantics - unlike process_exec() (Phase 23,
  * deliberately exec-style, not this), this genuinely duplicates the

@@ -67,6 +67,26 @@ static inline int sys_exec(const char* path, const char** argv, int argc) {
     return result;
 }
 
+/* Phase 71: same EBX/ECX/EDX convention as sys_exec() just above,
+ * different syscall number - see kernel/task/exec_trust_demo.c's own,
+ * earlier (Phase 59) identical wrapper, and process_exec_trusted()'s
+ * own doc comment (kernel/task/process.c) for the full contract this
+ * delegates into. Needed here, specifically for NOVAINIT.ELF, because
+ * this task's own real, explicitly-granted can_spawn (see kernel_
+ * main()'s own sandbox_caps) is not itself inherited by a plain
+ * SYS_EXEC's own child by default - a real, deliberate least-
+ * privilege default (see process_exec()'s own doc comment) that this
+ * one, specific, genuinely-trusted case needs to opt back out of. */
+static inline int sys_exec_trusted(const char* path, const char** argv,
+                                    int argc) {
+    int result = SYS_EXEC_TRUSTED;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(path), "c"(argv), "d"(argc)
+                       : "memory", "cc");
+    return result;
+}
+
 static inline int sys_wait(int pid) {
     int result = SYS_WAIT;
     __asm__ volatile ("int $0x80" : "+a"(result) : "b"(pid) : "memory", "cc");
@@ -145,9 +165,66 @@ void sandbox_demo_task(void) {
     sys_write("\n[sandbox] Starting; my capability list only grants "
               "HELLO.TXT and the gateway (10.0.2.2).\n");
 
-    /* Phase 70: userland/wm-rs/wm.rs's own --selftest mode - run
-     * first, deliberately, before every other test in this task - see
-     * that file's own run_selftest() doc comment for why a synthetic-
+    /* Phase 71: userland/novainit-rs/novainit.rs's own --selftest
+     * mode - run first, deliberately, ahead of even WM.ELF's own
+     * selftest below (which had this exact spot until this phase) -
+     * this project's own separate, still-open scheduling-corruption
+     * bug has repeatedly struck this exact task, and running early,
+     * before that corruption has had a chance to accumulate, gives
+     * each new, real self-test the best practical chance of actually
+     * executing and being observed. Moved ahead of WM.ELF's own test
+     * specifically, not just to the front in general, for a second,
+     * separate, real reason: this kernel's own process table holds
+     * only MAX_PROCESSES=16 slots total, for the whole system's
+     * lifetime, never recycled (kernel/task/process.h's own honest,
+     * documented limitation) - this selftest alone needs roughly six
+     * of them (four services, two of which each need one real
+     * restart), a real budget WM.ELF's own, single-slot selftest
+     * running first would otherwise eat into for no good reason. Found
+     * this ordering sensitivity directly, not reasoned out in
+     * advance: an earlier attempt with WM.ELF's test still running
+     * first genuinely hit "[FAULT] process_exec: process table full"
+     * partway through this selftest's own service startup - see this
+     * phase's own PROGRESS.md entry for the full, honest account.
+     *
+     * SYS_EXEC_TRUSTED, not plain SYS_EXEC, deliberately: a real
+     * service supervisor's entire job is spawning its own child
+     * services, which means NOVAINIT.ELF itself needs can_spawn - and
+     * this task's own can_spawn (see kernel_main()'s own sandbox_caps)
+     * is not inherited by a plain SYS_EXEC's own child by default (a
+     * real, deliberate least-privilege default, not an oversight -
+     * see process_exec()'s own doc comment). Found this the hard way
+     * during this phase's own testing too: NOVAINIT.ELF's own attempts
+     * to exec its own test services were silently denied
+     * ("[SECURITY]... spawn capability not granted"), and this task's
+     * own real, already-granted can_spawn (proven by this same task's
+     * own earlier, separate SYS_SPAWN test above) simply wasn't being
+     * passed down to the child that actually needed it - see this
+     * phase's own PROGRESS.md entry for the full, honest account,
+     * including process_exec_trusted()'s own extension (kernel/task/
+     * process.c) that this fix relies on: can_spawn delegation, kept
+     * genuinely independent of can_open_any_file delegation, since a
+     * real caller can have one without the other. */
+    const char* exec_argv_svcinit[] = {"NOVAINIT.ELF", "--selftest"};
+    int exec_pid_svcinit = sys_exec_trusted("NOVAINIT.ELF", exec_argv_svcinit, 2);
+    if (exec_pid_svcinit >= 0) {
+        int exit_code_svcinit = sys_wait(exec_pid_svcinit);
+        if (exit_code_svcinit == 0) {
+            sys_write("[sandbox] PASS: NOVAINIT.ELF --selftest - real "
+                      "dependency ordering, restart-always, and "
+                      "restart-on-crash (both the crashing and the "
+                      "cleanly-exiting case) all behaved correctly.\n");
+        } else {
+            sys_write("[sandbox] FAIL: NOVAINIT.ELF --selftest reported "
+                      "at least one failing case.\n");
+        }
+    } else {
+        sys_write("[sandbox] FAIL: SYS_EXEC(\"NOVAINIT.ELF\") failed to "
+                  "start.\n");
+    }
+
+    /* Phase 70: userland/wm-rs/wm.rs's own --selftest mode - see that
+     * file's own run_selftest() doc comment for why a synthetic-
      * mouse-input self-test, run through the exact same real SYS_EXEC
      * path every other ELF test in this file already uses, is the
      * only practical way to automatically verify a real, interactive
@@ -156,19 +233,19 @@ void sandbox_demo_task(void) {
      * inject real mouse movement into a running QEMU instance).
      * run_selftest() itself never calls sys_gfx_enter() or touches
      * real hardware state at all - exit code 0 means every one of its
-     * five sub-cases passed. Placed here, first, rather than after
-     * HELLO.ELF/HELLOC.ELF (where it originally lived) for a real,
-     * honest reason: this project's own, separate, still-open
+     * five sub-cases passed. Runs second now, after NOVAINIT.ELF's own
+     * selftest just above - see that test's own comment for why the
+     * two were reordered this phase (a real, six-slot-vs-one-slot
+     * process-table budget difference, not an arbitrary swap) - this
+     * still runs well ahead of HELLO.ELF/HELLOC.ELF (where WM.ELF's
+     * own test originally lived, before Phase 70 moved it here first)
+     * for the same, separate, real reason that move was made in the
+     * first place: this project's own, separate, still-open
      * scheduling-corruption bug (PROGRESS.md) has repeatedly struck
-     * this exact task right around that later point during this
-     * phase's own testing, and confirmed (via directly removing this
-     * exact call and observing the identical crash still occur) to be
-     * completely unrelated to this new code - but running first, while
-     * this task's own state is freshest, gives this real, new self-
-     * test the best practical chance of actually executing and being
-     * observed, rather than being just as likely to get silently
-     * starved of a clean run as everything already known to sit in
-     * that same, already-tracked blast radius. */
+     * this exact task right around that later point, confirmed (via
+     * directly removing that exact call and observing the identical
+     * crash still occur) to be completely unrelated to either new
+     * program's own code. */
     const char* exec_argv_wm[] = {"WM.ELF", "--selftest"};
     int exec_pid_wm = sys_exec("WM.ELF", exec_argv_wm, 2);
     if (exec_pid_wm >= 0) {
