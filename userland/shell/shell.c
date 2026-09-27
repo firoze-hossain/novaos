@@ -76,6 +76,9 @@ static void cmd_help(void) {
     vga_puts("  wm        - a real, interactive ring-3 window manager: "
               "drag titlebars, click the taskbar to focus, drag to a "
               "screen edge to snap; q to exit\n");
+    vga_puts("  svcinit   - a real service supervisor: reads "
+              "SERVICES.CFG, starts services in dependency order, "
+              "restarts crashed ones automatically\n");
     vga_puts("  store     - Software Center GUI: install/remove packages "
               "with the mouse\n");
     vga_puts("  pkg list  - show available packages (pkg installed, "
@@ -605,6 +608,51 @@ static void cmd_wm(void) {
     vga_clear();
 }
 
+/* Phase 71: launches userland/novainit-rs/novainit.rs - a real
+ * service supervisor. A thin wrapper around process_exec_trusted()/
+ * process_wait(), the same overall shape cmd_wm() just above already
+ * uses for process_exec() - `svcinit` exists as its own, separate
+ * command purely for discoverability (matching that same precedent),
+ * not because launching it needs anything beyond what `run NOVAINIT.
+ * ELF` (were that command capable of the same delegation) would also
+ * need. Deliberately not wired as this kernel's own actual PID 1
+ * (SYSTEM.CFG's own init_path, still "SHELL.ELF" by default) - see
+ * novainit.rs's own module doc comment and PROGRESS.md's own honest
+ * account of why that larger, riskier step (replacing the very first
+ * process the whole rest of this kernel's own extensive, already-
+ * passing test suite implicitly depends on) was deliberately not
+ * taken this phase.
+ *
+ * process_exec_trusted(), not plain process_exec(), deliberately: a
+ * real service supervisor's entire job is spawning its own child
+ * services, so NOVAINIT.ELF itself needs can_spawn - and a plain
+ * process_exec()'d child never inherits its own parent's can_spawn by
+ * default (a real, deliberate least-privilege default - see process_
+ * exec()'s own doc comment in kernel/task/process.c). The shell
+ * itself already has can_spawn (granted via process_exec_as_shell()
+ * at boot, the same grant that lets `run` and `wm` above work at
+ * all), so process_exec_trusted() correctly delegates that same, real
+ * grant down to NOVAINIT.ELF - the identical fix, and the identical
+ * bug, kernel/task/sandbox_demo.c's own NOVAINIT.ELF --selftest call
+ * needed (see that file's own comment, and this phase's own
+ * PROGRESS.md, for the full account of how this was actually found:
+ * not reasoned out in advance, but hit directly, as a real, silent
+ * "[SECURITY]... spawn capability not granted" denial). */
+static void cmd_svcinit(void) {
+    if (!vfs_is_mounted()) {
+        vga_puts("svcinit: no filesystem mounted\n");
+        return;
+    }
+
+    const char* argv0 = "NOVAINIT.ELF";
+    int pid = process_exec_trusted("NOVAINIT.ELF", &argv0, 1);
+    if (pid < 0) {
+        vga_puts("svcinit: failed to load NOVAINIT.ELF\n");
+        return;
+    }
+    process_wait(pid);
+}
+
 static void cmd_reboot(void) {
     vga_puts("Rebooting...\n");
     /* 8042 keyboard controller "pulse output line" reset - the classic
@@ -644,6 +692,8 @@ static void dispatch(char* line) {
         cmd_gui();
     } else if (strcmp(line, "wm") == 0) {
         cmd_wm();
+    } else if (strcmp(line, "svcinit") == 0) {
+        cmd_svcinit();
     } else if (strcmp(line, "store") == 0) {
         store_run();
     } else if (strncmp(line, "cat ", 4) == 0) {

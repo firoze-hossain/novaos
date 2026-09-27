@@ -67,6 +67,15 @@ int sys_wait(int pid) {
     return result;
 }
 
+/* Phase 71: see SYS_WAIT_NONBLOCK's own doc comment (novasys.h) for
+ * the full contract - returns -2 (no such process), -1 (exists, still
+ * running), or 0 (terminated, with *out_exit_code written). */
+int sys_wait_nonblock(int pid, int* out_exit_code) {
+    int result = SYS_WAIT_NONBLOCK;
+    __asm__ volatile ("int $0x80" : "+a"(result) : "b"(pid), "c"(out_exit_code) : "memory", "cc");
+    return result;
+}
+
 void* sys_sbrk(int increment) {
     int result = SYS_SBRK;
     __asm__ volatile ("int $0x80"

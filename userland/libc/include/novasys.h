@@ -52,6 +52,7 @@
 #define SYS_EXEC_TRUSTED 38
 #define SYS_DNS_RESOLVE 39
 #define SYS_TFTP_FETCH 40
+#define SYS_WAIT_NONBLOCK 41
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -88,6 +89,7 @@ void sys_close(int handle);
 int sys_spawn(void);
 int sys_exec(const char* path, char** argv, int argc);
 int sys_wait(int pid);
+int sys_wait_nonblock(int pid, int* out_exit_code);
 void* sys_sbrk(int increment);
 int sys_fork(void);
 int sys_read_key(void);

@@ -887,6 +887,35 @@ static void handle_wait(registers_t* regs) {
     regs->eax = (uint32_t)result;
 }
 
+/* Phase 71: SYS_WAIT_NONBLOCK's own handler - see that syscall's own
+ * doc comment (kernel/arch/x86/cpu/syscall.h) and process_wait_
+ * nonblock()'s own (kernel/task/process.h) for the full contract.
+ * Deliberately writes the exit code out through a caller-provided
+ * pointer (ecx) rather than returning it directly, unlike handle_
+ * wait() above - a real exit code can itself be negative (a program
+ * is free to `return -1;`), so folding "still running" / "doesn't
+ * exist" / "terminated with code N" into a single signed return value
+ * the way handle_wait() does would make a genuinely negative exit
+ * code indistinguishable from one of those other states. The pointer
+ * itself is trusted exactly as every other pointer-output syscall in
+ * this file already is (handle_mouse_read() above, no different) -
+ * not a new trust boundary. */
+static void handle_wait_nonblock(registers_t* regs) {
+    int pid = (int)regs->ebx;
+    int* out_exit_code = (int*)regs->ecx;
+    bool exists = false;
+    int exit_code = 0;
+    bool terminated = process_wait_nonblock(pid, &exit_code, &exists);
+    if (terminated) {
+        *out_exit_code = exit_code;
+        regs->eax = 0;
+    } else if (exists) {
+        regs->eax = (uint32_t)-1; /* exists, still running */
+    } else {
+        regs->eax = (uint32_t)-2; /* no such process */
+    }
+}
+
 static void handle_sbrk(registers_t* regs) {
     process_t* p = process_current();
     int increment = (int)regs->ebx;
@@ -1220,6 +1249,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_TFTP_FETCH:
             handle_tftp_fetch(regs);
+            break;
+
+        case SYS_WAIT_NONBLOCK:
+            handle_wait_nonblock(regs);
             break;
 
         default:

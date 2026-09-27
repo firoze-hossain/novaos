@@ -434,6 +434,18 @@
  * same reasoning. */
 #define SYS_TFTP_FETCH 40
 
+/* Phase 71: exposes process_wait_nonblock() (kernel/task/process.h)
+ * to ring-3 - userland/novainit-rs/'s own real service supervisor
+ * needs to check on several, independently-running child services in
+ * the same pass without ever blocking on any one of them, which the
+ * existing, blocking SYS_WAIT structurally can't do (checking child
+ * A, B, then C in turn would mean blocking on A even while B or C
+ * might already need attention). See process_wait_nonblock()'s own
+ * doc comment for the full contract this syscall's own handler
+ * (handle_wait_nonblock(), kernel/arch/x86/cpu/syscall.c) just
+ * forwards to directly. */
+#define SYS_WAIT_NONBLOCK 41
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
