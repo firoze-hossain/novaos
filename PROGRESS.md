@@ -7649,7 +7649,97 @@ entire, extensive, already-passing test suite implicitly depends on -
 that is real, separate, future work, deliberately not taken on inside
 this same phase.
 
-## Phase 72 and beyond
+## Phase 72: the long-tracked "random" scheduling-corruption bug - root-caused and fixed for real
+
+**Status: found the actual, confirmed root cause (not another mitigation
+or workaround), fixed it, and verified it directly: 15 consecutive full
+test runs after the fix, all 81 assertions passing every single time -
+the first time that has ever happened in this project's own tracked
+history.**
+
+### The real bug
+
+`kernel/task/scheduler.c`'s own `pick_next_locked()` treated
+`PROCESS_RUNNING` as a valid pick target unconditionally - genuinely
+necessary for the single-runnable-process case (nothing else is
+`PROCESS_READY`, so the currently running process has to be able to
+"pick itself again" rather than `do_schedule()` finding nothing at
+all), but with no check for *which* CPU that process was actually
+running on. This kernel runs real SMP (Phase 56/57, two genuine CPUs).
+A process actively, currently executing on CPU 0 stays
+`PROCESS_RUNNING` for the entire time CPU 1's own, completely
+independent `do_schedule()` call is scanning the same, shared process
+table - so CPU 1 could, and directly confirmed did, pick that same
+process as its own "next" and load its stale, already-consumed saved
+stack pointer (a process's own `esp` field is only ever updated when
+*it itself* is the outgoing process being switched away from - not
+while it's actively running and using that same stack memory for its
+own, completely unrelated current work). Two CPUs then executing on
+the identical kernel stack at the same physical instant is genuine,
+catastrophic corruption - not memory corruption in the abstract, two
+real CPUs colliding on one real stack.
+
+### Found by tracing real evidence, not by guessing
+
+This project's own, already-existing (prior session) diagnostic
+scaffolding in `scheduler.c` - checking whether a process's saved
+EFLAGS had an unexpectedly-set Trap Flag immediately before a context
+switch - caught the exact moment: a saved "eflags" value of
+`0x676E6968`. Decoded directly to ASCII, that's "hing" - an exact
+4-byte slice of the word "crashing", from this project's own long
+`sandbox_demo_task` log message (`kernel/task/sandbox_demo.c`'s own
+`NOVAINIT.ELF --selftest` pass message). Adding direct address
+instrumentation to `kernel_log()` confirmed it precisely: the
+corrupted stack slot sat at exactly the byte offset within
+`kernel_log()`'s own local 256-byte buffer where that word's own bytes
+landed. A genuine stack-overflow hypothesis was tested and directly
+ruled out: doubling `KERNEL_STACK_SIZE` (8KB to 16KB) as a controlled
+experiment reproduced the identical corrupted value at the identical
+relative offset, unchanged - which a real overflow, sensitive to
+available stack depth, would not do. That pointed straight at two
+CPUs sharing one process's stack rather than one CPU running out of
+its own.
+
+### The fix
+
+`pick_next_locked()` now takes the calling CPU's own index and only
+accepts a `PROCESS_RUNNING` candidate when it's genuinely
+`current[cpu_index]` - that calling CPU's own current process - never
+another CPU's. All three call sites (`do_schedule()`,
+`scheduler_start()`, `scheduler_ap_join()`) updated to pass their own,
+correct CPU index.
+
+### A second, separate, genuine issue this fix exposed
+
+Once the crash no longer masked it, a real, separate resource
+constraint became directly visible: `[FAULT] process_exec: process
+table full`, logged repeatedly. `MAX_PROCESSES` (16, slots never
+recycled - an existing, documented limitation) was genuinely too small
+for this project's own, steadily grown boot-time test sequence across
+many phases of real selftests, each exec'ing several real child
+processes. Raised to 32 - simple headroom, not a fix for the
+underlying "never recycled" limitation itself, which remains real,
+documented, and intentionally not addressed here (true slot recycling
+is separate, larger, riskier work).
+
+### Verified directly, not just claimed
+
+15 consecutive full `make test` runs after the scheduler fix - 12
+before the temporary diagnostic scaffolding was removed, 3 more after
+- every single one passing all 81 assertions with zero exceptions.
+`tools/python/test_runner.py`'s own `known_flaky` set - which had
+carried a long, explicit list of tests affected by this exact bug
+since Phase 61 - is now empty of every entry tied to it; the mechanism
+itself is kept, documented, and available, since a genuinely different
+future flakiness source is still realistic, but nothing in it today is
+inherited, unexamined baggage. One real, separate, low-frequency issue
+(a USB `GET_DESCRIPTOR` protocol exchange occasionally lost to QEMU's
+own emulation timing, observed once in roughly seventeen runs, and
+structurally unrelated - a hardware protocol exchange, not this
+kernel's own process/stack state) is the only entry left, on its own,
+honestly separate terms.
+
+## Phase 73 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

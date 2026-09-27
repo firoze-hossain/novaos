@@ -4,8 +4,23 @@
 #include "../include/types.h"
 #include "../arch/x86/cpu/isr.h"
 
-#define MAX_PROCESSES 16
-#define KERNEL_STACK_SIZE (8 * 1024)
+/* Phase 72: raised from 16 to 32. A real, separate, genuine resource
+ * constraint from the SMP double-scheduling bug fixed this same phase
+ * (kernel/task/scheduler.c's own pick_next_locked() - see that fix's
+ * own comment for the full account) - slots are never recycled once
+ * used (see kfree()/free_user_address_space()'s own callers, process_
+ * wait_nonblock()'s try_reap_process()), and this project's own,
+ * steadily grown boot-time test sequence (multiple selftests, each
+ * exec'ing several real child processes of their own) now genuinely
+ * needs more than 16 slots' worth of total process creation across a
+ * single boot, confirmed directly by a real, repeatedly-logged
+ * "process_exec: process table full" once the earlier, unrelated
+ * crash was no longer masking it. Simple headroom, not a structural
+ * fix for the underlying "never recycled" limitation itself, which
+ * remains real, documented, and unresolved - true slot recycling is
+ * a separate, larger, riskier change deliberately not taken on here. */
+#define MAX_PROCESSES 32
+#define KERNEL_STACK_SIZE (16 * 1024)
 /* Phase 71: doubled from 8KB to 16KB after directly observing a real
  * stack overflow - userland/novainit-rs/novainit.rs's own selftest
  * genuinely exhausted the previous 8KB budget, confirmed by a

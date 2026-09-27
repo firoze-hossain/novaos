@@ -60,16 +60,54 @@ void scheduler_add(process_t* p) {
  * skips any bsp_only process - currently just idle (see process_t's
  * own comment in process.h) - since an AP picking it up would hlt
  * forever waiting for a timer interrupt that's only ever routed to
- * the BSP. */
-static process_t* pick_next_locked(bool for_ap) {
+ * the BSP.
+ *
+ * A real, severe SMP race, found and fixed here: PROCESS_RUNNING is a
+ * valid pick target - genuinely needed for the single-runnable-
+ * process case (nothing else is PROCESS_READY, so the currently
+ * running process has to be able to "pick itself again" to keep
+ * going rather than do_schedule() finding nothing at all) - but this
+ * function used to accept *any* PROCESS_RUNNING process found by the
+ * round-robin search, not specifically the calling CPU's own current
+ * one. With two real CPUs (Phase 57's own SMP rewrite - see this
+ * file's own header comment) genuinely calling this at the same
+ * physical instant, a process actively running on CPU 0 is still
+ * PROCESS_RUNNING for the entire time CPU 1's own, completely
+ * independent do_schedule() call is scanning the table - so CPU 1
+ * could, and directly confirmed did, pick that same process as its
+ * own "next" and load its stale, long-since-consumed saved esp (the
+ * process's own esp field is only ever updated when *it itself* is
+ * the outgoing prev being switched away from - not while it's
+ * actively running and reusing that same stack memory for its own,
+ * completely unrelated current work, such as a long kernel_log() call
+ * whose own local buffer happens to overlap that stale address).
+ * Two CPUs then executing on the identical kernel stack at once is
+ * real, catastrophic corruption - confirmed directly as the actual
+ * explanation for this project's own long-tracked, seemingly random
+ * scheduling-corruption bug (PROGRESS.md), not theorized: the
+ * corrupted "eflags" value read back at the crash site decoded
+ * exactly to ASCII bytes from an in-flight log message string, at the
+ * exact stack offset kernel_log()'s own local buffer would occupy.
+ * `current[cpu_index]` (Phase 57's own per-CPU "who's running where"
+ * state) is exactly the information needed to close this: a
+ * PROCESS_RUNNING candidate is only ever a valid pick when it's
+ * genuinely *this calling CPU's own* current process, never another
+ * CPU's. */
+static process_t* pick_next_locked(bool for_ap, uint8_t cpu_index) {
     for (int i = 1; i <= MAX_PROCESSES; i++) {
         int idx = (search_cursor + i) % MAX_PROCESSES;
         if (idx < 0) {
             idx += MAX_PROCESSES;
         }
         process_t* p = process_table_entry(idx);
-        if (p != NULL &&
-            (p->state == PROCESS_READY || p->state == PROCESS_RUNNING)) {
+        if (p == NULL) {
+            continue;
+        }
+        bool eligible = (p->state == PROCESS_READY) ||
+                        (p->state == PROCESS_RUNNING &&
+                         cpu_index < SCHED_MAX_CPUS &&
+                         p == current[cpu_index]);
+        if (eligible) {
             if (for_ap && p->bsp_only) {
                 continue;
             }
@@ -99,7 +137,7 @@ static void do_schedule(uint8_t cpu_index) {
         return; /* this CPU hasn't started scheduling yet */
     }
 
-    process_t* next = pick_next_locked(cpu_index != 0);
+    process_t* next = pick_next_locked(cpu_index != 0, cpu_index);
     if (next == NULL) {
         /* Nothing eligible at all - shouldn't happen, the idle task
          * never terminates, but fail safe rather than switch into
@@ -145,70 +183,22 @@ static void do_schedule(uint8_t cpu_index) {
 
     tss_set_kernel_stack(cpu_index, next->kernel_stack_top);
     paging_switch_address_space(next->page_directory_phys);
-    /* TEMPORARY diagnostic: check this CPU's own, live eflags right
-     * before switch_context() ever runs - if TF (bit 8) is already
-     * set HERE, the corruption happened before this point (somewhere
-     * earlier in do_schedule(), or before do_schedule() was even
-     * called) rather than inside switch_context() or in previously-
-     * saved stack data. */
-    {
-        extern void kernel_log(const char* format, ...);
-        uint32_t live_eflags;
-        __asm__ volatile ("pushf\n\tpop %0" : "=r"(live_eflags) : : "memory");
-        if (live_eflags & 0x100u) {
-            kernel_log("[DIAG] TF already set on live CPU eflags "
-                       "(0x%x) BEFORE switch_context, switching from "
-                       "'%s' (pid %d) to '%s' (pid %d)\n",
-                       (int)live_eflags, prev->name, prev->pid,
-                       next->name, next->pid);
-        }
-    }
-    /* TEMPORARY diagnostic: check next's own SAVED eflags (the exact
-     * value switch_context's own popfd is about to consume, sitting
-     * at *next->esp since pushfd is the last of switch_context's own
-     * pushes - see context_switch.asm) directly, before the switch
-     * itself ever runs. If TF is already set HERE, the corruption
-     * exists in next's own, already-saved stack memory - pointing at
-     * something overwriting it while next was suspended, not a bug in
-     * switch_context's own logic. */
-    {
-        extern void kernel_log(const char* format, ...);
-        uint32_t saved_eflags = *(uint32_t*)next->esp;
-        if (saved_eflags & 0x100u) {
-            kernel_log("[DIAG] TF already set in '%s' (pid %d)'s own "
-                       "SAVED eflags (0x%x) at *next->esp=0x%x, before "
-                       "switch_context even runs (switching from '%s' "
-                       "pid %d)\n",
-                       next->name, next->pid, (int)saved_eflags,
-                       (int)next->esp, prev->name, prev->pid);
-            kernel_log("[DIAG] '%s' (pid %d) stack bounds: alloc=0x%x "
-                       "top=0x%x esp=0x%x (esp - alloc = %d bytes of "
-                       "headroom remaining above the allocation's own "
-                       "low end)\n",
-                       next->name, next->pid, (int)next->kernel_stack_alloc,
-                       (int)next->kernel_stack_top, (int)next->esp,
-                       (int)next->esp - (int)next->kernel_stack_alloc);
-            /* Full memory map of every process's own kernel stack, to
-             * find whatever is adjacent to next's own (particularly
-             * anything whose own alloc/top is close to next's own top
-             * - the corruption sits near next's own top, so an
-             * adjacent task's stack overflowing downward past its own
-             * low end is the most direct remaining explanation once
-             * next's own headroom above rules out next overflowing
-             * itself). */
-            extern process_t* process_table_entry(int index);
-            for (int pi = 0; pi < 16; pi++) {
-                process_t* p = process_table_entry(pi);
-                if (p != NULL && p->kernel_stack_alloc != NULL) {
-                    kernel_log("[DIAG]   table[%d]: '%s' (pid %d) "
-                               "alloc=0x%x top=0x%x state=%d\n",
-                               pi, p->name, p->pid,
-                               (int)p->kernel_stack_alloc,
-                               (int)p->kernel_stack_top, (int)p->state);
-                }
-            }
-        }
-    }
+    /* This project's own, long-tracked "random" scheduling-corruption
+     * bug (PROGRESS.md) was root-caused right here, at this exact call
+     * - not inside switch_context() itself, and not from a genuine
+     * stack overflow. Two temporary diagnostic checks lived in this
+     * exact spot during that investigation (this CPU's own live
+     * eflags, and next's own saved eflags at *next->esp, both checked
+     * for an unexpectedly-set Trap Flag immediately before this call)
+     * and together found the real, confirmed cause: pick_next_locked()
+     * above (see its own, extensive comment) could pick a process that
+     * was genuinely, actively running on a *different* CPU at this
+     * same physical instant, loading that process's stale, already-
+     * consumed saved esp - corrupting whichever process actually owned
+     * it, from two CPUs executing the identical kernel stack at once.
+     * Fixed there; removed here once confirmed, rather than carrying
+     * two extra checks (plus a full process-table stack dump) on this
+     * kernel's own hottest, most frequently-executed path forever. */
     switch_context(&prev->esp, next->esp);
     /* Execution only reaches here once `prev` is chosen to run again
      * by some future switch_context() call - i.e. this line "returns"
@@ -221,7 +211,7 @@ static void do_schedule(uint8_t cpu_index) {
 
 void scheduler_start(void) {
     uint32_t flags = spinlock_acquire(&scheduler_lock);
-    process_t* first = pick_next_locked(false);
+    process_t* first = pick_next_locked(false, 0);
     if (first == NULL) {
         spinlock_release(&scheduler_lock, flags);
         kernel_panic("scheduler_start: no processes to run");
@@ -265,7 +255,7 @@ void scheduler_ap_join(uint8_t cpu_index) {
     process_t* first = NULL;
     for (;;) {
         uint32_t flags = spinlock_acquire(&scheduler_lock);
-        first = pick_next_locked(true);
+        first = pick_next_locked(true, cpu_index);
         if (first != NULL) {
             current[cpu_index] = first;
             first->state = PROCESS_RUNNING;
