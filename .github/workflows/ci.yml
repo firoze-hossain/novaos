@@ -32,6 +32,13 @@ jobs:
       - name: Build ISO
         run: make
 
+      - name: libc host tests
+        # Phase 73: the userland C library's allocator, printf, stdio and
+        # environment code, run against a fake kernel (about a second, no
+        # QEMU). Skips itself, exiting 0, if the runner cannot execute
+        # 32-bit binaries.
+        run: make libc-test
+
       - name: Headless boot smoke test
         # A real, honest accommodation for a real, still-open problem,
         # not a way to hide it: this project has a known, non-

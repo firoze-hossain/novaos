@@ -33,6 +33,16 @@ void vfs_list_files(vfs_list_callback_t callback);
  * if not mounted / not found. */
 int vfs_read_file(const char* filename, void* buf, uint32_t buf_size);
 
+/* Phase 73: reads at most `len` bytes starting `offset` bytes into a
+ * root-directory file. Same lookup order as vfs_read_file() (FAT32
+ * first, ext2 as the fallback). Returns bytes read (0 at/after end of
+ * file, or when len == 0), or -1 if not mounted / not found - so a
+ * len-0 call is an existence check. This is what lets SYS_READ serve a
+ * file of any size in pieces; vfs_read_file() can only ever return the
+ * first buf_size bytes. */
+int vfs_read_file_range(const char* filename, uint32_t offset, void* buf,
+                        uint32_t len);
+
 /* Creates a new root-directory file. Fails if the name already exists
  * or the filesystem isn't mounted - see fat32_write_file(). */
 bool vfs_write_file(const char* filename, const void* data, uint32_t size);

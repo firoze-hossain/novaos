@@ -353,12 +353,25 @@ debug: $(ISO_FILE) $(DISK_IMG)
 # serial log, and fails (non-zero exit) if the expected subsystem
 # init markers are missing. This is what scripts/test.sh and CI use,
 # and it works identically on Linux, macOS, and Windows/WSL2.
-TEST_TIMEOUT ?= 40
+# Phase 73: 40 -> 150 (mirrored in tools/python/test_runner.py) - but only as
+# an UPPER BOUND: the runner now stops as soon as every expected line has
+# appeared plus a short grace period, so a healthy run ends in about
+# 45-50s. See the comment there for why a fixed window could not work.
+TEST_TIMEOUT ?= 150
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
 	    --iso $(ISO_FILE) --disk $(DISK_IMG)
+
+# Phase 73: the host-side libc tests - the real userland/libc sources run
+# against a fake kernel as an ordinary 32-bit Linux program, with
+# randomized allocator stress and every internal invariant checked after
+# each step (see userland/libc/tests/libc_host_test.c). Takes about a
+# second, needs no QEMU, and catches what a boot test cannot. Skips (exit
+# 0, with a message) on a machine that cannot run 32-bit binaries.
+libc-test:
+	@sh userland/libc/tests/run.sh
 
 # Clean
 clean:
@@ -446,4 +459,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test clean setup check-prereqs help install-image test-custom-boot

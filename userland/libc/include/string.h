@@ -16,4 +16,9 @@ void* memmove(void* dest, const void* src, size_t n);
 void* memset(void* dest, int value, size_t n);
 int memcmp(const void* a, const void* b, size_t n);
 
+/* Phase 73: the message for an errno.h value (see errno.h). Always
+ * returns a valid static string - "Unknown error" for a value this
+ * libc has no message for. */
+const char* strerror(int errnum);
+
 #endif

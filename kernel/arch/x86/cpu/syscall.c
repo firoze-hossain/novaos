@@ -271,29 +271,44 @@ static void handle_read(registers_t* regs) {
         return;
     }
 
-    /* No real per-handle buffering - just re-reads the whole file (up
-     * to a fixed scratch size) on every call and slices out whatever
-     * the current offset/max_len asks for. Fine for the small demo
-     * files this is exercised against; a real implementation would
-     * want the underlying vfs_read_file() to support an offset
-     * directly instead of always reading from the start. */
-    int total = vfs_read_file(open_files[handle].filename, read_scratch,
-                               sizeof(read_scratch));
-    if (total < 0) {
+    /* Phase 73: a real offset read. This used to re-read the whole file
+     * into read_scratch on every call and slice out the requested piece
+     * - which meant a file was only ever readable up to the scratch
+     * buffer's 4096 bytes: every byte past that was silently
+     * unreachable and reads just reported end of file. (fat32/ext2's
+     * whole-file readers cap at buf_size without saying so.) Now the
+     * filesystem is asked for exactly [offset, offset + want) and
+     * nothing else, so a file of any size can be read to the end.
+     *
+     * One call returns at most sizeof(read_scratch) bytes - a short read
+     * is always legal for read(), and every caller in the tree already
+     * loops until it gets 0 (cat.c, cp.rs, the ring-3 shell, libc's
+     * fopen()). The bounce buffer is kept (rather than reading straight
+     * into the caller's buffer) for the same reason it always existed:
+     * the copy into user memory happens under open_files_lock either
+     * way, and one shared kernel buffer keeps that copy a plain
+     * memcpy() of data the filesystem has already finished producing.
+     *
+     * A file that does not exist reports -1 (the first read on a lazily
+     * opened handle is where that is discovered - see handle_open());
+     * end of file is 0. max_len == 0 is therefore a valid, cheap
+     * existence probe. */
+    uint32_t want = (max_len < sizeof(read_scratch)) ? max_len
+                                                     : (uint32_t)sizeof(read_scratch);
+    int got = vfs_read_file_range(open_files[handle].filename,
+                                  open_files[handle].offset, read_scratch,
+                                  want);
+    if (got < 0) {
         spinlock_release(&open_files_lock, flags);
         regs->eax = (uint32_t)-1;
         return;
     }
 
-    uint32_t remaining = ((uint32_t)total > open_files[handle].offset)
-                              ? (uint32_t)total - open_files[handle].offset
-                              : 0;
-    uint32_t to_copy = (remaining < max_len) ? remaining : max_len;
-    memcpy(buf, read_scratch + open_files[handle].offset, to_copy);
-    open_files[handle].offset += to_copy;
+    memcpy(buf, read_scratch, (uint32_t)got);
+    open_files[handle].offset += (uint32_t)got;
 
     spinlock_release(&open_files_lock, flags);
-    regs->eax = to_copy;
+    regs->eax = (uint32_t)got;
 }
 
 static void handle_write_handle(registers_t* regs) {
@@ -823,6 +838,92 @@ static void handle_exec_trusted(registers_t* regs) {
     regs->eax = (uint32_t)new_pid;
 }
 
+/* Phase 73: counts the entries of a caller-supplied, NULL-terminated
+ * envp array, never looking at more than MAX_EXEC_ENV + 1 slots. Returns
+ * the count, or -1 if the array is longer than MAX_EXEC_ENV (which
+ * process_exec_internal() would refuse anyway - rejecting here just
+ * avoids walking further into caller memory to find out). A NULL envp
+ * is a valid, empty environment. */
+static int count_envp(const char** envp) {
+    if (envp == NULL) {
+        return 0;
+    }
+    int n = 0;
+    while (envp[n] != NULL) {
+        n++;
+        if (n > MAX_EXEC_ENV) {
+            return -1;
+        }
+    }
+    return n;
+}
+
+/* Phase 73's SYS_EXEC_ENV - see syscall.h's own comment on this syscall
+ * for the full contract and why it is a separate number from SYS_EXEC.
+ * Gated by can_spawn, granting the new process nothing - exactly like
+ * handle_exec() above, plus an environment. */
+static void handle_exec_env(registers_t* regs) {
+    process_t* p = process_current();
+
+    if (p == NULL || !p->can_spawn) {
+        kernel_log("[SECURITY] pid %d denied SYS_EXEC_ENV - spawn capability "
+                   "not granted\n", p != NULL ? p->pid : -1);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    const char* path = (const char*)regs->ebx;
+    const char** argv = (const char**)regs->ecx;
+    int argc = (int)regs->edx;
+    const char** envp = (const char**)regs->esi;
+
+    int envc = count_envp(envp);
+    if (envc < 0) {
+        kernel_log("[WARN] pid %d SYS_EXEC_ENV('%s'): environment has more "
+                   "than %d entries\n", p->pid, path, MAX_EXEC_ENV);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int new_pid = process_exec_env(path, argv, argc, envp, envc);
+    kernel_log("[SYSCALL] pid %d SYS_EXEC_ENV('%s', %d env) (capability "
+               "granted) -> new pid %d\n", p->pid, path, envc, new_pid);
+    regs->eax = (uint32_t)new_pid;
+}
+
+/* Phase 73's SYS_EXEC_TRUSTED_ENV - handle_exec_trusted() plus an
+ * environment; the delegation logic itself lives in
+ * process_exec_trusted_env(), unchanged from process_exec_trusted(). */
+static void handle_exec_trusted_env(registers_t* regs) {
+    process_t* p = process_current();
+
+    if (p == NULL || !p->can_spawn) {
+        kernel_log("[SECURITY] pid %d denied SYS_EXEC_TRUSTED_ENV - spawn "
+                   "capability not granted\n", p != NULL ? p->pid : -1);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    const char* path = (const char*)regs->ebx;
+    const char** argv = (const char**)regs->ecx;
+    int argc = (int)regs->edx;
+    const char** envp = (const char**)regs->esi;
+
+    int envc = count_envp(envp);
+    if (envc < 0) {
+        kernel_log("[WARN] pid %d SYS_EXEC_TRUSTED_ENV('%s'): environment "
+                   "has more than %d entries\n", p->pid, path, MAX_EXEC_ENV);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int new_pid = process_exec_trusted_env(path, argv, argc, envp, envc);
+    kernel_log("[SYSCALL] pid %d SYS_EXEC_TRUSTED_ENV('%s', %d env) "
+               "(can_open_any_file=%d delegated) -> new pid %d\n", p->pid,
+               path, envc, (int)p->can_open_any_file, new_pid);
+    regs->eax = (uint32_t)new_pid;
+}
+
 /* Phase 60's SYS_DNS_RESOLVE - see syscall.h's own comment on this
  * syscall for the full reasoning (why it's ungated, why dns_resolve()
  * itself needed a Phase-58-style scheduler_yield() fix first). */
@@ -1253,6 +1354,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_WAIT_NONBLOCK:
             handle_wait_nonblock(regs);
+            break;
+
+        case SYS_EXEC_ENV:
+            handle_exec_env(regs);
+            break;
+
+        case SYS_EXEC_TRUSTED_ENV:
+            handle_exec_trusted_env(regs);
             break;
 
         default:

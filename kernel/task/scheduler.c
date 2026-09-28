@@ -15,7 +15,8 @@
 #include "../lib/spinlock.h"
 #include "../include/kernel.h"
 
-extern void switch_context(uint32_t* old_esp_out, uint32_t new_esp);
+extern void switch_context(uint32_t* old_esp_out, uint32_t new_esp,
+                           volatile uint32_t* done_flag);
 
 /* Phase 57: one "currently running process" slot per schedulable CPU,
  * replacing the single shared `current` this file had through Phase
@@ -103,7 +104,8 @@ static process_t* pick_next_locked(bool for_ap, uint8_t cpu_index) {
         if (p == NULL) {
             continue;
         }
-        bool eligible = (p->state == PROCESS_READY) ||
+        /* Phase 73: READY is not enough - see process_t.off_cpu. */
+        bool eligible = (p->state == PROCESS_READY && p->off_cpu) ||
                         (p->state == PROCESS_RUNNING &&
                          cpu_index < SCHED_MAX_CPUS &&
                          p == current[cpu_index]);
@@ -156,6 +158,7 @@ static void do_schedule(uint8_t cpu_index) {
         prev->state = PROCESS_READY;
     }
     next->state = PROCESS_RUNNING;
+    next->off_cpu = 0; /* on a CPU again until it is switched away from */
     current[cpu_index] = next;
 
     /* Released before switch_context() - a second CPU spinning on
@@ -199,7 +202,7 @@ static void do_schedule(uint8_t cpu_index) {
      * Fixed there; removed here once confirmed, rather than carrying
      * two extra checks (plus a full process-table stack dump) on this
      * kernel's own hottest, most frequently-executed path forever. */
-    switch_context(&prev->esp, next->esp);
+    switch_context(&prev->esp, next->esp, &prev->off_cpu);
     /* Execution only reaches here once `prev` is chosen to run again
      * by some future switch_context() call - i.e. this line "returns"
      * an arbitrary number of scheduler ticks later, quite normal for
@@ -234,7 +237,8 @@ void scheduler_start(void) {
     tss_set_kernel_stack(0, first->kernel_stack_top);
     paging_switch_address_space(first->page_directory_phys);
 
-    switch_context(&startup_esp[0], first->esp);
+    first->off_cpu = 0;
+    switch_context(&startup_esp[0], first->esp, NULL);
     /* Never returns: the boot stack this call happened on is now
      * permanently abandoned. */
 }
@@ -279,7 +283,8 @@ void scheduler_ap_join(uint8_t cpu_index) {
     tss_set_kernel_stack(cpu_index, first->kernel_stack_top);
     paging_switch_address_space(first->page_directory_phys);
 
-    switch_context(&startup_esp[cpu_index], first->esp);
+    first->off_cpu = 0;
+    switch_context(&startup_esp[cpu_index], first->esp, NULL);
     /* Never returns - same reasoning as scheduler_start(). */
 }
 

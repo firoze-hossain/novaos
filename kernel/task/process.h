@@ -187,6 +187,23 @@ typedef struct process {
      * zero-initialization in process_init()) for every other process,
      * so ordinary work is free to land on either CPU. */
     bool bsp_only;
+
+    /* Phase 73: 1 when no CPU is executing on (or in the middle of
+     * saving state into) this process any more; 0 from the moment the
+     * scheduler picks it until the switch AWAY from it has finished.
+     * do_schedule() marks the outgoing process READY under
+     * scheduler_lock but has to release that lock BEFORE switch_context()
+     * has saved the process's new kernel esp - so without this, the other
+     * CPU could pick it in that gap and load its STALE saved esp, running
+     * it from an old point on a stack the first CPU is still using (or,
+     * for a process that had never been saved, a garbage esp: the
+     * observed crash was `mov esp, <garbage>` inside switch_context).
+     * switch_context() sets it to 1 the instant ESP leaves the old stack;
+     * pick_next_locked() will not choose a READY process until then.
+     * Newly created processes start at 1 (see process_publish()).
+     * Placed last in the struct so no existing field's offset changes.
+     * volatile: written by one CPU, read by another. */
+    volatile uint32_t off_cpu;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -241,6 +258,21 @@ int process_create_sandboxed_task_trusted(const char* name,
  * list. */
 #define MAX_EXEC_ARGS 8
 
+/* Phase 73: the environment a process can hand to a child at exec time
+ * (SYS_EXEC_ENV / SYS_EXEC_TRUSTED_ENV) - at most MAX_EXEC_ENV
+ * "NAME=value" strings totalling at most MAX_EXEC_ENV_BYTES including
+ * each string's NUL. Mirrored exactly by NOVA_ENV_MAX_VARS /
+ * NOVA_ENV_MAX_BYTES in userland/libc/include/novasys.h, and enforced
+ * by libc's own setenv()/putenv() too, so a program cannot build an
+ * environment its own children would then be refused. The strings live
+ * on the child's initial user stack, which is only USER_STACK_SIZE
+ * (16KB) in total - hence MAX_EXEC_STACK_BYTES below, which caps
+ * argv + envp (strings AND pointer arrays) together at half of it and
+ * leaves the program at least 8KB of real stack. */
+#define MAX_EXEC_ENV       32
+#define MAX_EXEC_ENV_BYTES 4096
+#define MAX_EXEC_STACK_BYTES (USER_STACK_SIZE / 2)
+
 /* Loads a real ELF32 executable from the filesystem and runs it as a
  * brand new process - NovaOS's answer to exec(), deliberately not
  * fork()+exec() as two separate steps. A true fork() (duplicating a
@@ -258,6 +290,17 @@ int process_create_sandboxed_task_trusted(const char* name,
  * process's pid, or -1 on failure (bad path, invalid ELF, out of
  * memory/process slots). */
 int process_exec(const char* path, const char** argv, int argc);
+
+/* Phase 73: process_exec() plus an environment for the new process.
+ * `envp` is an array of `envc` "NAME=value" strings (NULL/0 for none -
+ * exactly what plain process_exec() passes); they are copied onto the
+ * new process's initial stack in the standard position after argv, where
+ * crt0.asm (userland/libc/crt0.asm) finds them and publishes them as
+ * `environ`. Fails (-1, before anything is allocated) if envc exceeds
+ * MAX_EXEC_ENV, the strings exceed MAX_EXEC_ENV_BYTES, or argv plus
+ * envp together would not fit in MAX_EXEC_STACK_BYTES. */
+int process_exec_env(const char* path, const char** argv, int argc,
+                     const char** envp, int envc);
 
 /* Phase 29: like process_exec(), but grants the new process access to
  * `filenames` (up to MAX_CAPABILITIES) before it ever runs - for
@@ -291,6 +334,11 @@ int process_exec_as_shell(const char* path, const char** argv, int argc);
  * process) is treated as "nothing to delegate," the same
  * fail-closed default plain process_exec() already uses. */
 int process_exec_trusted(const char* path, const char** argv, int argc);
+
+/* Phase 73: process_exec_trusted() plus an environment - see
+ * process_exec_env() above for the envp contract. */
+int process_exec_trusted_env(const char* path, const char** argv, int argc,
+                             const char** envp, int envc);
 
 /* Blocks (yielding repeatedly) until process `pid` reaches
  * PROCESS_TERMINATED, then returns its exit code. Returns -1

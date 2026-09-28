@@ -9,7 +9,7 @@
 #include <string.h>
 
 int main(int argc, char** argv, char** envp) {
-    (void)envp; /* always empty for now - see PROGRESS.md */
+    (void)envp; /* empty unless the parent passed one - see getenv() */
 
     printf("Hello from a REAL C program on NovaOS!\n");
     printf("argc = %d\n", argc);

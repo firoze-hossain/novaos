@@ -373,15 +373,26 @@ static bool insert_dirent(const char* name, uint32_t inode_num) {
 /* Reads up to buf_size bytes of an inode's file content into buf,
  * following direct then singly-indirect block pointers (see the
  * scope note in ext2.h). Returns the number of bytes actually read. */
-static uint32_t read_inode_data(const ext2_inode_t* inode, void* buf,
-                                 uint32_t buf_size) {
-    uint32_t to_read =
-        (inode->size < buf_size) ? inode->size : buf_size;
+static uint32_t read_inode_data_at(const ext2_inode_t* inode,
+                                    uint32_t offset, void* buf,
+                                    uint32_t buf_size) {
+    if (offset >= inode->size) {
+        return 0;
+    }
+    uint32_t to_read = inode->size - offset;
+    if (to_read > buf_size) {
+        to_read = buf_size;
+    }
     uint32_t bytes_read = 0;
     uint8_t* out = (uint8_t*)buf;
 
     bool indirect_loaded = false;
-    uint32_t block_index = 0;
+    /* Phase 73: start at the block containing `offset`, part-way into
+     * it. The direct/indirect resolution below is unchanged - it only
+     * ever needs block_index, and loads the indirect block on demand
+     * the first time the index reaches it. */
+    uint32_t block_index = offset / block_size;
+    uint32_t in_block = offset % block_size;
     uint32_t pointers_per_block = block_size / 4;
 
     while (bytes_read < to_read) {
@@ -417,16 +428,25 @@ static uint32_t read_inode_data(const ext2_inode_t* inode, void* buf,
             break;
         }
 
-        uint32_t chunk = block_size;
-        if (bytes_read + chunk > to_read) {
+        uint32_t chunk = block_size - in_block;
+        if (chunk > to_read - bytes_read) {
             chunk = to_read - bytes_read;
         }
-        memcpy(out + bytes_read, block_buf, chunk);
+        memcpy(out + bytes_read, block_buf + in_block, chunk);
         bytes_read += chunk;
+        in_block = 0; /* only the first block starts part-way in */
         block_index++;
     }
 
     return bytes_read;
+}
+
+/* The original whole-file-from-the-start reader, kept as the one-line
+ * special case it now is so its other callers (directory scans) need no
+ * change. */
+static uint32_t read_inode_data(const ext2_inode_t* inode, void* buf,
+                                 uint32_t buf_size) {
+    return read_inode_data_at(inode, 0, buf, buf_size);
 }
 
 static bool find_in_root(const char* filename, uint32_t* out_inode) {
@@ -517,6 +537,27 @@ int ext2_read_file(const char* filename, void* buf, uint32_t buf_size) {
     }
 
     return (int)read_inode_data(&inode, buf, buf_size);
+}
+
+/* Phase 73: see ext2.h. */
+int ext2_read_file_range(const char* filename, uint32_t offset, void* buf,
+                         uint32_t len) {
+    blockdev_set_partition_offset(partition_offset);
+    if (!mounted) {
+        return -1;
+    }
+
+    uint32_t inode_num;
+    if (!find_in_root(filename, &inode_num)) {
+        return -1;
+    }
+
+    ext2_inode_t inode;
+    if (!read_inode(inode_num, &inode)) {
+        return -1;
+    }
+
+    return (int)read_inode_data_at(&inode, offset, buf, len);
 }
 
 bool ext2_write_file(const char* filename, const void* data, uint32_t size) {

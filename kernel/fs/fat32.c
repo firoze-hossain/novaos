@@ -415,6 +415,73 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
     return (int)total_copied;
 }
 
+/* Phase 73: see fat32.h. Shares fat32_read_file()'s directory lookup
+ * and cluster-reading conventions exactly; the only new work is
+ * skipping to the cluster containing `offset` and starting mid-cluster. */
+int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
+                          uint32_t len) {
+    blockdev_set_partition_offset(partition_offset);
+    if (!mounted) {
+        return -1;
+    }
+
+    uint8_t want_name[11];
+    to_fat_8_3(filename, want_name);
+
+    if (!walk_root(want_name, NULL)) {
+        return -1;
+    }
+
+    uint32_t file_size = found_entry.file_size;
+    if (offset >= file_size || len == 0) {
+        return 0; /* the file exists; there is just nothing (more) to read */
+    }
+    uint32_t remaining = file_size - offset;
+    if (remaining > len) {
+        remaining = len;
+    }
+
+    uint32_t cluster =
+        ((uint32_t)found_entry.first_cluster_hi << 16) |
+        found_entry.first_cluster_lo;
+    uint32_t cluster_bytes = (uint32_t)sectors_per_cluster * bytes_per_sector;
+
+    /* Follow the chain past every cluster that lies wholly before the
+     * offset. */
+    uint32_t skip = offset / cluster_bytes;
+    while (skip > 0 && cluster < FAT32_END_OF_CHAIN) {
+        cluster = fat_next_cluster(cluster);
+        skip--;
+    }
+    if (cluster >= FAT32_END_OF_CHAIN) {
+        return 0; /* the chain ends before the size in the directory entry
+                     says it should - a damaged file; report end of data
+                     rather than read garbage */
+    }
+    uint32_t in_cluster = offset % cluster_bytes;
+
+    uint32_t total_copied = 0;
+    uint8_t* out = (uint8_t*)buf;
+
+    while (remaining > 0 && cluster < FAT32_END_OF_CHAIN) {
+        uint32_t lba = cluster_to_lba(cluster);
+        if (!rust_journal_read_sectors(lba, sectors_per_cluster, cluster_buf)) {
+            break;
+        }
+
+        uint32_t avail = cluster_bytes - in_cluster;
+        uint32_t chunk = (remaining < avail) ? remaining : avail;
+        memcpy(out + total_copied, cluster_buf + in_cluster, chunk);
+        total_copied += chunk;
+        remaining -= chunk;
+        in_cluster = 0;
+
+        cluster = fat_next_cluster(cluster);
+    }
+
+    return (int)total_copied;
+}
+
 /* Scans the whole root directory chain for an existing entry matching
  * `want_name`. On a hit, returns its location (which cluster, and the
  * byte offset of the 32-byte entry within that cluster's data) so the
