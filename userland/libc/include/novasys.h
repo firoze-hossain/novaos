@@ -53,6 +53,20 @@
 #define SYS_DNS_RESOLVE 39
 #define SYS_TFTP_FETCH 40
 #define SYS_WAIT_NONBLOCK 41
+#define SYS_EXEC_ENV 42
+#define SYS_EXEC_TRUSTED_ENV 43
+
+/* Phase 73: the largest environment a process may hand to a child at
+ * exec time - mirrors MAX_EXEC_ENV / MAX_EXEC_ENV_BYTES in
+ * kernel/task/process.h exactly (kept as a separate copy for the same
+ * reason every other constant in this header is: userland is built
+ * without access to kernel headers). NOVA_ENV_MAX_BYTES counts every
+ * "NAME=value" string plus its NUL terminator. libc's own setenv()/
+ * putenv() refuse to grow the environment past these limits, so a
+ * process can never build an environment its own children could not
+ * inherit - see stdlib.c. */
+#define NOVA_ENV_MAX_VARS  32
+#define NOVA_ENV_MAX_BYTES 4096
 
 /* Matches kernel/drivers/mouse/ps2mouse.h's mouse_state_t exactly
  * (verified with a standalone -m32 sizeof/offsetof check: 12 bytes,
@@ -87,7 +101,21 @@ int sys_open(const char* filename);
 int sys_read(int handle, void* buf, int max_len);
 void sys_close(int handle);
 int sys_spawn(void);
+/* Phase 73: sys_exec() and sys_exec_trusted() below now pass the
+ * calling process's own `environ` to the new process (Unix-style
+ * environment inheritance) by way of SYS_EXEC_ENV/SYS_EXEC_TRUSTED_ENV.
+ * sys_exec_env()/sys_exec_trusted_env() are the explicit forms for a
+ * caller that wants to hand over a different environment: `envp` is a
+ * NULL-terminated array of "NAME=value" strings, or NULL for an empty
+ * one. They return the new pid, or -1 on any failure - including an
+ * environment over NOVA_ENV_MAX_VARS/NOVA_ENV_MAX_BYTES. The original
+ * SYS_EXEC/SYS_EXEC_TRUSTED syscall numbers (which always give the
+ * child an empty environment) still exist in the kernel, untouched,
+ * for the raw-`int 0x80` callers that predate this. */
 int sys_exec(const char* path, char** argv, int argc);
+int sys_exec_env(const char* path, char** argv, int argc, char** envp);
+int sys_exec_trusted_env(const char* path, char** argv, int argc,
+                          char** envp);
 int sys_wait(int pid);
 int sys_wait_nonblock(int pid, int* out_exit_code);
 void* sys_sbrk(int increment);

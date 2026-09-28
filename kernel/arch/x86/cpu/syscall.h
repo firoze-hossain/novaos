@@ -446,6 +446,39 @@
  * forwards to directly. */
 #define SYS_WAIT_NONBLOCK 41
 
+/* Phase 73: SYS_EXEC_ENV / SYS_EXEC_TRUSTED_ENV - SYS_EXEC and
+ * SYS_EXEC_TRUSTED (above) with an environment for the new process.
+ *
+ *   EBX = path, ECX = argv (const char**), EDX = argc   (as before)
+ *   ESI = envp: a NULL-terminated array of "NAME=value" strings, or 0
+ *         for an empty environment.
+ *
+ * Same capability gate (can_spawn) and the same grants as the call each
+ * one extends; the only difference is what ends up after argv on the new
+ * process's initial stack, where crt0.asm finds it and publishes it as
+ * `environ`. Returns the new pid, or -1 - including when the
+ * environment is too big: more than MAX_EXEC_ENV strings, more than
+ * MAX_EXEC_ENV_BYTES of them, or argv + environment together over
+ * MAX_EXEC_STACK_BYTES (all in kernel/task/process.h).
+ *
+ * Why NEW syscall numbers instead of an optional fourth argument on the
+ * old ones: ESI is not part of SYS_EXEC's contract, so a caller that
+ * predates this (kernel/task/sandbox_demo.c's and exec_trust_demo.c's
+ * raw inline-asm wrappers, for instance) never sets it - it would hold
+ * whatever the caller last computed, and the kernel would treat that
+ * garbage as a pointer to read from. SYS_EXEC and SYS_EXEC_TRUSTED are
+ * left exactly as they were (always an empty environment), and only the
+ * userland libc wrappers (sys_exec()/sys_exec_trusted() in
+ * userland/libc/syscall.c) move to the new numbers.
+ *
+ * Like every other pointer this kernel takes from ring 3 (argv, file
+ * names, buffers), envp and the strings it points at are trusted, not
+ * validated - the syscall layer has no user-pointer checking yet; see
+ * PROGRESS.md. Every loop this handler adds is nonetheless bounded by
+ * MAX_EXEC_ENV, not by what user memory contains. */
+#define SYS_EXEC_ENV 42
+#define SYS_EXEC_TRUSTED_ENV 43
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

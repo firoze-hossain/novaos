@@ -32,6 +32,15 @@ bool ext2_is_mounted(void);
  * found or the filesystem isn't mounted. */
 int ext2_read_file(const char* filename, void* buf, uint32_t buf_size);
 
+/* Phase 73: like ext2_read_file(), but starts `offset` bytes into the
+ * file and reads at most `len` bytes (see fat32_read_file_range() for
+ * the reasoning). Returns bytes read (0 at/after end of file or when
+ * len == 0), or -1 if the file wasn't found or the filesystem isn't
+ * mounted. Follows the same direct + singly-indirect block support as
+ * ext2_read_file(). */
+int ext2_read_file_range(const char* filename, uint32_t offset, void* buf,
+                         uint32_t len);
+
 /* Phase 26: create-only (fails if `filename` already exists, the same
  * honest starting scope FAT32's own write support began with in
  * Phase 8) - allocates a fresh inode and enough direct data blocks

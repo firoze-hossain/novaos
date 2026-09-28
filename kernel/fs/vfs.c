@@ -281,6 +281,28 @@ int vfs_read_file(const char* filename, void* buf, uint32_t buf_size) {
     return -1;
 }
 
+/* Phase 73: see vfs.h. Structured exactly like vfs_read_file() above -
+ * same lock, same FAT32-wins-over-ext2 tiebreak. */
+int vfs_read_file_range(const char* filename, uint32_t offset, void* buf,
+                        uint32_t len) {
+    uint32_t flags = spinlock_acquire(&vfs_lock);
+
+    if (vfs_is_mounted()) {
+        int result = fat32_read_file_range(filename, offset, buf, len);
+        if (result >= 0) {
+            spinlock_release(&vfs_lock, flags);
+            return result;
+        }
+    }
+    if (ext2_is_mounted()) {
+        int result = ext2_read_file_range(filename, offset, buf, len);
+        spinlock_release(&vfs_lock, flags);
+        return result;
+    }
+    spinlock_release(&vfs_lock, flags);
+    return -1;
+}
+
 bool vfs_write_file(const char* filename, const void* data, uint32_t size) {
     if (!vfs_is_mounted()) {
         return false;

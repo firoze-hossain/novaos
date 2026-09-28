@@ -118,6 +118,32 @@ static process_t* allocate_slot(void) {
     return NULL;
 }
 
+/* Phase 73: the LAST step of every process-creation path.
+ *
+ * A process must not become visible to the scheduler (state READY) until
+ * every field the scheduler and the context switch read is fully
+ * initialised: esp, kernel_stack_top, page_directory_phys, and - for the
+ * capability tests - allowed_files/can_spawn/can_open_any_file. This
+ * kernel runs a second CPU whose idle loop polls the scheduler
+ * continuously, so it can pick up a READY process within nanoseconds of
+ * that state being written. Every creation path used to write
+ * `state = PROCESS_READY` FIRST and the rest afterwards; an AP that
+ * chose the new process in that gap loaded a stale/zero esp and a zero
+ * page_directory_phys (a bad CR3 in paging_switch_address_space() - a
+ * triple fault, QEMU exiting early), or ran the task while its real
+ * capabilities had not been granted yet (spurious "capability denied").
+ * Until published the slot stays PROCESS_ALLOCATING (set by
+ * allocate_slot()), which pick_next_locked() never returns. The
+ * compiler barrier keeps the state store after every store above it;
+ * x86 does not reorder stores with other stores, so that is sufficient
+ * for the other CPU to observe them in order. */
+static void process_publish(process_t* p) {
+    p->off_cpu = 1; /* not on any CPU: see process_t.off_cpu */
+    __asm__ volatile ("" ::: "memory");
+    p->state = PROCESS_READY;
+    scheduler_add(p);
+}
+
 int process_create_kernel_task(const char* name, void (*entry)(void)) {
     process_t* p = allocate_slot();
     if (p == NULL) {
@@ -143,7 +169,6 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
 
     /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, name, sizeof(p->name));
-    p->state = PROCESS_READY;
     p->is_user = false;
     p->esp = (uint32_t)sp;
     p->kernel_stack_top = kstack_top;
@@ -160,7 +185,7 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
                    internal, never the result of a login */
     p->gid = 0;
 
-    scheduler_add(p);
+    process_publish(p);
     return p->pid;
 }
 
@@ -230,7 +255,6 @@ static process_t* create_user_task_common(const char* name,
 
     /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, name, sizeof(p->name));
-    p->state = PROCESS_READY;
     p->is_user = true;
     p->esp = (uint32_t)sp;
     p->kernel_stack_top = kstack_top;
@@ -259,7 +283,7 @@ int process_create_user_task(const char* name, void (*entry)(void)) {
     if (p == NULL) {
         return -1;
     }
-    scheduler_add(p);
+    process_publish(p);
     return p->pid;
 }
 
@@ -294,7 +318,7 @@ int process_create_sandboxed_task(const char* name, void (*entry)(void),
                                       fixed allowed_files[] list, never
                                       this broader grant */
 
-    scheduler_add(p);
+    process_publish(p);
     return p->pid;
 }
 
@@ -343,7 +367,7 @@ int process_create_sandboxed_task_trusted(const char* name,
     p->can_spawn = can_spawn;
     p->can_open_any_file = true;
 
-    scheduler_add(p);
+    process_publish(p);
     return p->pid;
 }
 
@@ -672,9 +696,59 @@ static spinlock_t exec_lock;
 static int process_exec_internal(const char* path, const char** argv,
                                   int argc, const char** filenames,
                                   int file_count, bool grant_any_file,
-                                  bool grant_spawn) {
+                                  bool grant_spawn, const char** envp,
+                                  int envc) {
     if (argc > MAX_EXEC_ARGS) {
         argc = MAX_EXEC_ARGS;
+    }
+
+    /* Phase 73: refuse an environment (or argv+environment) that will
+     * not fit, BEFORE anything is allocated. This has to come first,
+     * not at the point the stack is written: the failure paths further
+     * down (after allocate_slot()) do not hand their process-table slot
+     * back, so a late "too big" exit would burn a slot every time -
+     * exactly the failure mode that once exhausted the 16-slot table
+     * (see PROGRESS.md, Phase 71). Every loop here is bounded by
+     * MAX_EXEC_ENV / MAX_EXEC_ENV_BYTES, never by what the caller's
+     * memory happens to contain. */
+    if (envp == NULL || envc < 0) {
+        envc = 0;
+    }
+    if (envc > MAX_EXEC_ENV) {
+        kernel_log("[WARN] process_exec: environment has %d entries, more "
+                   "than the %d allowed\n", envc, MAX_EXEC_ENV);
+        return -1;
+    }
+    uint32_t env_bytes = 0;
+    for (int i = 0; i < envc; i++) {
+        uint32_t len = 0;
+        while (envp[i][len] != '\0') {
+            len++;
+            if (len > MAX_EXEC_ENV_BYTES) {
+                break; /* already over the limit - stop scanning */
+            }
+        }
+        env_bytes += len + 1;
+        if (env_bytes > MAX_EXEC_ENV_BYTES) {
+            kernel_log("[WARN] process_exec: environment exceeds %d bytes\n",
+                       MAX_EXEC_ENV_BYTES);
+            return -1;
+        }
+    }
+    /* argv had no size limit at all before this phase; it and the
+     * environment now share the initial stack, so bound them together
+     * (strings plus the argc/argv/envp/NULL words that point at them). */
+    uint32_t stack_need = env_bytes + 4u * (uint32_t)(argc + envc + 3);
+    for (int i = 0; i < argc; i++) {
+        stack_need += (uint32_t)strlen(argv[i]) + 1;
+        if (stack_need > MAX_EXEC_STACK_BYTES) {
+            break;
+        }
+    }
+    if (stack_need > MAX_EXEC_STACK_BYTES) {
+        kernel_log("[WARN] process_exec: argv + environment need more than "
+                   "%d bytes of initial stack\n", MAX_EXEC_STACK_BYTES);
+        return -1;
     }
 
     /* 2MB - large enough for statically-linked Rust binaries (Phase
@@ -759,14 +833,15 @@ static int process_exec_internal(const char* path, const char** argv,
      * process, which a real C runtime's _start then treats argv/envp
      * as pointers into): from the initial ESP, low to high addresses:
      * argc, argv[0..argc-1] (each a pointer into the string data
-     * below), a NULL terminator, an empty envp (just one more NULL -
-     * no environment variables are actually populated yet, an honest
-     * scope limit - see PROGRESS.md), then the argv strings
+     * below), a NULL terminator, envp[0..envc-1] (Phase 73: the
+     * environment strings the caller passed - previously always empty),
+     * a second NULL terminator, then the argv and environment strings
      * themselves. Built top-down since the string data's addresses
-     * need to be known before the pointer array referencing them can
+     * need to be known before the pointer arrays referencing them can
      * be written. */
     uint32_t write_ptr = ustack_top;
     uint32_t argv_addrs[MAX_EXEC_ARGS];
+    uint32_t env_addrs[MAX_EXEC_ENV];
 
     for (int i = 0; i < argc; i++) {
         uint32_t len = (uint32_t)strlen(argv[i]) + 1;
@@ -775,11 +850,22 @@ static int process_exec_internal(const char* path, const char** argv,
         argv_addrs[i] = write_ptr;
     }
 
+    for (int i = 0; i < envc; i++) {
+        uint32_t len = (uint32_t)strlen(envp[i]) + 1;
+        write_ptr -= len;
+        write_to_address_space(pd, write_ptr, envp[i], len);
+        env_addrs[i] = write_ptr;
+    }
+
     write_ptr &= ~0x3u; /* 4-byte align before the pointer arrays */
 
     uint32_t zero = 0;
     write_ptr -= 4;
     write_to_address_space(pd, write_ptr, &zero, 4); /* envp terminator */
+    for (int i = envc - 1; i >= 0; i--) {
+        write_ptr -= 4;
+        write_to_address_space(pd, write_ptr, &env_addrs[i], 4);
+    }
     write_ptr -= 4;
     write_to_address_space(pd, write_ptr, &zero, 4); /* argv terminator */
 
@@ -815,7 +901,6 @@ static int process_exec_internal(const char* path, const char** argv,
 
     /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(p->name, path, sizeof(p->name));
-    p->state = PROCESS_READY;
     p->is_user = true;
     p->esp = (uint32_t)sp;
     p->kernel_stack_top = kstack_top;
@@ -865,12 +950,21 @@ static int process_exec_internal(const char* path, const char** argv,
     kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
                "%d arg(s)\n", path, p->pid, entry_point, argc);
 
-    scheduler_add(p);
+    process_publish(p);
     return p->pid;
 }
 
 int process_exec(const char* path, const char** argv, int argc) {
-    return process_exec_internal(path, argv, argc, NULL, 0, false, false);
+    return process_exec_internal(path, argv, argc, NULL, 0, false, false,
+                                  NULL, 0);
+}
+
+/* Phase 73: see process.h. Grants exactly what plain process_exec()
+ * grants - nothing - and differs only in the environment it passes. */
+int process_exec_env(const char* path, const char** argv, int argc,
+                     const char** envp, int envc) {
+    return process_exec_internal(path, argv, argc, NULL, 0, false, false,
+                                  envp, envc);
 }
 
 /* Phase 29: for trusted (ring-0) callers only - lets a caller grant
@@ -891,7 +985,7 @@ int process_exec(const char* path, const char** argv, int argc) {
 int process_exec_with_files(const char* path, const char** argv, int argc,
                              const char** filenames, int file_count) {
     return process_exec_internal(path, argv, argc, filenames, file_count,
-                                  false, false);
+                                  false, false, NULL, 0);
 }
 
 /* Phase 30: exec's a process with broad, "may open any file" access
@@ -903,7 +997,8 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
  * userland/coreutils/cat.c) receives even indirectly - only the
  * kernel's own boot sequence calls this, for the shell specifically. */
 int process_exec_as_shell(const char* path, const char** argv, int argc) {
-    return process_exec_internal(path, argv, argc, NULL, 0, true, true);
+    return process_exec_internal(path, argv, argc, NULL, 0, true, true,
+                                  NULL, 0);
 }
 
 /* Phase 59: SYS_EXEC_TRUSTED's own implementation - see process.h's
@@ -923,12 +1018,18 @@ int process_exec_as_shell(const char* path, const char** argv, int argc) {
  * without can_open_any_file, such as a sandboxed task explicitly
  * granted spawn but nothing broader, and this must still be able to
  * delegate the one real capability it actually has). */
-int process_exec_trusted(const char* path, const char** argv, int argc) {
+int process_exec_trusted_env(const char* path, const char** argv, int argc,
+                             const char** envp, int envc) {
     process_t* caller = process_current();
     bool grant_files = (caller != NULL) && caller->can_open_any_file;
     bool grant_spawn = (caller != NULL) && caller->can_spawn;
     return process_exec_internal(path, argv, argc, NULL, 0, grant_files,
-                                  grant_spawn);
+                                  grant_spawn, envp, envc);
+}
+
+/* The original entry point: identical grants, empty environment. */
+int process_exec_trusted(const char* path, const char** argv, int argc) {
+    return process_exec_trusted_env(path, argv, argc, NULL, 0);
 }
 
 /* Phase 71: the actual "check once, reap if terminated" logic shared
@@ -1166,7 +1267,6 @@ int process_fork(registers_t* parent_regs) {
 
     /* pid already assigned atomically by allocate_slot() itself. */
     copy_name(child->name, parent->name, sizeof(child->name));
-    child->state = PROCESS_READY;
     child->is_user = true;
     child->esp = (uint32_t)sp;
     child->kernel_stack_top = kstack_top;
@@ -1200,7 +1300,7 @@ int process_fork(registers_t* parent_regs) {
     kernel_log("[ OK ] process_fork: pid %d forked -> new pid %d\n",
                parent->pid, child->pid);
 
-    scheduler_add(child);
+    process_publish(child);
     return child->pid;
 }
 

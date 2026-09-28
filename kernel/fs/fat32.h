@@ -42,6 +42,16 @@ void fat32_list_root(fat32_list_callback_t callback);
  * found. */
 int fat32_read_file(const char* filename, void* buf, uint32_t buf_size);
 
+/* Phase 73: like fat32_read_file(), but starts `offset` bytes into the
+ * file and reads at most `len` bytes - so a caller can walk a file of
+ * any size in pieces instead of only ever seeing its first buf_size
+ * bytes. Returns the number of bytes read (0 at or past end of file,
+ * or when len == 0), or -1 if the file wasn't found - so a len-0 call
+ * doubles as an existence check. Skips whole clusters by following the
+ * FAT chain rather than reading and discarding them. */
+int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
+                          uint32_t len);
+
 /* Creates a new file in the root directory with the given contents.
  * Fails (returns false) if a file with that name already exists -
  * there's no overwrite/truncate/append here, only create-new and

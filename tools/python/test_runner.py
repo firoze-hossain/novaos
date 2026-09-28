@@ -29,6 +29,7 @@ import argparse
 import re
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -42,7 +43,18 @@ DEFAULT_DISK = REPO_ROOT / "disk.img"
 # Phase 56: mirrors the Makefile's own TEST_TIMEOUT bump - see that
 # variable's own comment for why (-smp 2 plus kernel/rust/apic.rs's
 # own real, unconditional AP-bring-up busy-waits).
-DEFAULT_TIMEOUT_SECONDS = 40
+# Phase 73: 40 -> 150, but only as an UPPER BOUND. boot_and_capture() below
+# now stops as soon as every expected line has appeared (plus a short grace
+# period), so a healthy run ends in about 45-50s on a normal machine.
+# Why the ceiling had to rise at all: userland/libctest/'s LIBCTEST.ELF adds
+# real journaled FAT32 writes and child-process execs at the END of the
+# boot, and QEMU's software emulation is very sensitive to the host - on a
+# single-core host, where the two emulated CPUs share one real core, the
+# same boot was measured finishing anywhere from 44s to ~90s. A fixed 40s
+# or 60s window is simply wrong for at least one of those machines; a
+# generous ceiling with early exit is right for both.
+EARLY_EXIT_GRACE_SECONDS = 5
+DEFAULT_TIMEOUT_SECONDS = 150
 
 # Mirrors the Makefile's own QEMU_FLAGS/DISK_FLAGS/NET_FLAGS/
 # AUDIO_FLAGS/USB_FLAGS exactly (kept here as one definition this
@@ -455,6 +467,39 @@ ASSERTIONS: list[Assertion] = [
               "correctly does not - verified via a real write/read-back/"
               "delete/confirm-deleted cycle against TPROBE.ELF, a real "
               "on-disk ELF32 program, not a synthetic in-kernel call"),
+    Assertion("libctest_allocator",
+              r"\[libctest\] PASS: malloc/realloc/calloc allocator",
+              "Phase 73: the rewritten libc allocator (16-byte alignment, block splitting and coalescing, realloc grow/shrink/move, calloc, guard rails) works inside a real ring-3 process against the real kernel's SYS_SBRK"),
+    Assertion("libctest_errno",
+              r"\[libctest\] PASS: errno set by failing library calls",
+              "Phase 73: failing libc calls set errno correctly (ENOENT, ENAMETOOLONG, EINVAL) and strerror() names them"),
+    Assertion("libctest_file_roundtrip",
+              r"\[libctest\] PASS: fopen/fread/fwrite/fclose file round trip",
+              "Phase 73: fopen/fprintf/fgets/fseek/ftell/fread/fwrite/fclose in w, r, a, r+ modes against a real FAT32 file, including truncate-on-open and remove()"),
+    Assertion("libctest_large_file",
+              r"\[libctest\] PASS: file larger than one kernel read \(10000 bytes\) via FAT32",
+              "Phase 73: a 10000-byte FAT32 file writes and reads back intact - three kernel reads, where SYS_READ used to silently stop at 4096 bytes - including reads starting mid-cluster"),
+    Assertion("libctest_ext2",
+              r"\[libctest\] PASS: ext2 file \(20000 bytes, direct\+indirect blocks\) via fopen",
+              "Phase 73: a 20000-byte ext2 file (crossing into indirect blocks) reads back intact through the new offset-based read path, whole and in odd-sized pieces"),
+    Assertion("libctest_environment",
+              r"\[libctest\] PASS: environment variables get/set/unset/putenv",
+              "Phase 73: getenv/setenv/unsetenv/putenv behave correctly inside a real process"),
+    Assertion("libctest_env_inherited",
+              r"\[libctest\] PASS: environment inherited by a child process",
+              "Phase 73: a parent's environment reaches a child across a real exec (the kernel builds envp on the new stack, crt0 publishes it as environ), an explicit empty environment overrides inheritance, and an environment exactly at the 4096-byte limit arrives intact"),
+    Assertion("libctest_env_limits",
+              r"\[libctest\] PASS: kernel enforces the environment size limits",
+              "Phase 73: the kernel refuses (rather than silently truncates) an environment of 33 variables or one byte over 4096, and libc's setenv() refuses to build one"),
+    Assertion("libctest_printf",
+              r"\[libctest\] PASS: printf/snprintf formatting",
+              "Phase 73: the new formatter (width, precision, flags, C99 snprintf truncation contract, no 512-byte cap) works in a real process"),
+    Assertion("libctest_completed",
+              r"\[libctest\] DONE: 9 groups, 0 failed",
+              "Phase 73: the libc test program ran every group to completion with none failing"),
+    Assertion("libctest_exec_passed",
+              r"sandbox. PASS: LIBCTEST\.ELF",
+              "Phase 73: the kernel-side demo task saw LIBCTEST.ELF exit 0"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
@@ -530,18 +575,40 @@ def boot_and_capture(
            "-serial", f"file:{log_path}"]
     )
 
-    print(f"Booting NovaOS headlessly for up to {timeout_seconds}s...")
+    print(f"Booting NovaOS headlessly for up to {timeout_seconds}s "
+          f"(stops early once every expected line has appeared)...")
+    proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    all_seen_at = None
+    positive = [a for a in ASSERTIONS if not a.negative]
     try:
-        subprocess.run(cmd, cwd=REPO_ROOT, timeout=timeout_seconds,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        # Expected in the common case: this kernel's own boot sequence
-        # never exits QEMU itself, so the timeout is what ends a
-        # normal, successful run - not a failure by itself. Whether
-        # the run actually succeeded is entirely up to the assertion
-        # checks against whatever got logged before the timeout hit.
-        pass
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(1)
+            if not log_path.exists():
+                continue
+            text = log_path.read_text(errors="replace")
+            if all(a.check(text) for a in positive):
+                now = time.monotonic()
+                if all_seen_at is None:
+                    all_seen_at = now
+                elif now - all_seen_at >= EARLY_EXIT_GRACE_SECONDS:
+                    print(f"Every expected line appeared after "
+                          f"{all_seen_at - started:.0f}s; stopped at "
+                          f"{now - started:.0f}s.")
+                    break
+    finally:
+        # This kernel never exits QEMU itself, so what ends a normal run
+        # is either the early exit above or the timeout - neither is a
+        # failure by itself. Whether the run actually succeeded is
+        # entirely up to the assertion checks against whatever got
+        # logged. (QEMU dying on its own - a triple fault under
+        # -no-reboot - also lands here, and shows up as missing lines.)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
 
 
 def run_checks(log_path: Path) -> bool:

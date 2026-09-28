@@ -82,6 +82,27 @@ void exec_trust_demo_task(void) {
                   "did not behave as expected.\n");
     }
 
+    /* Phase 73: the same trusted-exec vehicle, reused to run the in-OS
+     * half of the libc test (userland/libctest/libctest.c). It needs
+     * exactly the two capabilities this task already holds and
+     * SYS_EXEC_TRUSTED delegates - can_open_any_file (it creates, reads,
+     * and deletes real files on FAT32 and reads real files on ext2) and
+     * can_spawn (it execs itself as a child to test environment
+     * inheritance). LIBCTEST.ELF prints its own per-area
+     * "[libctest] PASS/FAIL: ..." lines, which tools/python/
+     * test_runner.py checks individually; this only reports whether the
+     * whole run exited 0. */
+    const char* argv_lc[] = {"LIBCTEST.ELF"};
+    int pid_lc = sys_exec_trusted("LIBCTEST.ELF", argv_lc, 1);
+    int code_lc = (pid_lc >= 0) ? sys_wait(pid_lc) : -1;
+    if (code_lc == 0) {
+        sys_write("[sandbox] PASS: LIBCTEST.ELF (the libc test) ran to "
+                  "completion with every group passing.\n");
+    } else {
+        sys_write("[sandbox] FAIL: LIBCTEST.ELF (the libc test) did not "
+                  "exit cleanly.\n");
+    }
+
     sys_exit(0);
 
     for (;;) { }

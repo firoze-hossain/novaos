@@ -7739,7 +7739,266 @@ structurally unrelated - a hardware protocol exchange, not this
 kernel's own process/stack state) is the only entry left, on its own,
 honestly separate terms.
 
-## Phase 73 and beyond
+## Phase 73: the C library, completed - realloc, file streams, errno, environment variables
+
+**Status: done and verified on clean builds - the `realloc`/`fopen`/
+`errno`/environment-variable row the release-readiness doc listed as one of
+the last two "not done" items. On a fresh clone with this whole change set
+applied: 8 consecutive full `make test` runs, fresh `disk.img` each time,
+all 92 assertions passing (the 81 that existed plus 11 new); 1,010 checks
+in a new host-side suite. Verifying it also exposed two real SMP scheduler
+bugs that made the boot test crash roughly one run in two on the machine
+used here; both are fixed in this phase and documented below.**
+
+### What was actually missing (more than the four named items)
+
+Reading `userland/libc/` first turned up more than the roadmap row said:
+
+- The Phase 22 allocator had **no block splitting and no coalescing**,
+  and its 12-byte header left every payload only 4-byte aligned despite a
+  comment claiming 8. `realloc` on top of that would have fragmented the
+  heap for good.
+- `printf` formatted into a **fixed 512-byte buffer and silently
+  truncated**, and had no `fprintf`/`snprintf` to build file output on.
+- **`SYS_READ` could only ever serve the first 4096 bytes of any file.**
+  It re-read the whole file into a 4096-byte scratch buffer on every call
+  and sliced out the requested piece; `fat32_read_file()` and
+  `ext2_read_file()` cap at `buf_size` without saying so. Anything past
+  4 KB was unreachable and reads just reported end of file. `fread` cannot
+  be correct on top of that, so it had to be fixed (below). Every existing
+  reader loops until 0, so `cat`, `cp` and the ring-3 shell now handle
+  large files instead of silently truncating them.
+- The kernel always gave a child an **empty environment** (a documented
+  stub in `process_exec_internal()`), so `getenv` alone would have had
+  nothing to read.
+
+### What was built
+
+**Allocator** (`userland/libc/stdlib.c`): 16-byte header, so every payload
+is 16-byte aligned; first-fit with block splitting; coalescing on `free`;
+`realloc` (shrink in place, grow in place by absorbing a free neighbour or
+by moving the break when the block is last, else allocate-copy-free, and a
+failed `realloc` leaves the original valid); `calloc` with overflow check;
+a magic value in every header so a double free or a wild pointer is
+refused with a console message instead of corrupting the free list.
+`atexit()`/`exit()` (LIFO, 32 handlers).
+
+**`errno`** (`errno.h`, `strerror`, `perror`): one global (no threads
+exist), POSIX/Linux numeric values, defined in `stdlib.c` because that is
+the one libc object every program links.
+
+**Environment**: `environ`, `getenv`, `setenv`, `unsetenv`, `putenv`,
+`clearenv`. `crt0.asm` publishes the kernel-provided `envp` as `environ`.
+The first mutation copies it into a heap vector the library owns, with a
+parallel ownership array so only strings the library allocated are ever
+freed (a `putenv` string or a kernel-provided one never is).
+
+**`FILE` streams** (`stdio.c`): `fopen` (`r w a`, `+`, `b`), `fclose`,
+`fflush`, `fread`, `fwrite`, `fseek`, `ftell`, `rewind`, `feof`,
+`ferror`, `clearerr`, `fgetc`/`getc`/`getchar`, `ungetc`, `fgets`,
+`fputc`/`putc`, `fputs`, `remove`, `stdin`/`stdout`/`stderr`; and a real
+formatter behind `printf`/`fprintf`/`vfprintf`/`snprintf`/`sprintf`
+(`%d %i %u %x %X %o %c %s %p %%`, flags `- 0 + space #`, width and
+precision including `*`, `h hh l z j t`; C99 `snprintf` truncation
+contract; **no** `%lld` - 64-bit division would need libgcc, so it prints
+the specifier literally rather than misreading the argument list).
+
+**Kernel**:
+- `fat32_read_file_range()`, `ext2_read_file_range()` (the inode reader
+  generalised to start mid-block, its old form kept as a one-line
+  wrapper), `vfs_read_file_range()`, and `handle_read()` rewritten to use
+  them. One call returns at most 4096 bytes; a file of any size is read by
+  looping. `max_len == 0` is now a cheap existence probe.
+- `SYS_EXEC_ENV` (42) and `SYS_EXEC_TRUSTED_ENV` (43): `SYS_EXEC` plus an
+  environment in ESI, placed on the child's initial stack after `argv`
+  (`process_exec_env()`, `process_exec_trusted_env()`). **New syscall
+  numbers rather than an extra argument on the old ones** because the raw
+  `int 0x80` wrappers in `sandbox_demo.c`/`exec_trust_demo.c` never set
+  ESI - the kernel would have read a garbage pointer. The old numbers are
+  untouched (empty environment). libc's `sys_exec()`/`sys_exec_trusted()`
+  now call the new ones with `environ`, so every libc-linked program - C,
+  and Rust through the same FFI - inherits its parent's environment with
+  no source change.
+- Limits, enforced identically by the kernel and by libc's own
+  `setenv`/`putenv` (so a process cannot build an environment its
+  children would be refused): 32 variables, 4096 bytes, and argv +
+  environment together at most half the 16 KB user stack. Checked
+  **before** `allocate_slot()`: the later failure paths in
+  `process_exec_internal()` do not give their process-table slot back, so a
+  late "too big" exit would burn a slot every time.
+
+### Two scheduler bugs found while verifying (fixed here)
+
+Neither is about the C library. They are documented here because they were
+found by, and had to be fixed for, this phase's boot test to be reliable.
+
+1. **`do_schedule()` released the scheduler lock before `switch_context()`
+   had saved the outgoing process's `esp`.** It marks the outgoing process
+   `READY` under `scheduler_lock`, releases the lock, and only then calls
+   `tss_set_kernel_stack()`, `paging_switch_address_space()` and finally
+   `switch_context()` - the instruction that stores the process's new saved
+   `esp`. In that gap the other CPU (an AP busy-polls the scheduler and
+   never halts) can pick the same process and load its STALE saved `esp`.
+   Observed directly, not inferred: QEMU run with `-no-shutdown` and its
+   monitor showed the crashed CPU at the `popf` right after `mov esp, eax`
+   inside `switch_context`, with `EAX = ESP = 0x3df000d4` - a user-space-
+   looking value - and `CR2` just below it (the failed push), while `CR3`
+   held a valid page directory. Fix: `process_t.off_cpu`, set by
+   `switch_context()` itself (a new third argument, written after `ESP` has
+   moved to the new stack, so it is exact rather than a delay), cleared by
+   `do_schedule()` when it picks a process, and required by
+   `pick_next_locked()` before it will choose a `READY` process. A newly
+   created process starts at 1. Placed last in `struct process_t` so no
+   existing field's offset moves.
+2. **Every process-creation path published the process before finishing
+   it.** Kernel tasks, user tasks (and the sandboxed/trusted variants),
+   `exec` and `fork` all wrote `state = PROCESS_READY` FIRST and `esp`,
+   `kernel_stack_top`, `page_directory_phys` and the capabilities
+   afterwards, so an AP polling the scheduler could pick a half-built
+   process. All six paths now finish with `process_publish()` (a compiler
+   barrier, then the state store; x86 does not reorder stores with stores).
+
+Not fixed, and not proven: `process_exit_current()` sets `TERMINATED` and
+only afterwards logs and yields, so `try_reap_process()` on the other CPU
+can free a dying process's kernel stack and page directory while its CPU is
+still on them. Reading the code says that is a real hazard - the comment's
+premise ("already switched away") is only true with one CPU - but no
+failure I observed was attributable to it. Two attempts to fix it (a flag
+consulted by the reaper, and moving the exiting CPU onto a per-CPU exit
+stack) both hung the boot; I later found that those experiments were
+contaminated by stale object files (below), so they neither confirm nor
+refute the hazard. It should be revisited with a clean build, and note that
+an AP has no idle task to fall back on, so a flag alone deadlocks there.
+
+### Design decisions worth knowing
+
+- **A `FILE` is an in-memory image of the whole file.** `fopen` loads it
+  (via `SYS_OPEN`/`SYS_READ`, closing the kernel handle immediately);
+  writes mark it dirty; `fflush`/`fclose`/`exit` write it back. The
+  kernel has no seek, no partial write and no rename, and only **8
+  system-wide open-file slots**, so this gives exact `fseek`/append/
+  read-write semantics and means a program that forgets `fclose`, or dies,
+  cannot leak a slot. Costs: a stream needs memory for its whole file;
+  every flush is delete-then-create (the kernel's write is create-only),
+  which is **not atomic**; a failed re-create leaves the data in memory
+  with the stream still dirty so `fflush` can retry.
+- **`errno` is inferred, not read back.** The kernel returns a bare `-1`
+  for every file failure. A missing file is reliably `ENOENT` (the first
+  read after a lazy `SYS_OPEN` fails), but "the kernel refused" is
+  reported as `EACCES` even when the cause was a full disk or a full
+  open-file table. A kernel-side per-process errno with a `SYS_GET_ERRNO`
+  is the follow-up if that distinction ever matters.
+- **`stdlib.c` calls nothing in `string.c`.** Rust programs
+  (`novainit-rs`, `wm-rs`, `ping-rs`, `net-rs`, `coreutils-rs`) link
+  `crt0.o syscall.o stdlib.o` but never `string.o` or `stdio.o`; one
+  `strlen` there would be an undefined reference in every one of them.
+  Verified by building every one that builds at baseline.
+- File names are root-directory 8.3 (`ENAMETOOLONG` past 12 characters -
+  the kernel's open table would otherwise silently truncate to a
+  *different* file's name). Creating or deleting needs
+  `can_open_any_file`, as those syscalls always did. A single file write
+  is one journaled transaction (`MAX_TXN_BLOCKS` = 128 sectors), so a
+  file much over ~60 KB cannot be written in one `fflush`.
+- Like every other pointer this kernel takes from ring 3, `envp` and its
+  strings are **trusted, not validated** - the syscall layer has no
+  user-pointer checking anywhere yet. Every loop added is nonetheless
+  bounded by the environment limits rather than by user memory.
+
+### Verification
+
+1. **Host suite** (`userland/libc/tests/`, `make libc-test`, now a CI
+   step): the real `stdlib.c`/`stdio.c`/`string.c` compiled freestanding
+   into a 32-bit Linux program against a **fake kernel** that mimics the
+   real one's semantics (create-only writes, lazy open, capability
+   denial, per-call read cap, 8-slot handle table). 1,010 checks at both
+   `-O0` and `-O2`: 200k-step randomized allocator stress with every heap
+   invariant checked after every step, the whole `FILE` and environment
+   surface, exit-time flushing via `__builtin_longjmp`. The printf
+   expectation table (81 cases) is separately run through **glibc's own
+   `snprintf`** so the expected strings are not merely what this author
+   believed C does.
+2. **Mutation testing** of that suite: 33 deliberately injected bugs
+   (dropped coalescing, `realloc` copying one byte short, ignored
+   `overwrite`, never-clearing dirty flag, a leaked kernel handle...);
+   32 caught. The survivor is an equivalent mutant (signed-overflow
+   negation that wraps identically on x86). One real gap it exposed - a
+   clean stream needlessly rewriting its file on every flush - was closed
+   with write counters in the fake kernel.
+3. **In-OS** (`userland/libctest/` -> `LIBCTEST.ELF`, run from
+   `exec_trust_demo_task` via `SYS_EXEC_TRUSTED`): 9 groups against the
+   real kernel - allocator, `errno`, file round trip on FAT32, a
+   10,000-byte FAT32 file (three kernel reads; reads starting mid-
+   cluster), a 20,000-byte ext2 file (crossing into indirect blocks) whole
+   and in odd-sized pieces, the environment API, environment inheritance
+   across a real `exec` (default, explicit-empty override, and an
+   environment of exactly 4096 bytes), the kernel refusing 33 variables
+   and 4097 bytes, and `printf`. Eleven new assertions, one per group.
+4. Two of my own test expectations were wrong and were caught by
+   checking rather than assuming: hand-counted string lengths (verified
+   with Python), and `feof()` after `fgets` reads an unterminated last line
+   (verified against glibc: C sets EOF immediately).
+5. **The boot runner now stops early.** `tools/python/test_runner.py`
+   polls the serial log and ends the boot once every expected line has
+   appeared plus a 5-second grace period (so a late `PANIC`/`FAIL` is still
+   caught by the negative assertion); `TEST_TIMEOUT` (`Makefile`,
+   `test_runner.py`) went 40 -> 150 s but is now only an upper bound. The
+   old fixed window could not serve every machine: LIBCTEST adds journaled
+   FAT32 writes and child execs at the end of the boot, and the same boot
+   was measured finishing anywhere from 44 s to ~90 s. What looked like a
+   LIBCTEST "stall" was slowness, not a hang: three boots given a 200 s
+   window all completed, at 44 s, 88 s and 86 s.
+6. **Controlled comparison, fresh clone of the Phase 72 commit, patch
+   applied, `make clean` build, full `make test`, fresh `disk.img` each
+   run:**
+
+   | Configuration | Result |
+   |---|---|
+   | libc + kernel features only (no scheduler fixes) | 3 of 6 passed; the 3 failures were QEMU dying (two ~66-73 s, one ~74 s) |
+   | + both scheduler fixes (this phase as shipped) | **8 of 8 passed, 92/92 every time** |
+
+   The samples are small and come from a machine with ONE host core
+   (`nproc` = 1) running QEMU with `-smp 2`, so the two emulated CPUs
+   time-slice one real core and a spinning vCPU can burn its timeslice while
+   the lock holder is not running. That amplifies every race and the
+   run-to-run variance, and it probably explains why the untouched Phase 72
+   commit crashed 2 of 6 boots here despite that phase's "15 consecutive
+   clean runs" on other hardware. A machine with real cores should behave
+   better; that is unverified.
+7. **Lessons about verification itself.** (a) The Makefile has no header
+   dependency tracking, so an incremental build after editing a header
+   (e.g. `process.h`) silently keeps stale objects. Several of my mid-way
+   results - including "16 of 16 crash-free" - were from such builds and
+   were discarded; only `make clean && make` results count. (b) `make test`
+   does not regenerate `disk.img`; a second run on the same image fails
+   `ext2_write_readback`, because that self-test creates a file that
+   persists. (c) A test that reads a 10,000-byte file in 7-byte pieces
+   (~1,400 syscalls, each a real disk read) cost 17-21 s and missed the
+   window on a slower run; LIBCTEST now uses two larger odd sizes and takes
+   about 6 s on a fast machine.
+
+### Remaining hazards (not fixed here)
+
+- The exit/reap ordering described above.
+- The Makefile's missing header dependencies (a follow-up: `-MMD -MP`).
+- All boot-test evidence comes from one single-core machine.
+- A kernel-side per-process `errno` and user-pointer validation (both noted
+  above) remain future work.
+
+### Files
+
+New: `userland/libc/include/errno.h`, `userland/libc/tests/`
+(`libc_host_test.c`, `printf_cases.h`, `printf_oracle.c`, `run.sh`),
+`userland/libctest/` (`libctest.c`, `build.sh`), fixtures `LIBCTEST.ELF`
+and `ext2root/EXT2BIG.BIN`. Changed: everything under `userland/libc/`,
+`kernel/{fs/{fat32,ext2,vfs},task/{process,scheduler,exec_trust_demo},
+arch/x86/cpu/{syscall,context_switch}}` (the scheduler and
+`context_switch.asm` changes are the two scheduler fixes; `process.c` holds
+both the exec/environment work and `process_publish()`), `kernel/task/
+process.h`, `tools/build-disk-image.sh`, `tools/python/test_runner.py`,
+`Makefile`, `.github/workflows/ci.yml`, `userland/examples/hello.c`, and the
+rebuilt `HELLOC.ELF`.
+
+## Phase 74 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

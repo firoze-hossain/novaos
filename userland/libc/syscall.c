@@ -52,13 +52,38 @@ int sys_spawn(void) {
     return result;
 }
 
-int sys_exec(const char* path, char** argv, int argc) {
-    int result = SYS_EXEC;
+/* Phase 73: the process's own environment, set once by crt0.asm from
+ * the envp the kernel built on the initial stack and thereafter owned
+ * by stdlib.c's setenv()/getenv() family. Defined in stdlib.c - the
+ * one libc object every userland program already links - and only
+ * *read* here. */
+extern char** environ;
+
+/* Phase 73: SYS_EXEC_ENV takes the child's environment in ESI, a fourth
+ * register argument the original SYS_EXEC never had. That is exactly
+ * why this is a new syscall number instead of an extra argument on the
+ * old one: a raw `int 0x80` caller that predates this (kernel/task/
+ * sandbox_demo.c's inline wrapper, say) never sets ESI, so its value
+ * would be whatever the caller's last computation left in it - the
+ * kernel would dereference garbage as an environment pointer. A
+ * separate number leaves every existing caller exactly as it was. */
+int sys_exec_env(const char* path, char** argv, int argc, char** envp) {
+    int result = SYS_EXEC_ENV;
     __asm__ volatile ("int $0x80"
                        : "+a"(result)
-                       : "b"(path), "c"(argv), "d"(argc)
+                       : "b"(path), "c"(argv), "d"(argc), "S"(envp)
                        : "memory", "cc");
     return result;
+}
+
+/* The everyday form: the child inherits this process's environment,
+ * as with any Unix exec/spawn. Every libc-linked program - C, and Rust
+ * through its FFI to this same function - gets that behaviour without
+ * a source change. A NULL `environ` (a program that never went through
+ * crt0.asm, say) simply passes an empty environment - the kernel
+ * treats a NULL envp identically to an empty one. */
+int sys_exec(const char* path, char** argv, int argc) {
+    return sys_exec_env(path, argv, argc, environ);
 }
 
 int sys_wait(int pid) {
@@ -295,13 +320,18 @@ int sys_connect(int handle, unsigned int dest_ip, unsigned short dest_port) {
     return result;
 }
 
-int sys_exec_trusted(const char* path, char** argv, int argc) {
-    int result = SYS_EXEC_TRUSTED;
+int sys_exec_trusted_env(const char* path, char** argv, int argc,
+                          char** envp) {
+    int result = SYS_EXEC_TRUSTED_ENV;
     __asm__ volatile ("int $0x80"
                        : "+a"(result)
-                       : "b"(path), "c"(argv), "d"(argc)
+                       : "b"(path), "c"(argv), "d"(argc), "S"(envp)
                        : "memory", "cc");
     return result;
+}
+
+int sys_exec_trusted(const char* path, char** argv, int argc) {
+    return sys_exec_trusted_env(path, argv, argc, environ);
 }
 
 int sys_dns_resolve(const char* hostname, unsigned int* out_ip) {

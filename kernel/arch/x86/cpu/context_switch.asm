@@ -2,7 +2,8 @@
 ; multitasking possible: switch_context() and enter_usermode.
 ;
 ; ============================================================
-; void switch_context(uint32_t* old_esp_out, uint32_t new_esp)
+; void switch_context(uint32_t* old_esp_out, uint32_t new_esp,
+;                     volatile uint32_t* done_flag)
 ; ============================================================
 ; Saves the callee-saved registers and EFLAGS of the CURRENTLY running
 ; task onto its own stack, records where that left ESP into
@@ -37,11 +38,23 @@ switch_context:
     push edi
     pushfd
 
+    ; Phase 73: all three arguments are read off the OLD stack before ESP
+    ; moves - after `mov esp, ecx` below it must not be touched again.
     mov eax, [esp + 24]     ; old_esp_out (5 pushes above + return addr = 24)
+    mov ecx, [esp + 28]     ; new_esp
+    mov edx, [esp + 32]     ; done_flag (may be NULL)
     mov [eax], esp
+    mov esp, ecx
 
-    mov eax, [esp + 28]     ; new_esp
-    mov esp, eax
+    ; This CPU is now on the NEW stack and will never run on the old one
+    ; again; the outgoing task's saved esp (stored above) is final, so from
+    ; this instant another CPU may safely resume it. Publish that. A plain
+    ; store suffices on x86: stores are not reordered with other stores, so
+    ; a CPU that observes this flag also observes the saved esp.
+    test edx, edx
+    jz .no_flag
+    mov dword [edx], 1
+.no_flag:
 
     popfd
     pop edi
