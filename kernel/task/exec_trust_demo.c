@@ -95,13 +95,41 @@ void exec_trust_demo_task(void) {
     const char* argv_lc[] = {"LIBCTEST.ELF"};
     int pid_lc = sys_exec_trusted("LIBCTEST.ELF", argv_lc, 1);
     int code_lc = (pid_lc >= 0) ? sys_wait(pid_lc) : -1;
-    if (code_lc == 0) {
-        sys_write("[sandbox] PASS: LIBCTEST.ELF (the libc test) ran to "
-                  "completion with every group passing.\n");
-    } else {
-        sys_write("[sandbox] FAIL: LIBCTEST.ELF (the libc test) did not "
-                  "exit cleanly.\n");
-    }
+    sys_write(pid_lc >= 0 && code_lc == 0
+                  ? "[sandbox] PASS: LIBCTEST.ELF (the libc test) ran to "
+                    "completion with every group passing.\n"
+                  : "[sandbox] FAIL: LIBCTEST.ELF (the libc test) did not "
+                    "exit cleanly.\n");
+
+    /* Phase 74: real dynamic linking. DYNTEST.ELF and DYNTEST2.ELF are
+     * two SEPARATE, independently built executables that both hold a
+     * DT_NEEDED reference to the one DYNLIB.SO file on disk - see
+     * kernel/task/process.c's load_and_link_shared_libraries() and
+     * kernel/rust/dynlink.rs for what actually resolves that at exec
+     * time. Plain sys_exec() would work just as well as the trusted
+     * form here - loading a shared library needs no special capability
+     * (see load_and_link_shared_libraries()'s own comment: its
+     * vfs_read_file() calls are unconditional kernel-mode reads,
+     * exactly like the main executable's own load) - sys_exec_trusted()
+     * is used only for consistency with this function's other calls. */
+    const char* argv_dt[] = {"DYNTEST.ELF"};
+    int pid_dt = sys_exec_trusted("DYNTEST.ELF", argv_dt, 1);
+    int code_dt = (pid_dt >= 0) ? sys_wait(pid_dt) : -1;
+    sys_write(pid_dt >= 0 && code_dt == 0
+                  ? "[sandbox] PASS: DYNTEST.ELF (dynamic linking against "
+                    "DYNLIB.SO) ran to completion with every group "
+                    "passing.\n"
+                  : "[sandbox] FAIL: DYNTEST.ELF (dynamic linking) did not "
+                    "exit cleanly.\n");
+
+    const char* argv_dt2[] = {"DYNTEST2.ELF"};
+    int pid_dt2 = sys_exec_trusted("DYNTEST2.ELF", argv_dt2, 1);
+    int code_dt2 = (pid_dt2 >= 0) ? sys_wait(pid_dt2) : -1;
+    sys_write(pid_dt2 >= 0 && code_dt2 == 0
+                  ? "[sandbox] PASS: DYNTEST2.ELF (a second, independent "
+                    "consumer of the same DYNLIB.SO) ran to completion "
+                    "with every group passing.\n"
+                  : "[sandbox] FAIL: DYNTEST2.ELF did not exit cleanly.\n");
 
     sys_exit(0);
 

@@ -7998,7 +7998,250 @@ process.h`, `tools/build-disk-image.sh`, `tools/python/test_runner.py`,
 `Makefile`, `.github/workflows/ci.yml`, `userland/examples/hello.c`, and the
 rebuilt `HELLOC.ELF`.
 
-## Phase 74 and beyond
+## Phase 74: real dynamic linking - a shared-library format and a real ld.so-equivalent loader, in Rust
+
+**Status: done and verified. 6 consecutive full `make test` runs on fresh
+disks - 3 in the working tree, 3 on a fresh clone with the patch freshly
+applied - all 103 assertions passing every time (the 92 that existed plus
+11 new). A real shared library, DYNLIB.SO, and two separately built
+executables that both dynamically link against it, all running for real
+inside NovaOS, checked against specific, independently-verified computed
+values - not just "didn't crash."**
+
+### What "dynamic linking" means here, precisely
+
+NovaOS has no userspace `ld.so` and no `PT_INTERP` support - nothing to
+hand a not-yet-relocated loader binary off to, which is itself one of the
+harder and more fragile pieces of a real Unix dynamic linker (`ld.so` has
+to relocate itself before it can call any function). Instead **the kernel
+itself is the loader**: `kernel/task/process.c` reads the main executable
+and every `DT_NEEDED` shared library, maps their `PT_LOAD` segments, and
+calls into a new Rust engine to resolve every relocation - all of it done
+once, before the process's first instruction ever runs.
+
+- **Eager (`BIND_NOW`) binding only, no lazy PLT resolution.** Every
+  `R_386_JMP_SLOT` relocation is resolved up front rather than left
+  pointing at a lazy resolver stub - simpler, and exactly what
+  `LD_BIND_NOW=1` does on a real Unix system. The PLT trampoline bytes a
+  normal linker still emits are simply never executed: their leading
+  `jmp *GOT_slot` lands directly on the real function once this loader has
+  filled that slot in, so no runtime resolver/trampoline machinery is
+  needed at all.
+- **`R_386_RELATIVE`, `R_386_32`, `R_386_GLOB_DAT`, `R_386_JMP_SLOT`,
+  `R_386_PC32` are supported.** Real function calls across the
+  executable/library boundary, and a shared library's own internal
+  absolute pointers (function-pointer tables, `.init_array` entries) at
+  whatever base address it actually loads at.
+- **`R_386_COPY` is deliberately NOT supported** - a distinct, documented
+  error code, not a silent skip. A real ld.so uses it so a non-PIE
+  executable can hold its own private copy of a *data* symbol a shared
+  library also defines. Implementing it correctly needs cooperation from
+  the library's own code generation this project's toolchain doesn't
+  specially arrange for. In practice: a shared library's *functions* can
+  be called freely; its mutable *global data* cannot be referenced
+  directly by name from the executable that loads it (see DYNLIB.SO's own
+  design below, which keeps to this from the start).
+- **No page-level sharing between processes.** Two processes that both
+  load the same `.SO` each get their own physical frames and their own
+  copy in memory - genuine on-disk sharing (one file on the FAT32/ext2
+  volume, linked by every program that needs it, instead of each
+  statically duplicating its code) and genuine load-time linking, but not
+  copy-on-write inter-process memory sharing. That would be a real,
+  separate, and much larger physical-memory-manager feature - a plausible
+  follow-up, not attempted here.
+
+### The split: pure logic in Rust, OS integration in C
+
+`kernel/rust/dynlink.rs` (new) is the engine: `.dynamic`/`.dynsym`
+parsing, `DT_NEEDED` enumeration, symbol lookup within one image, and
+relocation computation - all pure functions over byte slices and plain
+integers, calling out through two `extern "C"` callbacks (`resolve` a
+symbol name, `write` a resolved word) rather than touching a page table or
+the VFS directly. This is the same split every other `kernel/rust/`
+module already uses (`tcp.rs` doesn't reimplement the NIC driver,
+`pkgsign.rs` doesn't reimplement file I/O) and it's what makes this module
+testable as an ordinary host program - `#![no_std]` throughout, but with
+nothing in it that actually needs `no_std` to compile, so the identical
+source builds and runs its own unit tests under a normal host `rustc`
+too (`rustc --edition 2021 --test kernel/rust/dynlink.rs`), and separately
+compiles clean under the real kernel target with zero changes.
+
+`kernel/task/elf.c`/`elf.h` (extended) and `kernel/task/process.c`
+(extended) are the OS-integration side: `elf_inspect()` (new) walks a
+single ELF image's program headers once, learning its `PT_LOAD` segment
+table and where its `PT_DYNAMIC` segment is (if any) - used for both the
+main executable and every shared library. `elf_load_segments_biased()`
+(new) maps and copies an image's segments at `bias + p_vaddr` rather than
+`p_vaddr` alone, what a shared library (`ET_DYN`, linked at a base of 0)
+needs to actually run at whatever real address the kernel chose for it.
+`process.c`'s new `load_and_link_shared_libraries()` does the breadth-
+first, deduplicated walk over the (transitive) `DT_NEEDED` graph, loads
+each library into a fixed address-space slot, then calls
+`rust_dynlink_apply_relocations()` once for the main executable and once
+per loaded library.
+
+**`elf_load()` itself - the existing loader for every static binary - is
+completely untouched.** Every existing static ELF32 program still goes
+through exactly the code path proven correct before this phase; the new
+dynamic-linking path is purely additive, entered only when
+`elf_inspect()` finds a `PT_DYNAMIC` segment. Verified directly: all 92
+pre-existing assertions still pass, unchanged, after this phase's kernel
+changes.
+
+### Address-space layout, limits
+
+New constants in `kernel/task/process.h`: `LIB_VIRT_BASE` (0x10000000),
+`LIB_SLOT_SIZE` (4MB), `MAX_SHARED_LIBS` (8) - a bump allocator over a
+handful of fixed slots, the same level of simplicity this kernel already
+uses for the heap and the user stack, not a general VMA allocator.
+0x10000000 sits comfortably between the executable's own load address
+(0x08048000) and `HEAP_VIRT_BASE` (0x20000000). `MAX_SHARED_LIBS` bounds
+the total libraries one process may load, transitively, across the whole
+`DT_NEEDED` graph; exceeded, and the whole `exec()` is refused with a
+specific `kernel_log()` reason - never silently truncated.
+
+### Toolchain notes (what actually makes this work)
+
+Confirmed empirically against this project's own real `gcc`/`ld`, not
+merely assumed:
+- `--hash-style=sysv` on every shared-library build: `dynlink.rs` finds a
+  library's dynamic-symbol COUNT via the classic SysV `DT_HASH` table's
+  `nchain` field - the one piece of information nothing else in
+  `.dynamic` gives directly. The more common modern default
+  (`--hash-style=gnu`) never emits `DT_HASH` at all; a library built that
+  way would load but every symbol lookup against it would silently find
+  nothing.
+- `--no-dynamic-linker` on every dynamically-linked executable: suppresses
+  `PT_INTERP`/`.interp` - there is no userspace `ld.so` on NovaOS to
+  request.
+- i386's ABI uses `Elf32_Rel` (no explicit addend field) for both
+  `.rel.dyn` and `.rel.plt` - confirmed via `readelf -d`
+  (`DT_PLTREL` reads `REL`, never `RELA`) - so the addend for every
+  relocation this loader processes is the 4 bytes already sitting at the
+  target, as the linker originally wrote them into the FILE. `dynlink.rs`
+  reads that addend from the file buffer directly (not from live,
+  not-yet-fully-mapped memory) - simpler, and correct, since a `PT_LOAD`
+  segment's memory is a verbatim copy of those same file bytes at the
+  point relocations run.
+
+### DYNLIB.SO and its two consumers
+
+`userland/dynlib/dynlib.c` -> `DYNLIB.SO`: a real, not-a-toy shared
+library (`dyn_fib`, a real `dyn_crc32` - IEEE 802.3, cross-checked against
+Python's `zlib.crc32` while writing it, catching a real off-by-one in the
+*test* itself before it ever shipped - `dyn_apply`, `dyn_version`).
+Deliberately built to exercise every relocation type this loader
+supports: an internal, never-exported, file-scope function-pointer
+dispatch table forces real `R_386_RELATIVE` relocations to exist even in
+this small a library (the same mechanism `.init_array`/`.fini_array`
+would need anyway); its functions are reached from outside via
+`R_386_JMP_SLOT`; `dyn_version()`'s return value is a pointer into its own
+`.rodata`. Deliberately exports no mutable global *data* symbol, so it
+never needs the unsupported `R_386_COPY`.
+
+Two separately built consumers - `userland/dyntest/dyntest.c` ->
+`DYNTEST.ELF` and `userland/dyntest2/dyntest2.c` -> `DYNTEST2.ELF` - both
+hold a `DT_NEEDED` reference to the one `DYNLIB.SO` file rather than each
+linking their own copy of its code. That's the actual proof of the
+roadmap task's own stated goal ("lets multiple programs share one
+on-disk copy of a library instead of each statically duplicating it"):
+`DYNLIB.SO` is 13,568 bytes; `DYNTEST.ELF` and `DYNTEST2.ELF` are 33,928
+and 33,900 bytes respectively - almost identical to each other (both
+carry the same statically-linked libc, the only thing that differs is
+their own small test logic) and nowhere near large enough to be carrying
+`DYNLIB.SO`'s logic a second time. Both are run from
+`kernel/task/exec_trust_demo.c` (the same vehicle `LIBCTEST.ELF` already
+uses), each checking specific, hand-verified return values - a wrong
+relocation would show up as a WRONG RESULT here, not just a crash.
+
+### A real bug caught by this phase's own verification, before it shipped
+
+`kernel_log()`'s `%u` silently failed. `kernel/lib/stdio.c` - the
+kernel's OWN minimal `vsnprintf()`, a much smaller, separate
+implementation than userland `libc`'s Phase 73 one - only recognises
+`%s`/`%d`/`%x`/`%c`. The unrecognised `%u` printed literally and, worse,
+never consumed its `va_arg` slot, shifting every later `%`-specifier in
+that one call to read the WRONG argument (an off-by-one on the varargs
+stack) - the actual first symptom was a garbled character where a
+grammatical "y"/"ies" should have been, not merely a missing number.
+Fixed by using `%d` (the count is always small and non-negative, so the
+signed/unsigned distinction never mattered) - the only kernel_log() call
+this phase added that used `%u` at all.
+
+### Verification
+
+1. **Host unit tests** (`rustc --edition 2021 --test kernel/rust/
+   dynlink.rs`, no QEMU, no kernel build): `vaddr_to_offset` segment
+   translation, `DT_NEEDED` enumeration against a hand-built `.dynamic`
+   array, and `R_386_RELATIVE`'s `bias + addend` arithmetic against a
+   hand-built relocation entry with a real callback capturing what was
+   written. All pass, both under the host's own `rustc` and (separately)
+   as part of the real `make` build against the actual kernel target -
+   confirming the exact same source compiles unmodified either way.
+2. **Toolchain assumptions checked against real compiler output before
+   any kernel code was written**: `readelf -d`/`-r` on hand-built test
+   `.so`/executable pairs confirmed `--hash-style=sysv` produces a real
+   `DT_HASH`, `--no-dynamic-linker` drops `PT_INTERP`, `DT_PLTREL` is
+   always `REL` on i386, and a PLT stub's first instruction really is
+   `jmp *GOT_slot` (so eager binding needs no trampoline-awareness at
+   all) - not assumed from memory of how ELF "usually" works.
+3. **Zero regression**: all 92 pre-existing boot-test assertions still
+   pass, unchanged, confirming `elf_load()`'s untouched static-binary path
+   carries no risk from this phase's additions.
+4. **In-OS, real boot**: `DYNTEST.ELF`/`DYNTEST2.ELF` against the real,
+   real-built `DYNLIB.SO`, through the real kernel loader, checked against
+   specific computed values (Fibonacci numbers, a CRC32, dispatch-table
+   results, a `.rodata` string pointer) - 11 new assertions, all passing.
+5. **6 consecutive full `make test` runs, fresh `disk.img` each time,
+   103/103 every time**: 3 in the working tree, then 3 more on a
+   completely fresh clone of the upstream repository with this phase's
+   patch freshly applied - the same discipline Phase 73 established,
+   after Phase 73 itself found that skipping this step let real bugs
+   through.
+
+### Scope decisions, made and documented rather than silently assumed
+
+- **No host-side "real ELF, real mmap, run it" integration harness was
+  built**, unlike Phase 73's fake-kernel approach for the C library. It
+  would have meant compiling `elf_inspect()` from the REAL, unmodified
+  `elf.c` for the host (achievable - stub headers for the handful of
+  kernel-only declarations it needs to see, even though it calls none of
+  them) plus a from-scratch `mmap`-based segment loader and a from-
+  scratch symbol-resolution driver duplicating what `process.c` already
+  does. Given that a real, authoritative, full-integration proof was
+  going to happen anyway (the actual boot test above - real kernel code,
+  real files, real execution), and that the host UNIT tests already cover
+  the relocation arithmetic itself in isolation, this was judged not
+  worth its own implementation risk and time. The trade-off is real: a
+  future relocation-engine change has to wait for a QEMU boot to be
+  proven correct, rather than a sub-second host run. Worth revisiting if
+  this area sees much further work.
+- **Only one library, two consumers.** Real, not contrived (see DYNLIB.SO
+  above), but a single, modest demonstration - not, for instance,
+  converting any part of the existing static `libc` itself to a shared
+  library, which would be a much larger, cross-cutting change touching
+  every existing userland program's build.
+- **No transitive-dependency test.** `load_and_link_shared_libraries()`
+  supports a shared library that itself has `DT_NEEDED` entries
+  (genuinely, not just in principle - the breadth-first queue handles it
+  the same way as the top-level list), but nothing in this phase's own
+  fixtures actually exercises a library depending on another library.
+
+### Files
+
+New: `kernel/rust/dynlink.rs`; `userland/dynlib/` (`dynlib.c`,
+`build.sh`); `userland/dyntest/` (`dyntest.c`, `build.sh`);
+`userland/dyntest2/` (`dyntest2.c`, `build.sh`); fixtures `DYNLIB.SO`,
+`DYNTEST.ELF`, `DYNTEST2.ELF`. Changed: `kernel/rust/lib.rs` (`mod
+dynlink;`), `kernel/task/elf.{c,h}`, `kernel/task/process.{c,h}`,
+`kernel/task/exec_trust_demo.c`, `tools/build-disk-image.sh`,
+`tools/python/test_runner.py`, `Makefile` (also fixed a pre-existing gap
+while touching it: `KERNEL_RUST_OBJ`'s own dependency list was missing
+`tcp.rs`/`http.rs`/`pkgsign*.rs` - a stale incremental build after editing
+any of those files could have silently kept using an old object file
+before this fix, an unrelated but real latent bug noticed in passing).
+
+## Phase 75 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a
