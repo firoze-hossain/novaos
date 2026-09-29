@@ -252,6 +252,32 @@ int process_create_sandboxed_task_trusted(const char* name,
                                            const uint32_t* hosts,
                                            int host_count, bool can_spawn);
 
+/* Phase 74: shared-library address-space layout. Every loaded shared
+ * library gets a fixed SLOT of virtual address space, in DT_NEEDED
+ * (breadth-first, cross-image) load order, starting at LIB_VIRT_BASE:
+ * library 0 at LIB_VIRT_BASE, library 1 at LIB_VIRT_BASE +
+ * LIB_SLOT_SIZE, and so on. This is a bump allocator over a handful of
+ * fixed slots, not a general VMA allocator - the same level of
+ * simplicity this kernel already uses for the heap (HEAP_VIRT_BASE,
+ * grows up, never reused) and the user stack (one fixed region), and
+ * enough for what a demo/test library actually needs.
+ *
+ * 0x10000000 sits comfortably between the executable's own load
+ * address (0x08048000, see elf.c and every userland build.sh's
+ * -Ttext) and HEAP_VIRT_BASE (0x20000000): MAX_SHARED_LIBS slots of
+ * LIB_SLOT_SIZE each span at most 0x10000000..0x18000000, four times
+ * over before it would ever reach the heap. LIB_SLOT_SIZE (4MB) is
+ * far more than any library this project builds needs - real headroom
+ * for growth, not a tight fit - and MAX_SHARED_LIBS (8) bounds the
+ * total number of shared libraries one process may load, transitively
+ * across the whole DT_NEEDED graph (the main executable's own needed
+ * list, plus each library's own needed list in turn). Reject rather
+ * than silently truncate if either limit would be exceeded - see
+ * elf.c's own load_shared_libraries(). */
+#define LIB_VIRT_BASE  0x10000000u
+#define LIB_SLOT_SIZE  0x00400000u
+#define MAX_SHARED_LIBS 8
+
 /* Phase 23: how many argv entries process_exec() will pass through -
  * a small, fixed bound, the same "simple and honest about the limit"
  * choice as MAX_CAPABILITIES above rather than a dynamically-sized

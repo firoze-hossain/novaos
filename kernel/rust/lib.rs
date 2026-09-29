@@ -41,6 +41,7 @@ mod tcp;
 mod http;
 mod pkgsign_core;
 mod pkgsign;
+mod dynlink;
 
 use core::panic::PanicInfo;
 

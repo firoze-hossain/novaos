@@ -680,6 +680,393 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
  * never be called with a lock held). */
 static spinlock_t exec_lock;
 
+/* ------------------------------------------------------------------
+ * Phase 74: dynamic linking. The pure ELF32 dynamic-section/
+ * relocation logic lives in kernel/rust/dynlink.rs (see that file's
+ * own module comment for the full design - eager/BIND_NOW binding,
+ * which relocation types are supported and why, what's deliberately
+ * out of scope); everything here is the OS-integration side that
+ * module deliberately stays out of: reading a needed library's file
+ * off the VFS, choosing where in the process's address space it
+ * loads, mapping its pages, and driving the breadth-first walk over
+ * its (transitive) DT_NEEDED graph.
+ * ------------------------------------------------------------------ */
+
+/* Field-for-field mirrors of kernel/rust/dynlink.rs's own #[repr(C)]
+ * types - see that file for what each field means. Kept in this .c
+ * file rather than a shared header for the same reason every other
+ * Rust<->C boundary in this codebase is: a raw `extern` declaration
+ * right where it's used (see kernel/fs/fat32.c's rust_journal_begin(),
+ * for the established precedent), not a maintained shared header. */
+typedef struct {
+    const uint8_t* data;
+    uint32_t size;
+    uint32_t bias;
+    uint32_t dyn_offset;
+    uint32_t dyn_filesz;
+    const elf_load_seg_t* segs;
+    uint32_t seg_count;
+} dynlink_image_info_t;
+
+#define DYNLINK_MAX_NAME_LEN 64
+typedef struct {
+    uint8_t bytes[DYNLINK_MAX_NAME_LEN];
+    uint32_t len;
+} dynlink_needed_name_t;
+
+typedef uint32_t (*dynlink_resolve_fn)(void* ctx, const uint8_t* name,
+                                        uint32_t name_len);
+typedef bool (*dynlink_write_fn)(void* ctx, uint32_t vaddr, uint32_t value);
+
+extern int32_t rust_dynlink_get_needed(const uint8_t* data, uint32_t size,
+                                        uint32_t dyn_offset,
+                                        uint32_t dyn_filesz,
+                                        const elf_load_seg_t* segs,
+                                        uint32_t seg_count,
+                                        dynlink_needed_name_t* out,
+                                        uint32_t out_len);
+extern uint32_t rust_dynlink_find_symbol(const dynlink_image_info_t* img,
+                                          const uint8_t* name,
+                                          uint32_t name_len);
+extern int32_t rust_dynlink_apply_relocations(
+    const dynlink_image_info_t* img, dynlink_resolve_fn resolve,
+    void* resolve_ctx, dynlink_write_fn write, void* write_ctx);
+
+static const char* dynlink_error_str(int32_t rc) {
+    switch (rc) {
+        case -1: return "malformed ELF/.dynamic data";
+        case -2: return "an undefined symbol could not be resolved";
+        case -3: return "a relocation targeted unmapped memory";
+        case -4: return "needs an unsupported R_386_COPY relocation (a "
+                         "directly-referenced mutable global data symbol "
+                         "from a shared library) - see kernel/rust/"
+                         "dynlink.rs";
+        case -5: return "an unsupported relocation type";
+        default: return "unknown error";
+    }
+}
+
+/* A single 4-byte word write, into a page directory that may not
+ * (should not, for a well-formed relocation, but this checks rather
+ * than assumes) have every target address mapped. Unlike
+ * write_to_address_space() above - used only for argv/envp strings,
+ * always within the freshly-mapped user stack, so unconditionally
+ * present - a relocation's target is computed from file data this
+ * loader trusts but does not independently re-verify, so this walks
+ * the page directory defensively and returns false on the first
+ * not-present entry rather than dereferencing a garbage "frame"
+ * address the way an unchecked walk would. This is exactly the
+ * WriteFn contract kernel/rust/dynlink.rs's own apply_relocations()
+ * expects: false means "stop, something is wrong," not "skip and
+ * continue." */
+static bool write_word_checked(uint32_t* pd, uint32_t vaddr, uint32_t value) {
+    uint32_t page_base = vaddr & 0xFFFFF000u;
+    uint32_t page_offset = vaddr - page_base;
+    if (page_offset > 4096u - 4u) {
+        /* A relocation's 4-byte target straddling a page boundary
+         * never happens in practice (Elf32_Rel targets are always
+         * naturally 4-byte aligned, per the ABI) - treated as
+         * malformed input, not silently split across two writes. */
+        return false;
+    }
+    uint32_t pd_index = page_base >> 22;
+    uint32_t pt_index = (page_base >> 12) & 0x3FFu;
+    if (!(pd[pd_index] & PAGE_PRESENT)) {
+        return false;
+    }
+    uint32_t* pt = (uint32_t*)(pd[pd_index] & 0xFFFFF000u);
+    if (!(pt[pt_index] & PAGE_PRESENT)) {
+        return false;
+    }
+    uint32_t frame = pt[pt_index] & 0xFFFFF000u;
+    *(uint32_t*)(frame + page_offset) = value;
+    return true;
+}
+
+/* One loaded shared library: its own file bytes (in one of
+ * lib_buffers[] below), where it landed in the process's address
+ * space, and what elf_inspect() learned about it. */
+typedef struct {
+    char name[13]; /* 8.3 + NUL - matches userland/libc's own FILENAME_MAX */
+    uint8_t* data;
+    uint32_t size;
+    uint32_t bias;
+    elf_image_t image;
+} loaded_lib_t;
+
+/* Everything the resolve callback (dynlink_resolve_cb below) needs to
+ * search: the main executable plus every library loaded so far, in
+ * load order. A pointer to one of these is threaded through
+ * rust_dynlink_apply_relocations() as its opaque resolve_ctx. */
+typedef struct {
+    const uint8_t* main_data;
+    uint32_t main_size;
+    const elf_image_t* main_image;
+    loaded_lib_t libs[MAX_SHARED_LIBS];
+    uint32_t lib_count;
+} dynlink_world_t;
+
+/* Real ELF global-scope symbol resolution searches the main
+ * executable itself before any library (so a library can call back
+ * into a symbol the executable defines - a real, if uncommon, pattern
+ * on any Unix system), then each loaded library in DT_NEEDED load
+ * order, stopping at the first match - exactly what this does. */
+static uint32_t dynlink_resolve_cb(void* ctx, const uint8_t* name,
+                                    uint32_t name_len) {
+    dynlink_world_t* w = (dynlink_world_t*)ctx;
+
+    dynlink_image_info_t main_img = {
+        .data = w->main_data, .size = w->main_size, .bias = 0,
+        .dyn_offset = w->main_image->dyn_offset,
+        .dyn_filesz = w->main_image->dyn_filesz,
+        .segs = w->main_image->segs, .seg_count = w->main_image->seg_count,
+    };
+    uint32_t addr = rust_dynlink_find_symbol(&main_img, name, name_len);
+    if (addr != 0) {
+        return addr;
+    }
+
+    for (uint32_t i = 0; i < w->lib_count; i++) {
+        loaded_lib_t* lib = &w->libs[i];
+        dynlink_image_info_t img = {
+            .data = lib->data, .size = lib->size, .bias = lib->bias,
+            .dyn_offset = lib->image.dyn_offset,
+            .dyn_filesz = lib->image.dyn_filesz,
+            .segs = lib->image.segs, .seg_count = lib->image.seg_count,
+        };
+        addr = rust_dynlink_find_symbol(&img, name, name_len);
+        if (addr != 0) {
+            return addr;
+        }
+    }
+    return 0;
+}
+
+static bool dynlink_write_cb(void* ctx, uint32_t vaddr, uint32_t value) {
+    return write_word_checked((uint32_t*)ctx, vaddr, value);
+}
+
+/* Phase 74: bounded, static storage for every shared library a single
+ * exec() call loads - never on this function's own kernel stack
+ * (KERNEL_STACK_SIZE is only 16KB, see process.h). Guarded by
+ * exec_lock, the same reasoning as elf_buffer below: shared, global,
+ * reused-across-calls storage that a second CPU execing concurrently
+ * must not be able to race on. 512KB per library is real headroom -
+ * every shared library this project's own toolchain has produced so
+ * far is well under 20KB - not a tight fit against what a small,
+ * genuinely useful shared library needs. */
+#define LIB_FILE_BUFFER_SIZE (512u * 1024u)
+static uint8_t lib_buffers[MAX_SHARED_LIBS][LIB_FILE_BUFFER_SIZE];
+
+/* Loads every (transitive) DT_NEEDED shared library the main
+ * executable needs, maps them into `page_directory_phys`, and
+ * resolves every relocation - the main executable's own and every
+ * loaded library's. Called with exec_lock already held (see
+ * process_exec_internal below): every buffer this touches (`main_data`
+ * - process_exec_internal's own elf_buffer - and lib_buffers[]) is
+ * exactly the kind of shared, global, reused-across-calls static
+ * storage exec_lock already exists to protect, so its scope simply
+ * extends to cover this too rather than needing a second lock.
+ *
+ * Returns true on success. On any failure, logs the specific reason
+ * (a missing library file, a DT_NEEDED graph wider or deeper than
+ * MAX_SHARED_LIBS, an unresolved symbol, an unsupported relocation)
+ * and returns false - process_exec_internal aborts the whole exec()
+ * exactly as it already does for a malformed main ELF, releasing
+ * every resource it had already allocated. */
+static bool load_and_link_shared_libraries(const char* exec_path,
+                                            const uint8_t* main_data,
+                                            uint32_t main_size,
+                                            const elf_image_t* main_image,
+                                            uint32_t page_directory_phys) {
+    dynlink_world_t world;
+    world.main_data = main_data;
+    world.main_size = main_size;
+    world.main_image = main_image;
+    world.lib_count = 0;
+
+    /* Breadth-first queue of library names still needing to be loaded
+     * - a plain array walked with a read index, not a separate queue
+     * structure, since MAX_SHARED_LIBS already bounds it tightly. */
+    char queue[MAX_SHARED_LIBS][13];
+    uint32_t queue_len = 0;
+    uint32_t queue_pos = 0;
+
+    dynlink_needed_name_t names[MAX_SHARED_LIBS];
+    int32_t n = rust_dynlink_get_needed(
+        main_data, main_size, main_image->dyn_offset, main_image->dyn_filesz,
+        main_image->segs, main_image->seg_count, names, MAX_SHARED_LIBS);
+    if (n < 0) {
+        kernel_log("[FAULT] process_exec('%s'): malformed .dynamic "
+                   "section\n", exec_path);
+        return false;
+    }
+    if ((uint32_t)n > MAX_SHARED_LIBS) {
+        kernel_log("[FAULT] process_exec('%s'): needs %d shared libraries, "
+                   "more than the %d this kernel supports\n", exec_path, n,
+                   MAX_SHARED_LIBS);
+        return false;
+    }
+    for (int32_t i = 0; i < n; i++) {
+        if (names[i].len == 0 || names[i].len > 12) {
+            kernel_log("[FAULT] process_exec('%s'): a DT_NEEDED name is "
+                       "empty or longer than this filesystem's 8.3 "
+                       "limit\n", exec_path);
+            return false;
+        }
+        memcpy(queue[queue_len], names[i].bytes, names[i].len);
+        queue[queue_len][names[i].len] = '\0';
+        queue_len++;
+    }
+
+    while (queue_pos < queue_len) {
+        const char* name = queue[queue_pos++];
+
+        /* A diamond dependency (two libraries both needing a third) -
+         * already loaded, don't load or relocate it twice. */
+        bool already = false;
+        for (uint32_t i = 0; i < world.lib_count; i++) {
+            if (strcmp(world.libs[i].name, name) == 0) {
+                already = true;
+                break;
+            }
+        }
+        if (already) {
+            continue;
+        }
+
+        if (world.lib_count >= MAX_SHARED_LIBS) {
+            kernel_log("[FAULT] process_exec('%s'): the DT_NEEDED graph "
+                       "needs more than %d shared libraries total\n",
+                       exec_path, MAX_SHARED_LIBS);
+            return false;
+        }
+
+        uint32_t slot = world.lib_count;
+        loaded_lib_t* lib = &world.libs[slot];
+        uint32_t name_len = (uint32_t)strlen(name);
+        memcpy(lib->name, name, name_len + 1);
+
+        int file_size = vfs_read_file(name, lib_buffers[slot],
+                                       LIB_FILE_BUFFER_SIZE);
+        if (file_size <= 0) {
+            kernel_log("[FAULT] process_exec('%s'): needed library '%s' "
+                       "could not be read\n", exec_path, name);
+            return false;
+        }
+        lib->data = lib_buffers[slot];
+        lib->size = (uint32_t)file_size;
+
+        if (!elf_inspect(lib->data, lib->size, &lib->image)) {
+            kernel_log("[FAULT] process_exec('%s'): '%s' is not a valid "
+                       "ELF32 shared library this loader supports\n",
+                       exec_path, name);
+            return false;
+        }
+        if (!lib->image.is_dyn) {
+            kernel_log("[FAULT] process_exec('%s'): '%s' is not a shared "
+                       "library (not ET_DYN - link it with -shared)\n",
+                       exec_path, name);
+            return false;
+        }
+        if (!lib->image.has_dynamic) {
+            kernel_log("[FAULT] process_exec('%s'): '%s' has no "
+                       "PT_DYNAMIC segment\n", exec_path, name);
+            return false;
+        }
+
+        lib->bias = LIB_VIRT_BASE + slot * LIB_SLOT_SIZE;
+        if (!elf_load_segments_biased(lib->data, lib->size,
+                                       page_directory_phys, lib->bias,
+                                       &lib->image)) {
+            kernel_log("[FAULT] process_exec('%s'): failed to load '%s' "
+                       "into memory\n", exec_path, name);
+            return false;
+        }
+
+        world.lib_count = slot + 1;
+
+        /* This library's own DT_NEEDED entries join the same queue -
+         * real, transitive dependency resolution, not just one level
+         * deep. */
+        int32_t ln = rust_dynlink_get_needed(
+            lib->data, lib->size, lib->image.dyn_offset,
+            lib->image.dyn_filesz, lib->image.segs, lib->image.seg_count,
+            names, MAX_SHARED_LIBS);
+        if (ln < 0) {
+            kernel_log("[FAULT] process_exec('%s'): '%s' has a malformed "
+                       ".dynamic section\n", exec_path, name);
+            return false;
+        }
+        for (int32_t i = 0; i < ln; i++) {
+            if (queue_len >= MAX_SHARED_LIBS) {
+                kernel_log("[FAULT] process_exec('%s'): the DT_NEEDED "
+                           "graph is wider than %d entries\n", exec_path,
+                           MAX_SHARED_LIBS);
+                return false;
+            }
+            if (names[i].len == 0 || names[i].len > 12) {
+                kernel_log("[FAULT] process_exec('%s'): '%s' has an "
+                           "invalid DT_NEEDED name\n", exec_path, name);
+                return false;
+            }
+            memcpy(queue[queue_len], names[i].bytes, names[i].len);
+            queue[queue_len][names[i].len] = '\0';
+            queue_len++;
+        }
+    }
+
+    /* Every image involved (the main executable and every loaded
+     * library) is now fully mapped, so every relocation's target
+     * address is real, present memory - process the main executable's
+     * own relocations, then each library's, in load order (the order
+     * between images doesn't affect correctness - see
+     * rust_dynlink_apply_relocations()'s own comment). */
+    uint32_t* pd = (uint32_t*)page_directory_phys;
+
+    dynlink_image_info_t main_img = {
+        .data = main_data, .size = main_size, .bias = 0,
+        .dyn_offset = main_image->dyn_offset,
+        .dyn_filesz = main_image->dyn_filesz,
+        .segs = main_image->segs, .seg_count = main_image->seg_count,
+    };
+    int32_t rc = rust_dynlink_apply_relocations(
+        &main_img, dynlink_resolve_cb, &world, dynlink_write_cb, pd);
+    if (rc != 0) {
+        kernel_log("[FAULT] process_exec('%s'): relocating the executable "
+                   "itself failed (%s)\n", exec_path, dynlink_error_str(rc));
+        return false;
+    }
+
+    for (uint32_t i = 0; i < world.lib_count; i++) {
+        loaded_lib_t* lib = &world.libs[i];
+        dynlink_image_info_t img = {
+            .data = lib->data, .size = lib->size, .bias = lib->bias,
+            .dyn_offset = lib->image.dyn_offset,
+            .dyn_filesz = lib->image.dyn_filesz,
+            .segs = lib->image.segs, .seg_count = lib->image.seg_count,
+        };
+        rc = rust_dynlink_apply_relocations(&img, dynlink_resolve_cb, &world,
+                                             dynlink_write_cb, pd);
+        if (rc != 0) {
+            kernel_log("[FAULT] process_exec('%s'): relocating '%s' "
+                       "failed (%s)\n", exec_path, lib->name,
+                       dynlink_error_str(rc));
+            return false;
+        }
+    }
+
+    /* %d, not %u: kernel/lib/stdio.c's own vsnprintf() - a much more
+     * minimal, kernel-only implementation than userland/libc's Phase
+     * 73 one - only recognises %s/%d/%x/%c. lib_count is always a
+     * small non-negative count (0..MAX_SHARED_LIBS), so the signed/
+     * unsigned distinction never actually matters here. */
+    kernel_log("[ OK ] process_exec('%s'): dynamically linked, %d shared "
+               "librar%s loaded\n", exec_path, (int)world.lib_count,
+               world.lib_count == 1 ? "y" : "ies");
+    return true;
+}
+
 /* Phase 71: grant_spawn is deliberately a separate parameter from
  * grant_any_file, not folded into it - process_exec_trusted() below
  * needs to delegate can_spawn independently of can_open_any_file,
@@ -801,6 +1188,29 @@ static int process_exec_internal(const char* path, const char** argv,
         kfree(kstack);
         free_user_address_space(address_space);
         return -1;
+    }
+
+    /* Phase 74: dynamic linking. elf_inspect() re-examines the same
+     * bytes elf_load() just finished loading - purely to learn whether
+     * this binary has a PT_DYNAMIC segment, which elf_load() itself
+     * never looks for (see elf.h - elf_load() is deliberately left
+     * untouched so every existing static binary's load path carries
+     * zero risk from this). A binary elf_inspect() itself can't
+     * characterize (more than MAX_LOAD_SEGS PT_LOAD segments - not
+     * true of anything this project's own toolchain has ever produced)
+     * is simply treated as having no PT_DYNAMIC and run as a plain
+     * static binary, exactly as it would have before this phase. */
+    elf_image_t main_image;
+    if (elf_inspect(elf_buffer, (uint32_t)file_size, &main_image) &&
+        main_image.has_dynamic) {
+        if (!load_and_link_shared_libraries(path, elf_buffer,
+                                             (uint32_t)file_size,
+                                             &main_image, address_space)) {
+            spinlock_release(&exec_lock, exec_flags);
+            kfree(kstack);
+            free_user_address_space(address_space);
+            return -1;
+        }
     }
 
     /* elf_buffer itself is no longer touched past this point - what's
