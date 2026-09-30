@@ -4,6 +4,27 @@
 #include "timer.h"
 #include "../../arch/x86/cpu/irq.h"
 #include "../../arch/x86/io.h"
+#include "../driver.h"
+#include "../../include/kernel.h"
+
+/* Phase 76: DRIVER_REGISTER requires a plain void(*)(void) init
+ * function; timer_init() below takes a frequency argument (kept, not
+ * changed - a caller that genuinely wants a different frequency still
+ * can), so this thin wrapper is what actually gets registered. Also
+ * carries the one piece of boot-sequence-specific logging that used
+ * to live in kernel/init/main.c right after its own explicit
+ * timer_init() call (timer_init() itself has never logged anything
+ * internally) - driver_init_all()'s own generic "Driver 'PIT timer'
+ * initializing..." line now precedes it, the same pattern every other
+ * self-registered driver's own more specific completion message
+ * already follows. */
+static void timer_driver_init(void) {
+    timer_init(TIMER_FREQUENCY_HZ);
+    kernel_log("[ OK ] PIT timer initialized at %d Hz (IRQ0)\n",
+               TIMER_FREQUENCY_HZ);
+}
+
+DRIVER_REGISTER("PIT timer", timer_driver_init, DRIVER_PHASE_TIMER);
 
 #define PIT_CHANNEL0_DATA 0x40
 #define PIT_COMMAND       0x43

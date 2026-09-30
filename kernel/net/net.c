@@ -7,11 +7,24 @@
 #include "../drivers/net/ne2000.h"
 #include "../drivers/net/rtl8139.h"
 #include "../drivers/virtio/virtio_net.h"
+#include "../drivers/driver.h"
 #include "../include/kernel.h"
 
 typedef enum { NIC_NONE, NIC_VIRTIO_NET, NIC_RTL8139, NIC_NE2000 } active_nic_t;
 
 static active_nic_t active_nic = NIC_NONE;
+
+/* Phase 76: net_init() already has the plain void(*)(void) signature
+ * DRIVER_REGISTER needs - no wrapper required. Runs in DRIVER_PHASE_
+ * NETWORK, NOT DRIVER_PHASE_AFTER_PCI despite reading PCI config space
+ * to find RTL8139/virtio-net - see kernel/drivers/driver.h's own
+ * comment on that phase for why (PCI config space needs no prior
+ * pci_enumerate() call; kernel/drivers/virtio/virtio_net.c's own
+ * comment, written before this phase specifically to explain why THAT
+ * driver stayed unregistered, is the source of this reasoning, not a
+ * new claim this phase invented). Positioned to run at exactly the
+ * same point in the boot sequence it always did. */
+DRIVER_REGISTER("Network", net_init, DRIVER_PHASE_NETWORK);
 
 void net_init(void) {
     /* Phase 45: virtio-net checked first, preferred over both

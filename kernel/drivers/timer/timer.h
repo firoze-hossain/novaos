@@ -3,6 +3,19 @@
 
 #include "../../include/types.h"
 
+/* Phase 76: moved here from kernel/init/main.c's own boot sequence,
+ * where it lived as a private #define only main.c itself could see -
+ * this driver's self-registration (see timer.c's own DRIVER_REGISTER
+ * call) needs a frequency to configure without main.c passing one in,
+ * since DRIVER_REGISTER requires a plain void(*)(void) init function.
+ * 100Hz: a reasonable-feeling default for a round-robin scheduler with
+ * a handful of tasks, not tuned against anything in particular - the
+ * same value and the same reasoning this constant always had, just
+ * now visible to (and overridable by, should a future caller ever
+ * want to) anything that includes this header rather than main.c
+ * alone. */
+#define TIMER_FREQUENCY_HZ 100
+
 /* Programs the 8253/8254 PIT (IRQ0) to fire at `frequency_hz` and
  * registers the tick handler. This is what will drive preemptive
  * scheduling in Phase 4 - for now it just counts ticks and offers a
