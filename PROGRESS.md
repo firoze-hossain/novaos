@@ -8431,7 +8431,128 @@ constraint it describes is no longer as tight), `userland/shell/shell.c`
 `tools/python/test_runner.py` (2 new assertions), `Makefile`
 (`growtable.rs` added to `KERNEL_RUST_OBJ`'s own dependency list).
 
-## Phase 76 and beyond
+## Phase 76: finishing the driver-registration migration - timer, VFS, and network, in C
+
+**Status: done and verified. 5 consecutive full `make test` runs, fresh
+disk each time - 3 in the working tree, 2 more on a completely fresh
+clone with the patch freshly applied - all 105/105 assertions, no
+regressions. `kernel/init/main.c` no longer calls `timer_init()`,
+`vfs_init()`, or `net_init()` by name anywhere in actual code (confirmed
+by grep, not just believed) - every remaining mention is a comment
+describing timing, not a call site.**
+
+### What this actually was
+
+Phase 39 built real driver self-registration (`kernel/drivers/driver.h`):
+a `DRIVER_REGISTER()` macro places a driver into a linker section at
+compile time, and `driver_init_all(phase)` runs every driver registered
+for a given phase - so adding a new driver never again means editing
+`main.c`'s own boot sequence. That phase deliberately migrated only PS/2
+keyboard/mouse, UHCI, and AC97 - drivers with no order-sensitive
+interleaving with anything else - and named timer/VFS/net as explicitly
+deferred, "why...for now" spelled out driver by driver in `main.c`'s own
+comments at the time. This phase is that deferred work, finished.
+
+### The real risk here wasn't the mechanism - it was reordering
+
+`driver.h`'s own header comment already stated the philosophy plainly:
+phases exist specifically so migrating a driver never reorders it
+relative to today's known-working boot sequence, because this project has
+already spent real effort once tracking down exactly the class of subtle,
+hard-to-diagnose bug a careless reordering causes (Phase 38). So before
+writing any code, this phase traced the actual, current relative order of
+everything in `kernel_late_init()`:
+
+```
+rust_smp_init() -> timer_init()+hook -> driver_init_all(EARLY: PS/2)
+  -> vfs_init() -> net_init() -> sti -> [self-tests] -> pci_enumerate()
+  -> driver_init_all(AFTER_PCI: UHCI, AC97, virtio-blk)
+```
+
+and checked, by reading the actual code rather than assuming, whether
+timer/PS2-keyboard/PS2-mouse/VFS/net genuinely have no dependency on each
+other: no shared state, no timing/delay coupling (`grep` for `timer_`/
+`delay`/`sleep` in `keyboard.c`/`ps2mouse.c` came back empty), and no
+cross-reference between `vfs.c` and `net.c` in either direction. A real,
+concrete, useful finding came out of reading `net_init()` itself:
+`kernel/drivers/virtio/virtio_net.c` is deliberately NOT self-registered,
+with a comment explaining exactly why - it must run before `net_init()`
+decides which NIC is active, and PCI configuration space (0xCF8/0xCFC
+I/O ports) is readable from the moment the kernel is running, never
+actually dependent on `pci_enumerate()` having run first. That comment's
+own reasoning is exactly what justifies giving `net_init()` its own new
+phase rather than folding it into `DRIVER_PHASE_AFTER_PCI` (where it
+would still work correctly, but would also genuinely reorder network
+bring-up to after `pci_enumerate()`/`sti`, unlike everything else this
+phase touched).
+
+**Decision made, and documented, from that investigation**: even having
+found no real dependency between timer/PS2/VFS/net, this phase still gave
+timer/VFS/net each their OWN new phase (`DRIVER_PHASE_TIMER`,
+`DRIVER_PHASE_FILESYSTEM`, `DRIVER_PHASE_NETWORK`) positioned to
+reproduce today's exact sequence, rather than merging any of them into
+the existing `DRIVER_PHASE_EARLY`. A phase costs nothing extra, and this
+project's own stated philosophy is to avoid reordering risk even where a
+dependency search comes up empty, not only where one is found - a
+deliberately more conservative choice than the evidence strictly
+required, made explicitly rather than silently.
+
+### What changed, file by file
+
+- `kernel/drivers/driver.h`: three new phases inserted into
+  `driver_phase_t`, each with its own comment explaining exactly why it
+  exists and why it isn't merged with a neighbor; the header's own
+  top-of-file comment rewritten to describe the now-complete migration
+  rather than the old "deferred for now" framing.
+- `kernel/drivers/timer/timer.c`: `DRIVER_REGISTER()` needs a plain
+  `void(*)(void)` - `timer_init()` takes a frequency argument, so a small
+  wrapper (`timer_driver_init()`) is what's actually registered, also
+  carrying the one piece of logging (`"PIT timer initialized at %d Hz"`)
+  that used to live in `main.c` (`timer_init()` itself has never logged
+  anything internally).
+- `kernel/drivers/timer/timer.h`: `TIMER_FREQUENCY_HZ` (100) moved here
+  from a private `#define` in `main.c` - the wrapper above needs a value
+  to call `timer_init()` with, since `main.c` can no longer pass one in.
+- `kernel/fs/vfs.c`, `kernel/net/net.c`: both `vfs_init()` and
+  `net_init()` already had the exact signature `DRIVER_REGISTER` needs -
+  one include, one macro line each, no wrapper needed.
+- `kernel/init/main.c`: the three explicit calls replaced with
+  `driver_init_all()` for the three new phases, in the same relative
+  order; `timer_set_tick_hook(scheduler_on_tick)` deliberately kept as an
+  explicit call right after the timer phase - wiring the scheduler to the
+  timer is this boot sequence's own decision, not something a generic
+  timer driver's `init()` should need to know about.
+
+### Verification
+
+1. **Zero regression**: the full pre-existing 105-assertion suite (103
+   from before Phase 75 plus that phase's own 2) passes unchanged.
+2. **The actual boot log confirms the sequence is genuinely unchanged**,
+   not just "assertions still pass": `Driver 'PIT timer' initializing...`
+   -> `PIT timer initialized at 100 Hz` -> PS/2 mouse/keyboard -> `Driver
+   'VFS' initializing...` -> partition table -> FAT32 mounted -> `Driver
+   'Network' initializing...` -> NIC selection -> `Interrupts enabled` -
+   read directly out of a real boot's serial log, in exactly that order,
+   with AC97/virtio-blk/UHCI still only appearing later, after
+   `pci_enumerate()`, exactly as before.
+3. **The stated goal, checked directly**: `grep` for `timer_init(`/
+   `vfs_init(`/`net_init(` in `main.c` after this phase finds zero actual
+   call sites - only comments describing timing, which remain accurate
+   (these drivers still run at the same point, just reached through
+   `driver_init_all()` now).
+4. **5 consecutive full `make test` runs, fresh `disk.img` each time,
+   105/105 every time**: 3 in the working tree (87s/106s/82s), 2 more on
+   a completely fresh clone of the upstream repository with this phase's
+   patch freshly applied (47s/72s).
+
+### Files
+
+Changed: `kernel/drivers/driver.h`, `kernel/drivers/timer/{timer.c,
+timer.h}`, `kernel/fs/vfs.c`, `kernel/net/net.c`, `kernel/init/main.c`.
+No new files - this phase is a pure migration of existing drivers onto
+the existing mechanism, not new infrastructure.
+
+## Phase 77 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

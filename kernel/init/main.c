@@ -37,8 +37,6 @@
 #include "../lib/stdio.h"
 #include <stdarg.h>
 
-#define TIMER_FREQUENCY_HZ 100
-
 /* kernel_log() is the one logging function every subsystem uses. It
  * always goes to serial (visible in `make debug`, CI, and
  * scripts/test.sh's boot-log assertions) and is intentionally silent
@@ -192,8 +190,10 @@ void kernel_late_init(void) {
      * only if it also has a usable Local APIC + I/O APIC pair - hand
      * hardware-interrupt routing over from the legacy 8259 PIC this
      * kernel has used since Phase 2 to a real I/O APIC. Must run
-     * before timer_init()/driver_init_all() below: every one of those
-     * calls register_irq_handler() (kernel/arch/x86/cpu/irq.c), which
+     * before driver_init_all() below (Phase 76: timer_init() itself is
+     * now one of the drivers that call runs - see kernel/drivers/
+     * driver.h): every driver registered for any of its phases calls
+     * register_irq_handler() (kernel/arch/x86/cpu/irq.c), which
      * needs to already know which controller is actually live to
      * unmask the right one (see that function's own updated comment).
      * Must also run before this function's own `sti` further down -
@@ -228,20 +228,23 @@ void kernel_late_init(void) {
         }
     }
 
-    timer_init(TIMER_FREQUENCY_HZ);
-    kernel_log("[ OK ] PIT timer initialized at %d Hz (IRQ0)\n",
-               TIMER_FREQUENCY_HZ);
+    /* Phase 76: timer/VFS/network are now self-registered too (see
+     * kernel/drivers/driver.h's own updated comment) - each in its
+     * own phase, positioned to run at exactly the same point in this
+     * sequence they always did, so this is a pure mechanism change,
+     * not a reordering. timer_set_tick_hook() stays here as an
+     * explicit call, deliberately: it's this BOOT SEQUENCE'S decision
+     * to drive the scheduler off the timer, not something the timer
+     * driver itself should need to know about (see timer.c's own
+     * comment on its DRIVER_REGISTER wrapper). */
+    driver_init_all(DRIVER_PHASE_TIMER);
     timer_set_tick_hook(scheduler_on_tick);
 
-    /* Phase 39: PS/2 keyboard + mouse are the first drivers migrated
-     * to self-registration (kernel/drivers/driver.h) - see that
-     * file's own comment for why this phase specifically, and why
-     * timer/VFS/net below stay as explicit calls for now. */
     driver_init_all(DRIVER_PHASE_EARLY);
 
-    vfs_init();
+    driver_init_all(DRIVER_PHASE_FILESYSTEM);
 
-    net_init();
+    driver_init_all(DRIVER_PHASE_NETWORK);
 
     __asm__ volatile ("sti");
     kernel_log("[ OK ] Interrupts enabled\n");

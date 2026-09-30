@@ -18,9 +18,17 @@
 #include "../drivers/ata/ata.h"
 #include "../drivers/blockdev.h"
 #include "../drivers/vga/vga.h"
+#include "../drivers/driver.h"
 #include "../lib/stdio.h"
 #include "../lib/spinlock.h"
 #include "../include/kernel.h"
+
+/* Phase 76: vfs_init() already has the plain void(*)(void) signature
+ * DRIVER_REGISTER needs - no wrapper required, unlike timer.c's own
+ * timer_init(). Runs in DRIVER_PHASE_FILESYSTEM, positioned to run at
+ * exactly the same point in the boot sequence it always did - see
+ * kernel/drivers/driver.h's own comment on that phase. */
+DRIVER_REGISTER("VFS", vfs_init, DRIVER_PHASE_FILESYSTEM);
 
 /* Phase 57: named directly in this project's own release-readiness
  * roadmap alongside process_table_lock/exec_lock/open_files_lock -
