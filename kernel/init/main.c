@@ -190,7 +190,7 @@ void kernel_late_init(void) {
      * only if it also has a usable Local APIC + I/O APIC pair - hand
      * hardware-interrupt routing over from the legacy 8259 PIC this
      * kernel has used since Phase 2 to a real I/O APIC. Must run
-     * before driver_init_all() below (Phase 76: timer_init() itself is
+     * before driver_init_all() below (Phase 77: timer_init() itself is
      * now one of the drivers that call runs - see kernel/drivers/
      * driver.h): every driver registered for any of its phases calls
      * register_irq_handler() (kernel/arch/x86/cpu/irq.c), which
@@ -228,7 +228,7 @@ void kernel_late_init(void) {
         }
     }
 
-    /* Phase 76: timer/VFS/network are now self-registered too (see
+    /* Phase 77: timer/VFS/network are now self-registered too (see
      * kernel/drivers/driver.h's own updated comment) - each in its
      * own phase, positioned to run at exactly the same point in this
      * sequence they always did, so this is a pure mechanism change,
@@ -1461,32 +1461,44 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * avoids (idle's hlt loop only ever wakes back up via a timer
      * interrupt that's routed to the BSP only). */
     process_pin_to_bsp(idle_pid);
-    /* Phase 30: NovaOS now boots into a genuine ring-3 shell via
-     * process_exec_as_shell() instead of running a shell as a
-     * ring-0 kernel task (userland/shell/shell.c, Phase 29's
-     * organizationally-separated but still-ring-0 shell, kept in the
-     * tree but no longer launched at boot). This is non-blocking
-     * (just creates and schedules the process, like every other
-     * process_create_*() call here) - safe to call directly from
-     * kernel_main() before scheduler_start(), unlike a call that
-     * would block on process_wait(). See PROGRESS.md for the honest
-     * scope note on which commands this shell doesn't have yet.
+    /* Phase 30: NovaOS now boots into a genuine ring-3 process via
+     * process_exec_as_init() instead of running a shell as a ring-0
+     * kernel task (userland/shell/shell.c, Phase 29's organizationally
+     * -separated but still-ring-0 shell, kept in the tree but no
+     * longer launched at boot). This is non-blocking (just creates and
+     * schedules the process, like every other process_create_*() call
+     * here) - safe to call directly from kernel_main() before
+     * scheduler_start(), unlike a call that would block on process_
+     * wait().
      *
      * Phase 37: WHICH file to exec here is no longer a literal string
      * baked into this function - it comes from
-     * firstrun_get_init_path() (backed by SYSTEM.CFG's new init_path
-     * field, see sysconfig.h), defaulting to this project's own
-     * current shell ("SHELL.ELF") when nothing else is configured.
-     * This is the concrete fix for a real, previously-named gap: a
-     * kernel that hardcodes one specific userland's init program by
-     * name isn't something a *different* userland could boot into
-     * without editing kernel source. A different userland/distro
-     * sharing this same kernel binary now only needs its own
-     * SYSTEM.CFG (or first-run wizard) to name a different init
-     * program - no kernel change required. */
+     * firstrun_get_init_path() (backed by SYSTEM.CFG's own init_path
+     * field, see sysconfig.h). This is the concrete fix for a real,
+     * previously-named gap: a kernel that hardcodes one specific
+     * userland's init program by name isn't something a *different*
+     * userland could boot into without editing kernel source. A
+     * different userland/distro sharing this same kernel binary now
+     * only needs its own SYSTEM.CFG (or first-run wizard) to name a
+     * different init program - no kernel change required.
+     *
+     * Phase 77: that default is now "NOVAINIT.ELF" - this kernel's
+     * own real service supervisor (userland/novainit-rs/novainit.rs),
+     * genuinely wired as PID 1 rather than "SHELL.ELF" directly.
+     * Everything the paragraph above already says about a config-
+     * driven, kernel-doesn't-need-to-know-or-care init program applies
+     * exactly as much to this new default as it did to the old one -
+     * this is a change to WHAT gets configured, not a new mechanism.
+     * novainit's own SERVICES.CFG (tools/fixtures/SERVICES.CFG) is
+     * what actually launches the interactive shell now, as one
+     * supervised, `trusted`, always-restarted service among others -
+     * see that file's own header line and novainit.rs's own module
+     * comment for the full design, including exactly how the shell
+     * still ends up with the same can_open_any_file/can_spawn grant
+     * it always had, just delegated one hop later than before. */
     const char* init_path = firstrun_get_init_path();
-    const char* shell_argv[] = {init_path};
-    process_exec_as_shell(init_path, shell_argv, 1);
+    const char* init_argv[] = {init_path};
+    process_exec_as_init(init_path, init_argv, 1);
     process_create_kernel_task("coreutils-test", coreutils_test_task);
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);

@@ -350,13 +350,28 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
                              const char** filenames, int file_count);
 
 /* Phase 30: exec's a process with can_open_any_file granted (see that
- * field's comment above) AND can_spawn granted - a shell fundamentally
- * needs both broad file access and the ability to run other programs,
- * so both are covered by this one trust decision. Reserved for the
- * interactive shell itself, the one genuinely trusted, general-
- * purpose program that needs them. Kernel-boot-sequence use only;
- * never reachable from ring-3 SYS_EXEC. */
-int process_exec_as_shell(const char* path, const char** argv, int argc);
+ * field's comment above) AND can_spawn granted - the one genuinely
+ * trusted, general-purpose program launched this way fundamentally
+ * needs both broad file access and the ability to run other programs
+ * (and, via SYS_EXEC_TRUSTED's own delegation - see kernel/arch/x86/
+ * cpu/syscall.h - to pass that same trust on to whichever of ITS OWN
+ * children it specifically chooses to), so both are covered by this
+ * one trust decision. Kernel-boot-sequence use only; never reachable
+ * from ring-3 SYS_EXEC.
+ *
+ * Phase 77: renamed from process_exec_as_shell() - the shell was
+ * always just the one thing that happened to use this at the time,
+ * never anything this function's own behavior was actually specific
+ * to. What the kernel's boot sequence execs here (SYSTEM.CFG's own
+ * init_path - see userland/shell/firstrun.c) is now this kernel's
+ * real, permanent PID 1 (userland/novainit-rs/novainit.rs by default
+ * - see that file's own module comment), not the shell directly; the
+ * shell receives this exact same grant one hop later, by novainit's
+ * own deliberate choice to launch it as a `trusted` supervised
+ * service (tools/fixtures/SERVICES.CFG), the same as any other
+ * genuinely trusted program this function's own callers might one day
+ * choose to launch this way instead. */
+int process_exec_as_init(const char* path, const char** argv, int argc);
 
 /* Phase 59: SYS_EXEC_TRUSTED's own kernel-side implementation - see
  * kernel/arch/x86/cpu/syscall.h's own comment on that syscall for the
@@ -364,7 +379,7 @@ int process_exec_as_shell(const char* path, const char** argv, int argc);
  * can_open_any_file is set to whatever the *calling* process's own
  * can_open_any_file currently is (read via process_current()), rather
  * than always false. Reachable from ring-3 SYS_EXEC_TRUSTED, unlike
- * process_exec_with_files()/process_exec_as_shell() above - safe to
+ * process_exec_with_files()/process_exec_as_init() above - safe to
  * expose because an unprivileged caller's own can_open_any_file is
  * always false, so it has nothing to delegate; only a process already
  * carrying that grant (today, only the interactive shell) can pass it

@@ -7,8 +7,14 @@
  * executable - talking to the kernel only through syscalls, the
  * same way /bin/bash relates to the Linux kernel on Ubuntu. This is
  * the real completion of Phase 29's architectural point: the kernel
- * boots into this program via process_exec_as_shell() rather than
- * running a shell as a kernel task at all.
+ * boots into a real ring-3 process (process_exec_as_init() -
+ * kernel/task/process.c) rather than running a shell as a kernel task
+ * at all. Phase 77: that process is this kernel's own real PID 1,
+ * novainit (userland/novainit-rs/novainit.rs) by default, not this
+ * shell directly any more - novainit launches THIS program instead,
+ * as one of its own supervised services (tools/fixtures/SERVICES.CFG)
+ * with the exact same can_open_any_file/can_spawn grant it always
+ * had, just delegated one hop later.
  *
  * Scope at Phase 30 (long since outgrown - kept here only as a
  * historical marker; see the Phase 59/60 notes below for what
@@ -270,8 +276,11 @@ static void cmd_cat(int argc, char* argv[]) {
  * SYS_EXEC, and Phase 32's own choice to keep the package manager a
  * shell builtin instead of a separate binary for exactly this reason).
  * SYS_EXEC_TRUSTED (Phase 59) closes that gap the deliberately narrow
- * way: this shell process already has can_open_any_file (granted once,
- * at boot, via process_exec_as_shell() - see kernel/task/process.c),
+ * way: this shell process already has can_open_any_file (Phase 77:
+ * delegated by novainit, this kernel's own real PID 1, which launches
+ * this shell as one of its own `trusted` supervised services - see
+ * tools/fixtures/SERVICES.CFG and kernel/task/process.c's process_
+ * exec_as_init() for where that trust originates at boot),
  * and SYS_EXEC_TRUSTED lets it explicitly delegate that exact
  * capability to CP.ELF/RM.ELF specifically, without silently granting
  * it to every other program `run`/plain SYS_EXEC can launch. */

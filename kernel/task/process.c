@@ -765,7 +765,7 @@ static void write_to_address_space(uint32_t* pd, uint32_t dest_vaddr,
  * driver's own state" - but it's exactly the same *kind* of hazard,
  * found by reading this function while auditing those). Before this
  * phase, two CPUs both calling process_exec()/process_exec_with_
- * files()/process_exec_as_shell() at the same physical instant would
+ * files()/process_exec_as_init() at the same physical instant would
  * both read their own (different) ELF file into the *same* 2MB
  * buffer, corrupting whichever load loses the race - a real bug now
  * that Phase 56 made a second core able to run ring-3 code
@@ -1429,12 +1429,13 @@ static int process_exec_internal(const char* path, const char** argv,
     p->allowed_host_count = 0;
     /* Phase 71: grant_spawn is its own, independent parameter now -
      * see this function's own doc comment above for why. A trusted,
-     * general-purpose shell (process_exec_as_shell(), which still
-     * passes true for both) needs both broad file access and the
-     * ability to run programs, and for that one, fully-trusted case
-     * they really are the same underlying trust decision - but that
-     * is no longer the only real, legitimate shape a caller's own
-     * grants can take. */
+     * general-purpose PID 1 (process_exec_as_init() - Phase 77's own
+     * rename, once launching the shell directly stopped being what
+     * this was actually for - which still passes true for both) needs
+     * both broad file access and the ability to run programs, and for
+     * that one, fully-trusted case they really are the same
+     * underlying trust decision - but that is no longer the only
+     * real, legitimate shape a caller's own grants can take. */
     p->can_spawn = grant_spawn;
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
@@ -1497,14 +1498,24 @@ int process_exec_with_files(const char* path, const char** argv, int argc,
 }
 
 /* Phase 30: exec's a process with broad, "may open any file" access
- * (see can_open_any_file's comment in process.h) - reserved for the
- * one genuinely trusted, general-purpose program that needs it: the
- * interactive shell itself, which has to open whatever file the user
- * names at a prompt, not a small set known in advance. Not exposed to
- * ring-3 SYS_EXEC, and not something an ordinary exec'd program (like
- * userland/coreutils/cat.c) receives even indirectly - only the
- * kernel's own boot sequence calls this, for the shell specifically. */
-int process_exec_as_shell(const char* path, const char** argv, int argc) {
+ * (see can_open_any_file's comment in process.h) - reserved for
+ * whichever one program the kernel's own boot sequence trusts this
+ * broadly. Not exposed to ring-3 SYS_EXEC, and not something an
+ * ordinary exec'd program (like userland/coreutils/cat.c) receives
+ * even indirectly - only the kernel's own boot sequence calls this.
+ *
+ * Phase 77: renamed from process_exec_as_shell(). What's actually
+ * launched here is this kernel's own real PID 1 - SYSTEM.CFG's own
+ * init_path (userland/shell/firstrun.c), NOVAINIT.ELF by default -
+ * not the interactive shell directly any more; the shell now receives
+ * this exact same grant one hop later, via SYS_EXEC_TRUSTED's own
+ * delegation, as one of novainit's own `trusted` supervised services
+ * (tools/fixtures/SERVICES.CFG). Nothing about this function's own
+ * behavior ever depended on what it launched actually being a shell -
+ * it only ever granted can_open_any_file + can_spawn unconditionally
+ * to whatever kernel_main() named, which is exactly why the old name
+ * was always more historical accident than description. */
+int process_exec_as_init(const char* path, const char** argv, int argc) {
     return process_exec_internal(path, argv, argc, NULL, 0, true, true,
                                   NULL, 0);
 }

@@ -33,6 +33,16 @@ extern "C" {
     /// (not found, or a real ELF-loading error).
     pub fn sys_exec(path: *const u8, argv: *const *const u8, argc: i32) -> i32;
 
+    /// Phase 77: like sys_exec() above, except the new process
+    /// inherits THIS process's own can_open_any_file/can_spawn
+    /// grants, if it has any (see kernel/task/process.c's
+    /// process_exec_trusted_env() for the exact, real delegation
+    /// rule - a caller with neither capability delegates nothing at
+    /// all, making this identical to plain sys_exec() for it). Used
+    /// by start_service() for exactly the services this file's own
+    /// SERVICES.CFG marks `trusted` - see that function's own comment.
+    pub fn sys_exec_trusted(path: *const u8, argv: *const *const u8, argc: i32) -> i32;
+
     /// Blocks until `pid` terminates, then returns its exit code (or
     /// -1 immediately if no such process exists at all).
     pub fn sys_wait(pid: i32) -> i32;
