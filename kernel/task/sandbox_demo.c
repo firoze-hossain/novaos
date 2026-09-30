@@ -174,10 +174,17 @@ void sandbox_demo_task(void) {
      * each new, real self-test the best practical chance of actually
      * executing and being observed. Moved ahead of WM.ELF's own test
      * specifically, not just to the front in general, for a second,
-     * separate, real reason: this kernel's own process table holds
-     * only MAX_PROCESSES=16 slots total, for the whole system's
-     * lifetime, never recycled (kernel/task/process.h's own honest,
-     * documented limitation) - this selftest alone needs roughly six
+     * separate, real reason (true at the time this ordering was
+     * chosen - Phase 75 has since made the underlying constraint far
+     * less tight, see the parenthetical below, though the ordering
+     * itself is left as-is: it was never wrong, just no longer as
+     * load-bearing): this kernel's own process table held only
+     * MAX_PROCESSES=16 slots total, for the whole system's lifetime,
+     * never recycled (kernel/task/process.h's own honest, documented
+     * limitation at the time - Phase 75 raised the STARTING size to
+     * 32 and, more importantly, made the table grow well past that on
+     * demand instead of hitting a hard wall there; slots are still
+     * never recycled) - this selftest alone needs roughly six
      * of them (four services, two of which each need one real
      * restart), a real budget WM.ELF's own, single-slot selftest
      * running first would otherwise eat into for no good reason. Found

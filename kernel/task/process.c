@@ -31,8 +31,39 @@ extern void enter_usermode(void);
  * call, with the child's own copy of every register. */
 extern void syscall_return_point(void);
 
-static process_t process_table[MAX_PROCESSES];
+/* Phase 75: kernel/rust/growtable.rs - see that file's own comment
+ * for the full design (why a chunked table, not a reallocating one;
+ * what's deliberately still out of scope). */
+extern int32_t rust_growtable_create(uint32_t element_size,
+                                      uint32_t slots_per_chunk,
+                                      uint32_t max_chunks);
+extern uint32_t rust_growtable_capacity(int32_t handle);
+extern bool rust_growtable_ensure_capacity(int32_t handle, uint32_t at_least);
+extern uint8_t* rust_growtable_slot_ptr(int32_t handle, uint32_t index);
+
+/* Phase 75: was `static process_t process_table[MAX_PROCESSES];` - a
+ * flat, fixed-size C array - until this phase. Now a handle into
+ * kernel/rust/growtable.rs's own table of tables; every process_t is
+ * still a plain, contiguous, directly-indexable-in-spirit slot
+ * exactly as before (pt_slot() below is the one and only place that
+ * turns "index" into "process_t*"), just no longer capped at a
+ * single compile-time constant. -1 until process_init() sets it up;
+ * every function below that touches the table runs after that, so
+ * this is never observed as -1 in practice, the same as
+ * process_table[] was never observed before process_init()'s own
+ * memset() ran. */
+static int32_t process_table_handle = -1;
 static int next_pid = 1;
+
+/* The one place `index -> process_t*` happens. A thin wrapper around
+ * rust_growtable_slot_ptr() so every call site below reads exactly as
+ * it did against the old flat array (`pt_slot(i)` where it used to be
+ * `&process_table[i]`) rather than repeating the cast at every use. */
+static inline process_t* pt_slot(int index) {
+    return (process_t*)rust_growtable_slot_ptr(process_table_handle,
+                                                (uint32_t)index);
+}
+
 
 /* Phase 57: named directly in this project's own release-readiness
  * roadmap ("process_table[]"). Guards exactly one thing:
@@ -70,14 +101,42 @@ static void copy_name(char* dest, const char* src, size_t dest_size) {
 }
 
 void process_init(void) {
-    memset(process_table, 0, sizeof(process_table));
+    /* Phase 75: was `memset(process_table, 0, sizeof(process_table))`.
+     * rust_growtable_create() itself allocates nothing (a table
+     * starts at zero chunks/zero capacity - see growtable.rs's own
+     * comment on why); the ensure_capacity() call right after it is
+     * what actually allocates and zero-fills the table's first chunk,
+     * at exactly PROCESS_TABLE_CHUNK_SIZE slots - the same starting
+     * capacity, zero-initialized the same way (a freshly kmalloc()'d
+     * chunk is explicitly zeroed by growtable.rs itself), that the
+     * old flat array's own BSS zero-initialization always gave for
+     * free. Both calls run once, at boot, well before the scheduler
+     * or any AP exists (kernel/init/main.c calls this first) - so
+     * there is no concurrent access to race with yet, and a failure
+     * here (this kernel's 2MB heap arena, entirely empty at this
+     * point in boot, failing a single ~5KB allocation) is realistic
+     * only if something has already gone catastrophically wrong,
+     * which is exactly when a hard kernel_panic() - rather than
+     * silently continuing with a table that can never hold a single
+     * process - is the right, honest failure mode. */
+    process_table_handle = rust_growtable_create(
+        sizeof(process_t), PROCESS_TABLE_CHUNK_SIZE, PROCESS_TABLE_MAX_CHUNKS);
+    if (process_table_handle < 0 ||
+        !rust_growtable_ensure_capacity(process_table_handle,
+                                         PROCESS_TABLE_CHUNK_SIZE)) {
+        kernel_panic("process_init: failed to allocate the initial "
+                     "process table");
+    }
     spinlock_init(&process_table_lock);
 }
 
 static process_t* allocate_slot(void) {
     uint32_t flags = spinlock_acquire(&process_table_lock);
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (process_table[i].state == PROCESS_UNUSED) {
+
+    uint32_t capacity = rust_growtable_capacity(process_table_handle);
+    for (uint32_t i = 0; i < capacity; i++) {
+        process_t* p = pt_slot((int)i);
+        if (p->state == PROCESS_UNUSED) {
             /* Claim it immediately, still under the lock, so a second
              * CPU calling allocate_slot() concurrently can never see
              * this same slot as UNUSED too - see PROCESS_ALLOCATING's
@@ -108,14 +167,43 @@ static process_t* allocate_slot(void) {
              * this same critical section, makes it atomic with the
              * slot claim itself - the two can never again be split
              * across an unlocked gap. */
-            process_table[i].pid = next_pid++;
-            process_table[i].state = PROCESS_ALLOCATING;
+            p->pid = next_pid++;
+            p->state = PROCESS_ALLOCATING;
             spinlock_release(&process_table_lock, flags);
-            return &process_table[i];
+            return p;
         }
     }
+
+    /* Phase 75: no free slot in the table's CURRENT capacity - what
+     * used to simply be "the table is full" now first tries growing
+     * by one more chunk before giving up. Still fully serialized:
+     * this whole function runs under process_table_lock, so two CPUs
+     * racing to grow at the same physical instant is exactly the same
+     * already-closed race as two CPUs racing to claim the same slot
+     * (see PROCESS_ALLOCATING's own comment) - only one ever reaches
+     * here at a time. A freshly grown chunk is zero-filled by
+     * growtable.rs itself (see process_init()'s own comment), so its
+     * first slot is guaranteed UNUSED - claim it directly rather than
+     * re-scanning the whole table (including the old capacity this
+     * loop already just confirmed has nothing free) a second time. */
+    if (!rust_growtable_ensure_capacity(process_table_handle,
+                                         capacity + PROCESS_TABLE_CHUNK_SIZE)) {
+        spinlock_release(&process_table_lock, flags);
+        kernel_log("[FAULT] process_exec: process table full (%d slots, "
+                   "and it could not grow any further)\n", (int)capacity);
+        return NULL;
+    }
+    /* The actual point of this whole phase, made observable: this
+     * kernel used to simply fail outright the moment `capacity`
+     * processes had ever been created in one boot (see process.h's
+     * own Phase 72/75 history) - now it grows instead, and says so. */
+    kernel_log("[ OK ] process table grew: %d -> %d slots\n", (int)capacity,
+               (int)capacity + PROCESS_TABLE_CHUNK_SIZE);
+    process_t* p = pt_slot((int)capacity);
+    p->pid = next_pid++;
+    p->state = PROCESS_ALLOCATING;
     spinlock_release(&process_table_lock, flags);
-    return NULL;
+    return p;
 }
 
 /* Phase 73: the LAST step of every process-creation path.
@@ -601,10 +689,18 @@ void process_exit_current(int exit_code) {
 }
 
 process_t* process_table_entry(int index) {
-    if (index < 0 || index >= MAX_PROCESSES) {
+    if (index < 0) {
         return NULL;
     }
-    return &process_table[index];
+    /* rust_growtable_slot_ptr() itself already returns NULL for an
+     * index at or past the table's current capacity - the exact same
+     * bounds check the old `index >= MAX_PROCESSES` did, just against
+     * a capacity that can now grow rather than a fixed constant. */
+    return pt_slot(index);
+}
+
+int process_table_capacity(void) {
+    return (int)rust_growtable_capacity(process_table_handle);
 }
 
 process_t* process_current(void) {
@@ -618,10 +714,12 @@ void process_pin_to_bsp(int pid) {
      * scheduler or any AP has started (kernel/init/main.c calls this
      * right after creating idle, both well before scheduler_start()),
      * so there is no other CPU that could be concurrently mutating
-     * process_table[] at the time this runs. */
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (process_table[i].pid == pid && process_table[i].state != PROCESS_UNUSED) {
-            process_table[i].bsp_only = true;
+     * the process table at the time this runs. */
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = pt_slot(i);
+        if (p->pid == pid && p->state != PROCESS_UNUSED) {
+            p->bsp_only = true;
             return;
         }
     }
@@ -1464,8 +1562,9 @@ int process_exec_trusted(const char* path, const char** argv, int argc) {
  * wait_nonblock()'s own doc comment shows how). */
 static bool try_reap_process(int pid, int* out_exit_code) {
     process_t* target = NULL;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        process_t* candidate = &process_table[i];
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* candidate = pt_slot(i);
         if (candidate->pid == pid && candidate->state != PROCESS_UNUSED) {
             target = candidate;
             break;
@@ -1568,9 +1667,10 @@ int process_wait(int pid) {
 
 bool process_wait_nonblock(int pid, int* out_exit_code, bool* out_exists) {
     bool exists = false;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (process_table[i].pid == pid &&
-            process_table[i].state != PROCESS_UNUSED) {
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = pt_slot(i);
+        if (p->pid == pid && p->state != PROCESS_UNUSED) {
             exists = true;
             break;
         }

@@ -30,10 +30,12 @@
 //! - Fixed-capacity, statically-allocated pipe slots (MAX_PIPES of
 //!   them, each PIPE_CAPACITY bytes) - no heap allocation, matching
 //!   this kernel's existing preference for static/fixed-size kernel
-//!   structures (MAX_OPEN_FILES, MAX_PROCESSES, MAX_CAPABILITIES all
-//!   follow the same pattern) and avoiding the need to expose this
-//!   project's C kmalloc()/kfree() across the Rust/C FFI boundary at
-//!   all for this phase.
+//!   structures (MAX_OPEN_FILES and MAX_CAPABILITIES still follow the
+//!   same pattern; the process table itself moved off it in Phase 75
+//!   - see growtable.rs - once a genuinely unbounded ceiling turned
+//!   out to matter there in a way it doesn't for pipes) and avoiding
+//!   the need to expose this project's C kmalloc()/kfree() across the
+//!   Rust/C FFI boundary at all for this phase.
 //!
 //! - Genuinely non-blocking: pipe_read() returns immediately with a
 //!   distinct "would block" result if the buffer is empty and the

@@ -131,6 +131,48 @@ void exec_trust_demo_task(void) {
                     "with every group passing.\n"
                   : "[sandbox] FAIL: DYNTEST2.ELF did not exit cleanly.\n");
 
+    /* Phase 75: the actual point of the process table becoming
+     * growable, proven directly rather than inferred. PROCESS_TABLE_
+     * CHUNK_SIZE (process.h) is 32 - every process this whole boot
+     * sequence has created so far, across every self-test above, adds
+     * up to comfortably fewer than that (confirmed directly: no
+     * "process table grew" log line appears anywhere before this
+     * point in a real boot), so nothing earlier in this file has ever
+     * actually exercised growth. This loop execs and waits on 45
+     * separate, tiny, already-proven processes (HELLOC.ELF, unrelated
+     * to anything else this file tests) one after another -
+     * comfortably past 32 - and since process slots are still never
+     * recycled even after this phase (see growtable.rs's own comment
+     * on why that stays a deliberately separate question), this is
+     * real, cumulative, one-boot process-table growth, not a
+     * contrived synthetic stress case: exactly the same "many
+     * processes across one boot, most already finished" pattern that
+     * genuinely exhausted the OLD fixed ceiling once before (see
+     * process.h's own Phase 72 history) - just now past 32 instead of
+     * past 16. Every single one succeeding (a real pid AND exit code
+     * 0) is the actual proof; any failure here means the table either
+     * failed to grow or grew incorrectly. */
+    bool growth_ok = true;
+    for (int i = 0; i < 45; i++) {
+        const char* argv_h[] = {"HELLOC.ELF"};
+        int pid_h = sys_exec_trusted("HELLOC.ELF", argv_h, 1);
+        /* HELLOC.ELF deliberately returns 7, not 0 - see userland/
+         * examples/hello.c's own comment (a specific, checkable value
+         * distinct from HELLO.ELF's own 42, so make test's log-based
+         * checks can tell the two apart). */
+        int code_h = (pid_h >= 0) ? sys_wait(pid_h) : -1;
+        if (pid_h < 0 || code_h != 7) {
+            growth_ok = false;
+        }
+    }
+    sys_write(growth_ok
+                  ? "[sandbox] PASS: process table grew past its original "
+                    "32-slot starting capacity - 45 processes exec'd and "
+                    "waited on, one after another, in this one boot.\n"
+                  : "[sandbox] FAIL: the process table did not grow "
+                    "correctly - at least one of 45 sequential execs past "
+                    "its original capacity did not succeed cleanly.\n");
+
     sys_exit(0);
 
     for (;;) { }

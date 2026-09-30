@@ -111,7 +111,7 @@ static const char* state_name(process_state_t s) {
 
 static void cmd_ps(void) {
     vga_puts("  PID  RING  STATE       NAME\n");
-    for (int i = 0; i < MAX_PROCESSES; i++) {
+    for (int i = 0; i < process_table_capacity(); i++) {
         process_t* p = process_table_entry(i);
         if (p == NULL || p->state == PROCESS_UNUSED) {
             continue;
