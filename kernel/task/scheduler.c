@@ -95,10 +95,34 @@ void scheduler_add(process_t* p) {
  * genuinely *this calling CPU's own* current process, never another
  * CPU's. */
 static process_t* pick_next_locked(bool for_ap, uint8_t cpu_index) {
-    for (int i = 1; i <= MAX_PROCESSES; i++) {
-        int idx = (search_cursor + i) % MAX_PROCESSES;
+    /* Phase 75: the process table itself can now grow past
+     * PROCESS_TABLE_CHUNK_SIZE (see process.h) - read its CURRENT
+     * capacity once per call, not a fixed compile-time constant,
+     * exactly like process.c's own internal scans already do. A
+     * table that grows mid-scan (another CPU calling exec() and
+     * triggering allocate_slot()'s own growth) is not a hazard this
+     * needs to account for: capacity only ever increases, never
+     * shrinks, so at worst this call's own scan simply doesn't
+     * consider a slot that became available a moment after it read
+     * `capacity` - exactly the same benign, eventually-consistent
+     * staleness every other unlocked read of this table already
+     * tolerated before this phase. */
+    int capacity = process_table_capacity();
+    if (capacity <= 0) {
+        /* Provably unreachable: process_init() kernel_panic()s if it
+         * can't allocate the table's first chunk, and that runs
+         * before the scheduler or any process exists - so this
+         * function is never called before capacity is at least
+         * PROCESS_TABLE_CHUNK_SIZE. Checked anyway rather than relying
+         * on that invariant to protect the modulo below from becoming
+         * a division by zero - a crash here is the scheduler's own
+         * hot path, not a place to trust an invariant silently. */
+        return NULL;
+    }
+    for (int i = 1; i <= capacity; i++) {
+        int idx = (search_cursor + i) % capacity;
         if (idx < 0) {
-            idx += MAX_PROCESSES;
+            idx += capacity;
         }
         process_t* p = process_table_entry(idx);
         if (p == NULL) {

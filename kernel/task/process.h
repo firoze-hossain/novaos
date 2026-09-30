@@ -4,22 +4,35 @@
 #include "../include/types.h"
 #include "../arch/x86/cpu/isr.h"
 
-/* Phase 72: raised from 16 to 32. A real, separate, genuine resource
- * constraint from the SMP double-scheduling bug fixed this same phase
- * (kernel/task/scheduler.c's own pick_next_locked() - see that fix's
- * own comment for the full account) - slots are never recycled once
- * used (see kfree()/free_user_address_space()'s own callers, process_
- * wait_nonblock()'s try_reap_process()), and this project's own,
- * steadily grown boot-time test sequence (multiple selftests, each
- * exec'ing several real child processes of their own) now genuinely
- * needs more than 16 slots' worth of total process creation across a
- * single boot, confirmed directly by a real, repeatedly-logged
- * "process_exec: process table full" once the earlier, unrelated
- * crash was no longer masking it. Simple headroom, not a structural
- * fix for the underlying "never recycled" limitation itself, which
- * remains real, documented, and unresolved - true slot recycling is
- * a separate, larger, riskier change deliberately not taken on here. */
-#define MAX_PROCESSES 32
+/* Phase 75: the process table itself is now genuinely growable (see
+ * kernel/rust/growtable.rs) rather than the flat, fixed-size
+ * `process_t process_table[MAX_PROCESSES]` array this constant used
+ * to size directly. History worth keeping: Phase 72 already raised
+ * this same ceiling once, 16 -> 32, after a real, repeatedly-logged
+ * "process table full" failure - this project's own boot-time test
+ * sequence (multiple selftests, each exec'ing several real child
+ * processes of their own) genuinely needed more slots than existed,
+ * and that fix's own comment predicted needing to do this again:
+ * "Simple headroom, not a structural fix... true slot recycling is a
+ * separate, larger, riskier change deliberately not taken on here."
+ * This phase is that structural fix for the CEILING (not for
+ * recycling - see growtable.rs's own comment on why that stays a
+ * separate, deliberately unaddressed question): the table now starts
+ * at exactly this many slots (so boot-time behaviour and timing are
+ * unchanged from before this phase) and grows one more chunk of this
+ * same size at a time, on demand, instead of failing outright. */
+#define PROCESS_TABLE_CHUNK_SIZE 32
+
+/* How many chunks (see above) the process table may grow to -
+ * PROCESS_TABLE_CHUNK_SIZE * PROCESS_TABLE_MAX_CHUNKS = 2048 total
+ * process slots, ever, across the kernel's whole life (slots are
+ * still never recycled - see growtable.rs). Real headroom over
+ * anything this project's own test suite or demos come remotely
+ * close to needing, not a tight fit - an explicit, honest, generous
+ * bound rather than an unstated "unlimited" claim, matching this
+ * project's own standing preference (MAX_EXEC_ARGS, MAX_CAPABILITIES,
+ * MAX_SHARED_LIBS all make the identical choice). */
+#define PROCESS_TABLE_MAX_CHUNKS 64
 #define KERNEL_STACK_SIZE (16 * 1024)
 /* Phase 71: doubled from 8KB to 16KB after directly observing a real
  * stack overflow - userland/novainit-rs/novainit.rs's own selftest
@@ -433,6 +446,16 @@ void process_exit_current(int exit_code);
 
 process_t* process_current(void);
 process_t* process_table_entry(int index);
+
+/* Phase 75: the process table's CURRENT capacity - how many indices
+ * process_table_entry() will accept right now, not the fixed
+ * PROCESS_TABLE_CHUNK_SIZE constant alone (the table starts at
+ * exactly that many slots and grows in chunks of that size - see
+ * process.h's own comment on it). scheduler.c's own round-robin scan
+ * (pick_next_locked()) uses this instead of a compile-time constant,
+ * the one place outside process.c that needs to know how large the
+ * table currently is. */
+int process_table_capacity(void);
 
 /* Phase 47: sets a process's uid/gid directly - kernel-side only
  * (there is no syscall wrapper for this, deliberately; see

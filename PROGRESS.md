@@ -8241,7 +8241,197 @@ while touching it: `KERNEL_RUST_OBJ`'s own dependency list was missing
 any of those files could have silently kept using an old object file
 before this fix, an unrelated but real latent bug noticed in passing).
 
-## Phase 75 and beyond
+## Phase 75: the process table becomes genuinely growable - a chunked, stable-pointer table, in Rust
+
+**Status: done and verified. 105/105 assertions (103 that existed plus 2
+new) on 6 consecutive full `make test` runs, fresh disk each time - 3 in
+the working tree, 3 more on a completely fresh clone with the patch
+freshly applied. The growth this phase exists to prove actually happens
+is directly observed in the boot log, not inferred: `process table grew:
+32 -> 64 slots`.**
+
+### Why this one was architecturally dangerous in a way the last two weren't
+
+`process_table[]` used to be a plain `static process_t
+process_table[MAX_PROCESSES]` array. The obvious way to make an array
+"grow" - reallocate a bigger block, copy the old contents in, free the
+old block - MOVES every element already in it. That's fatal here: this
+kernel hands out raw `process_t*` pointers (`process_table_entry()`,
+`current[cpu_index]` on each CPU, everything mid-syscall holding one)
+that outlive the call that produced them and get read from both CPUs
+concurrently. A naive growable array would leave every one of those
+pointers dangling the instant the table grew - a real, live use-after-
+free under actual hardware concurrency, not a theoretical concern.
+
+### Design: a chunk table, not a reallocating array
+
+`kernel/rust/growtable.rs` (new): elements live in fixed-size CHUNKS,
+each one allocated exactly once (via `kmalloc`) and never moved or freed
+again for the kernel's whole life. Growing means allocating one MORE
+chunk and recording its address; every existing chunk, and every pointer
+into one, is completely undisturbed. The only thing that grows in the
+ordinary, reallocating sense is the small, fixed-capacity ARRAY OF CHUNK
+POINTERS itself (`MAX_CHUNKS = 64`) - and since that only stores
+addresses, not full elements, a generous fixed bound on it costs almost
+nothing.
+
+The module is generic and reusable (a small integer "handle" identifies
+each table, `MAX_TABLES = 16` of them at once) rather than hard-coded to
+the process table specifically - not because this phase needed more than
+one, but because "process table, **etc.**" is this project's own roadmap
+wording, and a component this simple costs nothing extra to make properly
+reusable. Only one table is actually created by this phase.
+
+It has no idea what a `process_t` contains - every element is just
+`element_size` opaque bytes, handed back as a raw `*mut u8` the C caller
+casts to whatever real type that table holds, exactly as it always
+indexed a plain array of that type. Same split every other `kernel/rust/`
+module already uses: OS integration (`kmalloc`/`kfree`, called directly
+via `extern "C"` - see `journal.rs`'s own `blockdev_*` block for the
+identical established pattern) is a thin link-time boundary; the logic
+worth having in one well-tested place (chunk bookkeeping, bounds checks,
+the stable-pointer guarantee itself) lives here, `#![no_std]`-compatible
+throughout but with nothing in it that actually needs `no_std` to
+compile, so it builds and runs its own unit tests under a plain host
+`rustc` unmodified, and separately compiles clean under the real kernel
+target.
+
+Locking: this module does none of its own - `ensure_capacity()` (the only
+mutating call) must be called only while the caller holds whatever lock
+guards that table's contents. For the process table, that's the EXISTING
+`process_table_lock` (already there, already guarding `allocate_slot()`'s
+scan-then-claim); growth simply happens inside the same critical section,
+needing no new lock at all.
+
+### The C side: `process.c`/`process.h`/`scheduler.c`
+
+`process_table[]` is now a handle into the growable table; `pt_slot()` (a
+one-line wrapper) is the only place `index -> process_t*` happens, so
+every call site reads exactly as it did against the old flat array.
+`allocate_slot()` scans the table's CURRENT capacity for a free slot
+exactly as before; only if none exists does it grow by one chunk (32
+slots - `PROCESS_TABLE_CHUNK_SIZE`, replacing the old `MAX_PROCESSES`)
+and claim the new chunk's first slot directly, which is guaranteed
+`PROCESS_UNUSED` because `growtable.rs` zero-fills every freshly allocated
+chunk itself - reproducing, deliberately, the one guarantee the old flat
+array's own BSS zero-initialization always gave for free.
+
+`process_table_entry()` (the accessor every OTHER kernel subsystem was
+already using - `scheduler.c` in particular) keeps its exact signature
+and behaviour, just backed by the growable table now. The only change
+outside `process.c` itself: `scheduler.c`'s own round-robin scan
+(`pick_next_locked()`) now reads the table's current capacity via a new,
+equally clean accessor (`process_table_capacity()`) instead of a compile-
+time constant - one function's worth of change, because `scheduler.c`
+already went through the accessor rather than indexing the array
+directly. `userland/shell/shell.c` (actually built straight into the
+kernel image - `USERLAND_KERNEL_TASK_DIRS` in the Makefile, not a real
+ring-3 ELF, despite the directory name) needed the identical one-line fix
+for its own `ps` command.
+
+`process_init()` calls `rust_growtable_create()` then immediately
+`ensure_capacity()`s the table up to its starting 32 slots, at boot,
+before the scheduler or any AP exists - so boot-time behaviour and timing
+are otherwise unchanged from before this phase, and a failure here (this
+kernel's 2MB, entirely-empty-at-this-point heap failing a single ~5KB
+allocation) is realistic only if something has already gone
+catastrophically wrong, which is exactly when a hard `kernel_panic()` -
+not silently continuing with a table that can hold zero processes - is
+the honest failure mode.
+
+### Real history this continues
+
+`process.h`'s own comment already told this story before this phase
+touched it: Phase 72 raised the same ceiling once, 16 -> 32, after a
+real, repeatedly-logged "process table full" failure - this project's own
+boot-time test sequence had genuinely outgrown it - and that fix's own
+comment predicted needing to do this again: *"Simple headroom, not a
+structural fix... true slot recycling is a separate, larger, riskier
+change deliberately not taken on here."* This phase is that structural
+fix for the CEILING - not for recycling, which stays a deliberately
+separate question (below).
+
+### What this phase deliberately does NOT also fix
+
+Process slots are never returned to the free list even after that
+process has exited and been reaped - `process.c`'s own pre-existing
+comment already named this ("slots are never actually recycled today").
+This phase makes the table grow instead of hitting a hard ceiling, which
+is the actual, named ask; it does not additionally implement slot
+recycling. That is a real, separate, non-trivial question of its own:
+`process_wait()`/`process_wait_nonblock()` are deliberately safe to call
+more than once for the same pid, still returning the same exit code every
+time (multiple existing call sites rely on exactly that - `try_reap_
+process()`'s own comment is explicit about it) - and immediately
+recycling a slot the instant it is first reaped would break that
+guarantee for any second caller. Fixing it properly needs its own design
+(most plausibly: recycle only once nothing could plausibly still want
+that pid's exit code, which is not a question "does the table grow
+instead of hitting a wall" actually needs to answer). Documented in
+`growtable.rs`'s own top comment, not silently left unmentioned. One
+practical consequence worth being explicit about: with growth but no
+recycling, `PROCESS_TABLE_MAX_CHUNKS` (64, giving 2048 slots total) is a
+bound on total processes ever created in the kernel's lifetime, not on
+concurrently-running ones - real headroom for anything this project's own
+test suite or demos come close to needing, not a claim that the ceiling
+problem is gone forever under unbounded process churn.
+
+### Verification
+
+1. **Host unit tests** (`rustc --edition 2021 --test kernel/rust/
+   growtable.rs`, no QEMU): create/capacity/grow/bounds behaviour against
+   hand-built cases, all passing under both the host's own `rustc` and
+   (separately) the real kernel target. The one that actually matters
+   most: `existing_pointers_survive_growth` - writes a distinct pattern
+   into every slot of the first chunk, captures the real pointer to each,
+   forces several MORE chunks to be allocated, then confirms both the
+   data AND the pointer identity (not merely "the value is still
+   correct", the literal `*mut T` address) are completely unchanged. This
+   is the one guarantee the whole design exists for, checked directly,
+   not merely assumed from the design being reasoned about correctly.
+2. **Zero regression**: the full pre-existing 103-assertion suite still
+   passes unchanged (one run hit the project's own already-documented
+   `usb_device_enumerated` flake - unrelated to this phase, in the
+   `known_flaky` set since Phase 72's own investigation, and a same-build
+   rerun passed clean - not a regression from this work).
+3. **Real, observed growth, not inferred**: a new test
+   (`kernel/task/exec_trust_demo.c`) execs and waits on 45 sequential
+   `HELLOC.ELF` processes, comfortably past the table's original 32-slot
+   capacity - since slots are never recycled (above), this is genuine,
+   cumulative, one-boot growth, the same "many processes across one boot"
+   pattern that actually exhausted the OLD ceiling once before (Phase 72,
+   above), just past 32 instead of past 16. The kernel's own `process
+   table grew: 32 -> 64 slots` log line, and all 45 exec+wait cycles
+   succeeding with the correct (`7`, not `0` - `HELLOC.ELF` deliberately
+   returns a specific, checkable value, see `userland/examples/hello.c`'s
+   own comment) exit code, are both checked as separate boot-test
+   assertions.
+4. A real bug in this phase's OWN test, caught by its own first failing
+   run rather than shipped: the growth-proof loop initially checked for
+   exit code 0, which is simply wrong for `HELLOC.ELF` - fixed once the
+   very first `make test` run correctly reported it as a failure (an
+   `[ OK ] Process 'HELLOC.ELF' (pid N) exited with code 7` line, right
+   next to the growth itself succeeding correctly, made the actual bug
+   immediately obvious rather than needing to be tracked down).
+5. **6 consecutive full `make test` runs, fresh `disk.img` each time,
+   105/105 every time**: 3 in the working tree (91s/78s/118s), 3 more on
+   a completely fresh clone of the upstream repository with this phase's
+   patch freshly applied (51s/82s/116s) - comfortably under the existing
+   150s ceiling, no timeout change needed.
+
+### Files
+
+New: `kernel/rust/growtable.rs`. Changed: `kernel/rust/lib.rs` (`mod
+growtable;`), `kernel/rust/pipe.rs` (one stale comment fixed in passing),
+`kernel/task/process.{c,h}`, `kernel/task/scheduler.{c,h}`,
+`kernel/task/exec_trust_demo.c` (the growth-proof test),
+`kernel/task/sandbox_demo.c` (one historical comment updated - the
+constraint it describes is no longer as tight), `userland/shell/shell.c`
+(one-line fix, `MAX_PROCESSES` -> `process_table_capacity()`),
+`tools/python/test_runner.py` (2 new assertions), `Makefile`
+(`growtable.rs` added to `KERNEL_RUST_OBJ`'s own dependency list).
+
+## Phase 76 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

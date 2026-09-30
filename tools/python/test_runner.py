@@ -533,6 +533,12 @@ ASSERTIONS: list[Assertion] = [
     Assertion("dyntest2_exec_passed",
               r"sandbox. PASS: DYNTEST2\.ELF",
               "Phase 74: the kernel-side demo task saw DYNTEST2.ELF exit 0"),
+    Assertion("process_table_grew",
+              r"process table grew: 32 -> 64 slots",
+              "Phase 75: the process table actually grew past its original, compile-time-fixed 32-slot capacity - not inferred, the kernel's own log line for exactly that event"),
+    Assertion("process_table_growth_test_passed",
+              r"sandbox. PASS: process table grew past its original 32-slot",
+              "Phase 75: 45 sequential exec+wait cycles, comfortably past the process table's original capacity, all succeeded - the table grew instead of the 32nd-or-later one failing with \"process table full\""),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]

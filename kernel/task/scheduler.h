@@ -7,8 +7,12 @@
 /* Registers a newly-created process as eligible to run. Doesn't
  * maintain a separate ready queue - round robin currently just scans
  * the whole process table each time it needs to pick a task (see
- * scheduler.c), which is simple and correct at MAX_PROCESSES=16 but
- * would want a real queue if that ever grows much larger. */
+ * scheduler.c), which is simple and correct at the scale this project
+ * actually runs at (a few dozen processes across a whole boot) but
+ * would want a real queue if the process table's own now-much-higher
+ * growth ceiling (Phase 75 - see process.h's PROCESS_TABLE_MAX_CHUNKS)
+ * were ever actually approached, rather than just no longer capping
+ * out at a small fixed constant the way it used to. */
 void scheduler_add(process_t* p);
 
 /* BSP-only: picks the first eligible process and switches into it as

@@ -42,6 +42,7 @@ mod http;
 mod pkgsign_core;
 mod pkgsign;
 mod dynlink;
+mod growtable;
 
 use core::panic::PanicInfo;
 
