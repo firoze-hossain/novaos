@@ -28,8 +28,16 @@ static char g_hostname[SYSCONFIG_HOSTNAME_MAX] = "novaos";
 static char g_username[SYSCONFIG_USERNAME_MAX] = "user";
 /* Phase 37: defaults to this project's own current, single userland's
  * init program - see firstrun.h's own comment on when/why this stays
- * at the default rather than whatever a loaded SYSTEM.CFG says. */
-static char g_init_path[SYSCONFIG_INIT_PATH_MAX] = "SHELL.ELF";
+ * at the default rather than whatever a loaded SYSTEM.CFG says.
+ * Phase 77: that default is now "NOVAINIT.ELF" - this kernel's own
+ * real service supervisor (userland/novainit-rs/novainit.rs), wired
+ * as this kernel's genuine, permanent PID 1 rather than the shell
+ * directly. The shell is still what a user actually ends up
+ * interacting with - novainit launches it as one of its own
+ * `trusted`, always-restarted supervised services (tools/fixtures/
+ * SERVICES.CFG) - just one hop later than before, with real
+ * dependency ordering and restart-on-crash now covering it too. */
+static char g_init_path[SYSCONFIG_INIT_PATH_MAX] = "NOVAINIT.ELF";
 
 static void bounded_copy(char* dest, const char* src, size_t size) {
     size_t i = 0;

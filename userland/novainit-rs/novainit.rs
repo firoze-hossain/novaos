@@ -1,16 +1,19 @@
-//! userland/novainit-rs/novainit.rs - Phase 71: a real service
-//! supervisor, closing the release-readiness doc's own three, plainly
-//! named gaps ("no service supervision, no restart-on-crash, no
-//! dependency ordering"). Matches macOS's own launchd as the row's
-//! named reference at the scale that reference itself calls "the
-//! cleanest, most approachable... for a project this size": one real
-//! daemon, real declarative config (tools/fixtures/SERVICES.CFG - a
-//! name|exec_path|arg|depends_on|restart line per service, not
-//! imperative shell-script init logic), real dependency-ordered
+//! userland/novainit-rs/novainit.rs - Phase 71 (finished Phase 77): a
+//! real service supervisor, closing the release-readiness doc's own
+//! three, plainly named gaps ("no service supervision, no restart-on-
+//! crash, no dependency ordering") - and, since Phase 77, actually
+//! wired as this kernel's own real, permanent PID 1 rather than a
+//! bounded demonstration launched from an interactive shell's own
+//! `svcinit` command. Matches macOS's own launchd as the row's named
+//! reference at the scale that reference itself calls "the cleanest,
+//! most approachable... for a project this size": one real daemon,
+//! real declarative config (tools/fixtures/SERVICES.CFG - a
+//! name|exec_path|arg|depends_on|restart|trusted line per service,
+//! not imperative shell-script init logic), real dependency-ordered
 //! startup, real supervision, real restart-on-crash. No new kernel-
 //! side service-management logic at all - built entirely on syscalls
-//! that already existed (SYS_EXEC/SYS_OPEN/SYS_READ) plus the one,
-//! genuinely new syscall this same phase added because a real
+//! that already existed (SYS_EXEC/SYS_EXEC_TRUSTED/SYS_OPEN/SYS_READ)
+//! plus the one, genuinely new syscall Phase 71 added because a real
 //! supervisor structurally needed it and nothing already exposed it:
 //! SYS_WAIT_NONBLOCK (see kernel/arch/x86/cpu/syscall.h's own doc
 //! comment) - checking on several independently-running children in
@@ -23,9 +26,10 @@
 //! purely for a human reading the file to know what each field
 //! means):
 //! ```text
-//! name|exec_path|arg|depends_on|restart
-//! network-check|PING.ELF|10.0.2.2|-|always
-//! greeting|HELLO.ELF|-|network-check|never
+//! name|exec_path|arg|depends_on|restart|trusted
+//! network-check|PING.ELF|10.0.2.2|-|always|no
+//! greeting|HELLO.ELF|-|network-check|never|no
+//! shell|SHELL.ELF|-|-|always|yes
 //! ```
 //! `arg` is a single, optional argument (`-` for none) - real
 //! services needing more than one argument is real, honest follow-up
@@ -37,10 +41,16 @@
 //! success sense this would otherwise need). `restart` is `always`
 //! (restart unconditionally whenever it exits, success or not -
 //! correct for a long-running daemon that isn't supposed to ever
-//! stop), `on-crash` (restart only on a non-zero exit code - the
-//! standard Unix "0 means it did its job, anything else means
-//! something went wrong" convention this project's own coreutils-rs
-//! programs already follow), or `never` (run once, whatever happens).
+//! stop, and for the interactive shell above: exiting it should mean
+//! getting a fresh one back, the same "respawn getty" behavior real
+//! Unix init systems have always given a login shell), `on-crash`
+//! (restart only on a non-zero exit code - the standard Unix "0 means
+//! it did its job, anything else means something went wrong"
+//! convention this project's own coreutils-rs programs already
+//! follow), or `never` (run once, whatever happens). `trusted` is
+//! `yes` or `no` - see start_service()'s own comment for exactly what
+//! it changes (SYS_EXEC_TRUSTED instead of plain SYS_EXEC) and why
+//! only the shell needs it among this file's own default services.
 //!
 //! # What's real here, matching launchd's own actual behavior
 //!
@@ -54,6 +64,40 @@
 //! whether the process object still exists, decides whether `on-
 //! crash` restarts it. Real supervision: every service is checked,
 //! every pass, not just started once and forgotten.
+//!
+//! # What Phase 77 added on top of Phase 71's own design
+//!
+//! Three real changes, not just flipping SYSTEM.CFG's own init_path
+//! default: main()'s own loop, previously bounded to 30 passes
+//! specifically because this program was not yet real PID 1 (see this
+//! file's own git history), is now genuinely permanent - a real init
+//! process has nothing above it for a return value to mean anything
+//! to. That alone would have been dangerous on its own: supervise_
+//! pass()'s restart logic has no delay or backoff of its own, so a
+//! permanently-looping supervisor watching a service that crashes on
+//! every single launch would otherwise consume this kernel's own
+//! process-table slots as fast as the scheduler lets this process run
+//! at all, for as long as the system stays up - MAX_RESTARTS (see
+//! that constant's own comment) is the real, explicit safeguard this
+//! phase added specifically because the old bounded loop had been
+//! quietly standing in for one. And `trusted` (see start_service()'s
+//! own comment) is what lets a specific, genuinely trusted service -
+//! the shell, launched here exactly like every other supervised
+//! service rather than receiving its own direct grant from the kernel
+//! the way it used to - keep the can_open_any_file/can_spawn access
+//! an interactive shell has always needed.
+//!
+//! What's still real, honest, and deliberately NOT fixed here: process
+//! slots are still never recycled once a service exits and is reaped
+//! (kernel/rust/growtable.rs's own comment on why that stayed a
+//! separate question applies exactly as much to a real init process
+//! restarting real services as it did before). MAX_RESTARTS bounds how
+//! much damage any ONE crash-looping service can do, not the table's
+//! own total, lifetime capacity - a system with a long enough uptime
+//! and enough genuinely healthy restarts (not just crash loops) could
+//! still, eventually, exhaust it. A real fix needs the same careful,
+//! separate design Phase 75 already declined to rush into, not
+//! something this phase's own, narrower scope should attempt either.
 
 #![no_std]
 #![no_main]
@@ -77,6 +121,44 @@ const MAX_SERVICES: usize = 8;
 const MAX_NAME: usize = 24;
 const MAX_ARG: usize = 32;
 const MAX_PATH: usize = 13; // this project's own 8.3-filename convention
+
+/// Phase 77: how many times supervise_pass() will restart any one
+/// service before giving up on it for good (see Service::gave_up).
+/// Didn't need to exist before this phase - main()'s own loop was
+/// bounded to 30 passes total (see that function's own, now-removed
+/// comment), which put a hard, if accidental, ceiling on how much
+/// damage a crash-looping service could do. Once this became a
+/// genuinely permanent, real PID 1 (this phase's own actual point),
+/// that accidental ceiling disappeared: supervise_pass()'s own
+/// restart branch has no rate limiting of its own (no delay, no
+/// backoff - the very next pass tries again immediately), so a
+/// service that crashes on every single launch would otherwise
+/// restart, and consume one more of this kernel's real, still-never-
+/// recycled process-table slots (kernel/rust/growtable.rs grew that
+/// table well past its old fixed ceiling, but "well past" is not "no
+/// ceiling at all" - see that module's own comment on why recycling
+/// stayed a deliberately separate, unsolved question), as fast as the
+/// scheduler lets this process run at all - genuinely unbounded, for
+/// a system with genuinely unbounded uptime.
+///
+/// 20 is real headroom over anything this project's own services
+/// legitimately need (a real, working service like `network-check`
+/// essentially never crashes at all in ordinary operation), not a
+/// tight fit - explicit and bounded rather than an unstated
+/// "unlimited" claim, the same choice this project makes everywhere
+/// else a real ceiling is needed (MAX_SHARED_LIBS, MAX_EXEC_ARGS,
+/// PROCESS_TABLE_MAX_CHUNKS...). Deliberately a simple COUNT cap, not
+/// also a time-based backoff/rate-limiter: a count cap alone already
+/// solves the actual problem this phase needs to guard against (
+/// unbounded process-table consumption) with no new syscall and no
+/// dependency on whatever sleep primitive might or might not already
+/// be available to userland; a real rate-limiter would additionally
+/// improve system responsiveness *during* a crash loop (this kernel
+/// still burns real CPU cycles restarting a doomed service up to 20
+/// times, just no longer forever), which is a real, separate
+/// improvement future work could still make, not one this phase
+/// claims to have made.
+const MAX_RESTARTS: u32 = 20;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum RestartPolicy {
@@ -142,6 +224,14 @@ struct Service {
     arg: FixedStr<MAX_ARG>,
     depends_on: FixedStr<MAX_NAME>,
     restart: RestartPolicy,
+    /// Phase 77: launched via SYS_EXEC_TRUSTED (delegating novainit's
+    /// own can_open_any_file/can_spawn, if it has them, to this one
+    /// service specifically) instead of the plain, no-special-
+    /// capability SYS_EXEC every other service gets - see start_
+    /// service()'s own comment for exactly what this changes and why
+    /// it defaults to false (least privilege: a service must opt in
+    /// to broad file access, not receive it by not saying otherwise).
+    trusted: bool,
     /// -1 while not currently running (either never started, or
     /// exited and not yet - or never going to be - restarted).
     pid: i32,
@@ -153,6 +243,15 @@ struct Service {
     /// to anything depending on it).
     started: bool,
     restart_count: u32,
+    /// Phase 77: set once restart_count reaches MAX_RESTARTS - see
+    /// that constant's own comment for why this exists at all (it
+    /// didn't need to, back when this loop was still bounded to 30
+    /// passes total). A service that has given up is never eligible
+    /// again, regardless of its own restart policy - distinct from
+    /// `restart == Never`, which is a policy the config itself chose;
+    /// this is novainit's own, separate decision that enough is
+    /// enough for a service that keeps failing.
+    gave_up: bool,
 }
 
 impl Service {
@@ -163,9 +262,11 @@ impl Service {
             arg: FixedStr::empty(),
             depends_on: FixedStr::empty(),
             restart: RestartPolicy::Never,
+            trusted: false,
             pid: -1,
             started: false,
             restart_count: 0,
+            gave_up: false,
         }
     }
 }
@@ -180,25 +281,49 @@ fn write_str(s: &[u8]) {
     unsafe { ffi::sys_write(buf.as_ptr()) };
 }
 
-/// Splits `line` on `|` into up to 5 fields, matching this file's own
+/// Phase 77: the one piece of this file's own log output that needs
+/// an actual number in it (MAX_RESTARTS is small - at most 2 digits -
+/// so a fixed, tiny stack buffer is all this ever needs). No `core::
+/// fmt`/`write!` machinery: this crate is `#![no_std]` with no
+/// allocator and, like every other userland/*-rs/ program in this
+/// project, no formatting infrastructure linked in for the sake of
+/// one call site.
+fn write_u32(mut v: u32) {
+    let mut digits = [0u8; 10]; // u32::MAX is 10 digits
+    let mut n = 0;
+    if v == 0 {
+        digits[0] = b'0';
+        n = 1;
+    } else {
+        while v > 0 {
+            digits[n] = b'0' + (v % 10) as u8;
+            v /= 10;
+            n += 1;
+        }
+        digits[..n].reverse();
+    }
+    write_str(&digits[..n]);
+}
+
+/// Splits `line` on `|` into up to 6 fields, matching this file's own
 /// module doc comment's own documented format exactly - returns
-/// `None` if `line` doesn't have exactly 5 fields (a real, malformed
+/// `None` if `line` doesn't have exactly 6 fields (a real, malformed
 /// config line, not silently guessed at).
-fn split_fields(line: &[u8]) -> Option<[&[u8]; 5]> {
-    let mut fields: [&[u8]; 5] = [&[], &[], &[], &[], &[]];
+fn split_fields(line: &[u8]) -> Option<[&[u8]; 6]> {
+    let mut fields: [&[u8]; 6] = [&[], &[], &[], &[], &[], &[]];
     let mut field_idx = 0;
     let mut start = 0;
     for i in 0..=line.len() {
         if i == line.len() || line[i] == b'|' {
-            if field_idx >= 5 {
-                return None; // more than 5 fields - malformed
+            if field_idx >= 6 {
+                return None; // more than 6 fields - malformed
             }
             fields[field_idx] = &line[start..i];
             field_idx += 1;
             start = i + 1;
         }
     }
-    if field_idx != 5 {
+    if field_idx != 6 {
         return None;
     }
     Some(fields)
@@ -274,14 +399,16 @@ fn load_services(out: &mut [Service; MAX_SERVICES]) -> usize {
                         svc.depends_on.set(fields[3]);
                     }
                     svc.restart = parse_restart(fields[4]);
+                    svc.trusted = fields[5] == b"yes";
                     svc.pid = -1;
                     svc.started = false;
                     svc.restart_count = 0;
+                    svc.gave_up = false;
                     count += 1;
                 }
                 None => {
                     write_str(b"novainit: skipping a malformed SERVICES.CFG ");
-                    write_str(b"line (expected exactly 5 |-delimited ");
+                    write_str(b"line (expected exactly 6 |-delimited ");
                     write_str(b"fields)\n");
                 }
             }
@@ -307,6 +434,23 @@ fn dependency_satisfied(svc: &Service, services: &[Service], count: usize) -> bo
     false
 }
 
+/// Phase 77: `svc.trusted` services launch via SYS_EXEC_TRUSTED
+/// instead of the plain SYS_EXEC every other service gets. The
+/// difference is entirely in what the KERNEL does with the call, not
+/// anything novainit decides on its own: process_exec_trusted_env()
+/// (kernel/task/process.c) delegates can_open_any_file/can_spawn to
+/// the new process ONLY if the CALLER (novainit itself) already has
+/// them - which it does, now that it's this kernel's own real PID 1
+/// (see kernel/task/process.c's process_exec_as_init(), the same
+/// unconditional grant the shell used to receive directly from the
+/// kernel before this phase). So a trusted service ends up with
+/// exactly the same capabilities the shell always had - just
+/// delegated through novainit now, one hop later, instead of granted
+/// directly at boot. An untrusted service calling SYS_EXEC_TRUSTED
+/// would delegate nothing at all (the kernel checks the CALLER's own
+/// grants, not the config file's wish) - trusted is a real capability
+/// decision novainit makes about a specific service, not a name a
+/// service can simply claim for itself.
 fn start_service(svc: &mut Service) {
     let path_cstr = svc.exec_path.as_cstr();
     let arg_cstr = svc.arg.as_cstr();
@@ -314,7 +458,11 @@ fn start_service(svc: &mut Service) {
     let argv: [*const u8; 2] = [path_cstr.as_ptr(), arg_cstr.as_ptr()];
     let argc = if svc.arg.is_empty() { 1 } else { 2 };
 
-    let pid = unsafe { ffi::sys_exec(path_cstr.as_ptr(), argv.as_ptr(), argc) };
+    let pid = if svc.trusted {
+        unsafe { ffi::sys_exec_trusted(path_cstr.as_ptr(), argv.as_ptr(), argc) }
+    } else {
+        unsafe { ffi::sys_exec(path_cstr.as_ptr(), argv.as_ptr(), argc) }
+    };
     svc.pid = pid;
     if pid >= 0 {
         svc.started = true;
@@ -332,7 +480,7 @@ fn start_service(svc: &mut Service) {
         write_str(svc.name.as_slice());
         write_str(b"' (exec_path not found, or the process table is ");
         write_str(b"full - see PROGRESS.md's own honest note on this ");
-        write_str(b"kernel's real, small, never-recycled process table)\n");
+        write_str(b"kernel's real process table)\n");
     }
 }
 
@@ -366,7 +514,11 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
             // regardless of which policy it has or how restart_count
             // behaves for that policy - the actual, correct condition
             // this eligibility check always needed.
-            let eligible = if !svc.started {
+            let eligible = if svc.gave_up {
+                false // Phase 77: MAX_RESTARTS exceeded - see that
+                      // constant's own comment; never eligible again,
+                      // regardless of what its own restart policy says
+            } else if !svc.started {
                 true // never started at all - just needs its dependency, if any
             } else {
                 svc.restart == RestartPolicy::Always
@@ -392,7 +544,22 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
             let svc = &mut services[i];
             let should_restart = should_restart_after_exit(svc.restart, exit_code);
             svc.pid = -1;
-            if should_restart {
+            if should_restart && svc.restart_count >= MAX_RESTARTS {
+                // Phase 77: MAX_RESTARTS reached - see that constant's
+                // own comment for why this exists at all. A clear,
+                // loud, distinct message: an operator watching the
+                // boot log needs to immediately understand why a
+                // service that's supposed to keep restarting suddenly
+                // stopped, not silently wonder whether novainit itself
+                // has stalled.
+                svc.gave_up = true;
+                write_str(b"novainit: '");
+                write_str(svc.name.as_slice());
+                write_str(b"' has failed ");
+                write_u32(svc.restart_count);
+                write_str(b" times in a row - giving up, not restarting ");
+                write_str(b"it again\n");
+            } else if should_restart {
                 svc.restart_count += 1;
                 start_service(svc);
             } else {
@@ -426,15 +593,6 @@ fn should_restart_after_exit(policy: RestartPolicy, exit_code: i32) -> bool {
         RestartPolicy::OnCrash => exit_code != 0,
         RestartPolicy::Never => false,
     }
-}
-
-fn all_started_at_least_once(services: &[Service; MAX_SERVICES], count: usize) -> bool {
-    for i in 0..count {
-        if !services[i].started {
-            return false;
-        }
-    }
-    true
 }
 
 /// Runs entirely without any real config file or real, long-running
@@ -587,8 +745,8 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         }
     }
 
-    write_str(b"novainit: starting - a real service supervisor ");
-              write_str(b"(Phase 71), reading tools/fixtures/SERVICES.CFG\n");
+    write_str(b"novainit: starting - this kernel's real, permanent PID ");
+              write_str(b"1 (Phase 77), reading tools/fixtures/SERVICES.CFG\n");
 
     let mut services = [Service::empty(); MAX_SERVICES];
     let count = load_services(&mut services);
@@ -597,38 +755,24 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         return 0;
     }
 
-    // A bounded number of passes here too, not a genuine infinite
-    // loop - this program is itself launched as a demonstrable,
-    // testable service from the shell (see the new `svcinit` command),
-    // not wired as this kernel's own real, permanent PID 1 (see this
-    // file's own module doc comment and PROGRESS.md's own honest
-    // account of why that larger, riskier step was deliberately not
-    // taken this phase) - so it needs a real, visible end for a
-    // person actually running it interactively, not a shell that
-    // never comes back. Deliberately modest (not, say, 200) for the
-    // same real reason run_selftest() above caps its own passes low:
-    // this kernel's own process table holds only MAX_PROCESSES=16
-    // slots total, for the whole system's lifetime, never recycled -
-    // the break condition below only ever needs one restart per
-    // always-policy service to be satisfied, so a much lower cap here
-    // is still every real pass this loop should ever actually need,
-    // with headroom to spare rather than headroom to exhaust.
-    for _ in 0..30 {
+    // Phase 77: a genuine, permanent loop - this program IS now this
+    // kernel's own real PID 1 (kernel/task/process.c's process_exec_
+    // as_init(), wired from SYSTEM.CFG's own init_path - see
+    // userland/shell/firstrun.c), not a bounded demonstration launched
+    // from an interactive shell's own `svcinit` command the way it
+    // was before this phase (see PROGRESS.md's Phase 71 and 76
+    // entries for the full history). A real init process does not
+    // return - there is nothing above it in this system for a return
+    // value to mean anything to, and nothing should ever take its
+    // place mid-boot. MAX_RESTARTS (see that constant's own comment)
+    // is what makes a genuinely unbounded loop like this one safe:
+    // without it, a single service that crashes on every launch would
+    // consume this kernel's own process-table slots as fast as the
+    // scheduler lets this process run at all, for as long as the
+    // system stays up - which, now that this loop no longer has its
+    // own accidental 30-pass ceiling, could be indefinitely long.
+    loop {
         supervise_pass(&mut services, count);
-        if all_started_at_least_once(&services, count)
-            && services.iter().take(count).all(|s| {
-                s.restart != RestartPolicy::Always || s.restart_count >= 1
-            })
-        {
-            // Every service has run, and every always-restarted one
-            // has genuinely been seen restarting at least once - a
-            // real, meaningful point to stop at for an interactive
-            // demonstration, not an arbitrary tick count.
-            break;
-        }
         unsafe { ffi::sys_yield() };
     }
-
-    write_str(b"novainit: demonstration complete.\n");
-    0
 }

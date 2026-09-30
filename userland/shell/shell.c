@@ -628,11 +628,18 @@ static void cmd_wm(void) {
  * services, so NOVAINIT.ELF itself needs can_spawn - and a plain
  * process_exec()'d child never inherits its own parent's can_spawn by
  * default (a real, deliberate least-privilege default - see process_
- * exec()'s own doc comment in kernel/task/process.c). The shell
- * itself already has can_spawn (granted via process_exec_as_shell()
- * at boot, the same grant that lets `run` and `wm` above work at
- * all), so process_exec_trusted() correctly delegates that same, real
- * grant down to NOVAINIT.ELF - the identical fix, and the identical
+ * exec()'s own doc comment in kernel/task/process.c). This shell
+ * command only exists at all on this legacy, ring-0, no-longer-
+ * launched-at-boot shell (see this file's own build.sh note); the
+ * real, ring-3 shell (userland/ring3-shell/) that novainit actually
+ * launches as PID 1 today (Phase 77) doesn't need an `svcinit` command
+ * of its own at all, since novainit is already running by the time
+ * any shell exists to type a command into. Historically, though, this
+ * same delegation reasoning is exactly right: process_exec_as_init()
+ * (Phase 77's rename of process_exec_as_shell()) is what grants
+ * can_spawn to whatever the kernel boots into at all, and process_
+ * exec_trusted() correctly delegates that same, real grant down to
+ * NOVAINIT.ELF - the identical fix, and the identical
  * bug, kernel/task/sandbox_demo.c's own NOVAINIT.ELF --selftest call
  * needed (see that file's own comment, and this phase's own
  * PROGRESS.md, for the full account of how this was actually found:

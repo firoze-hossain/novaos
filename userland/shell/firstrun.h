@@ -28,7 +28,10 @@ const char* firstrun_get_username(void);
 /* Phase 37: which program kernel_main() should exec as PID 1 - see
  * sysconfig.h's own comment on why this exists (making the kernel's
  * boot handoff config-driven instead of a hardcoded string). Always
- * returns a valid, non-empty 8.3 filename: "SHELL.ELF" if no disk is
+ * returns a valid, non-empty 8.3 filename: "NOVAINIT.ELF" (Phase 77 -
+ * this kernel's own real, permanent PID 1, which launches the
+ * interactive shell itself as one of its own supervised services; see
+ * tools/fixtures/SERVICES.CFG) if no disk is
  * attached, if this is a genuinely first boot, or if a loaded
  * SYSTEM.CFG has this field empty (an old-format file, or a config
  * that simply never set it) - the same "safe, working default over a

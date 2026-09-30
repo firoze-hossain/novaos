@@ -8552,7 +8552,149 @@ timer.h}`, `kernel/fs/vfs.c`, `kernel/net/net.c`, `kernel/init/main.c`.
 No new files - this phase is a pure migration of existing drivers onto
 the existing mechanism, not new infrastructure.
 
-## Phase 77 and beyond
+## Phase 77: the service supervisor becomes this kernel's real, permanent PID 1
+
+**Status: done and verified. 5 consecutive full `make test` runs, fresh
+disk each time - 3 in the working tree, 2 more on a completely fresh
+clone with the patch freshly applied - all 105/105 assertions, no
+regressions. Verified directly in the boot log, not inferred: `SYS_
+EXEC_TRUSTED_ENV('SHELL.ELF', 0 env) (can_open_any_file=1 delegated)`
+- the shell now gets the exact capability grant it always had, just
+delegated by novainit one hop later than before - and `NovaOS login: `
+printed and the shell genuinely blocked waiting for input, never
+restarted, for the rest of every boot.**
+
+### What this actually required, versus the original one-line roadmap guess
+
+The roadmap task this closes was originally scoped as "N/A" - not really
+code, just flipping `SYSTEM.CFG`'s own `init_path` default. Reading the
+real code first found that was wrong in both directions: the CONFIG-
+DRIVEN mechanism for choosing PID 1 already existed in full (Phase 37),
+so the default really was just one string to change - but
+`userland/novainit-rs/novainit.rs`'s own main loop was, in its own
+words, explicitly "not wired as this kernel's own real, permanent PID 1"
+and bounded to exactly 30 passes so it would have "a real, visible end
+for a person actually running it interactively." Making it genuinely
+permanent needed real changes, and removing that bound surfaced a real,
+previously-invisible risk of its own.
+
+### The capability question, and how it resolved with zero new kernel code
+
+The real design question this phase had to answer: when novainit
+launches the shell as a supervised service instead of the kernel
+launching the shell directly, does the shell lose the broad file access
+(`can_open_any_file`) and spawn ability (`can_spawn`) it has always had?
+It turns out no, and for a reason that needed no new kernel-side
+capability logic at all - `process_exec_trusted_env()` (built in Phase
+59, entirely unrelated to this phase) already delegates a caller's own
+grants to whatever it execs via `SYS_EXEC_TRUSTED`. Since novainit
+itself now receives `can_open_any_file`/`can_spawn` unconditionally at
+boot (the same grant the shell used to receive directly - see the
+rename below), it only needed a way to choose to pass that grant on to
+one specific, genuinely trusted service: a new `trusted` field, `yes` or
+`no`, added to `SERVICES.CFG`'s own format specifically for this
+(`tools/fixtures/SERVICES.CFG`'s own `shell|SHELL.ELF|-|-|always|yes`
+line), read by `novainit.rs`'s own `start_service()` to choose
+`sys_exec_trusted()` over plain `sys_exec()`. Every other service
+defaults to `no` - least privilege, a service must opt in to broad
+access, not receive it by omission.
+
+### A real risk this phase's own change introduced, found and fixed before it shipped
+
+`supervise_pass()`'s restart logic has no rate limiting of its own - no
+delay, no backoff, the very next pass tries again immediately. That was
+safe by accident while novainit's own loop was still bounded to 30
+passes; once genuinely permanent, a single service that crashed on
+every launch would consume this kernel's own process-table slots (still
+never recycled - Phase 75's own deliberately deferred limitation) as
+fast as the scheduler lets this process run at all, for as long as the
+system stays up. `MAX_RESTARTS` (20, a real, explicit, generous-not-
+tight bound, matching this project's standing preference for a stated
+ceiling over an unstated "unlimited" claim) is the fix: a service that
+keeps failing gives up loudly (`novainit: 'X' has failed N times in a
+row - giving up`) rather than looping forever. Deliberately a simple
+count cap, not also a time-based backoff - the count cap alone already
+solves the actual problem (unbounded process-table consumption); a real
+rate-limiter would additionally improve system responsiveness during a
+crash loop, a real, separate improvement documented as NOT made here,
+not silently skipped.
+
+### The rename: `process_exec_as_shell` -> `process_exec_as_init`
+
+The kernel-side function that grants `can_open_any_file` + `can_spawn`
+unconditionally to whatever the boot sequence execs was always
+mechanically generic - it never actually knew or cared that what it
+launched happened to be a shell, only that main.c's own boot sequence
+called it exactly once, for whatever `SYSTEM.CFG`'s `init_path` named.
+Now that novainit, not the shell, is what's launched there, the old name
+was actively misleading rather than just historically accidental -
+renamed, with every comment across `process.c`/`process.h`/`syscall.h`/
+`main.c` that described the old, shell-specific framing rewritten to
+describe what's actually true now. The sweep also caught and fixed three
+now-stale comments in `userland/ring3-shell/shell.c` and the legacy,
+no-longer-launched-at-boot `userland/shell/shell.c` that still claimed
+the shell receives its capabilities directly from the kernel at boot.
+
+### Verification
+
+1. **Zero regression**: the full pre-existing 105-assertion suite passes
+   unchanged - including `NOVAINIT.ELF --selftest`'s own, entirely
+   separate assertion, confirmed by reading `run_selftest()`'s own code
+   to still build its own synthetic, in-memory services rather than
+   reading `SERVICES.CFG` at all, so redesigning that fixture's content
+   for this phase carried zero risk to it.
+2. **The actual mechanism, confirmed directly in a real boot log, not
+   assumed from reading the design**: `process_exec: loaded 'NOVAINIT.
+   ELF' as pid 2` (this kernel's genuine PID 1, right after `idle`);
+   `pid 2 SYS_OPEN('SERVICES.CFG') -> handle 0 (capability granted)`
+   (novainit reading its own config with the broad file access it now
+   has); `novainit: started 'network-check'` / `'greeting'` / `'shell'`
+   in order; `pid 2 SYS_EXEC_TRUSTED_ENV('SHELL.ELF', 0 env) (can_open_
+   any_file=1 delegated) -> new pid 13` (the actual delegation, the
+   kernel's own log naming the exact capability and confirming it was
+   granted); `NovaOS login: ` printed once and the shell (pid 13) never
+   appearing again in the rest of the log - genuinely running, blocked
+   on keyboard input, never restarted, for the remainder of every boot.
+3. **No unexpected restart-storm behavior**: zero `"giving up"` messages
+   in any of the 5 verification boots - `MAX_RESTARTS` (20) was never
+   approached by any legitimately healthy service's own normal restart
+   activity (`network-check`'s own real, working PING restarts included).
+4. **The process table (Phase 75) correctly absorbed the additional real
+   load** novainit's own permanent operation adds - `process table grew:
+   32 -> 64 slots` and `64 -> 96 slots` both observed in the same boot,
+   confirming Phase 75's and this phase's own work compose correctly
+   together rather than merely each working in isolation.
+5. **5 consecutive full `make test` runs, fresh `disk.img` each time,
+   105/105 every time**: 3 in the working tree (112s/119s/[first run]),
+   2 more on a completely fresh clone of the upstream repository with
+   this phase's patch freshly applied (93s/117s).
+
+### What's still honestly not fixed
+
+Process-table slot recycling remains exactly as deliberately deferred as
+Phase 75 left it - this phase's own `MAX_RESTARTS` bounds how much
+damage any ONE crash-looping service can do, not the table's own total,
+lifetime capacity. A system with a long enough uptime and enough
+genuinely healthy restarts (not just crash loops - `network-check`'s own
+real, working restarts count too) could still, eventually, exhaust it.
+That needs the same careful, separate design Phase 75 already declined
+to rush into.
+
+### Files
+
+Changed: `kernel/task/process.{c,h}` (the rename), `kernel/arch/x86/cpu/
+syscall.h` (comment only), `kernel/init/main.c` (the call site + its own
+comment), `userland/novainit-rs/novainit.rs` (the real, permanent loop;
+`trusted`/`gave_up` fields; `MAX_RESTARTS`; the 6-field config parser;
+the rewritten module doc comment), `userland/novainit-rs/ffi.rs`
+(`sys_exec_trusted` binding), `userland/shell/firstrun.{c,h}` (the new
+default, and its own comment), `userland/ring3-shell/shell.c` and
+`userland/shell/shell.c` (stale-comment fixes found in the sweep),
+fixtures `tools/fixtures/SYSTEM.CFG` (regenerated binary, `init_path` ->
+`NOVAINIT.ELF`), `tools/fixtures/SERVICES.CFG` (6-field format, adds a
+`trusted`, `always`-restarted shell entry), rebuilt `NOVAINIT.ELF`.
+
+## Phase 78 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

@@ -368,13 +368,19 @@
  * unprivileged caller has can_open_any_file == false, so delegating
  * "whatever I have" to a child is a no-op for it - the child still
  * gets nothing, exactly like plain SYS_EXEC. Only a process that is
- * already broadly trusted (today, only the interactive ring-3 shell,
- * created via process_exec_as_shell() at boot) has anything real to
- * delegate, and even then only to programs it explicitly chooses to
- * launch this way - not automatically to everything it runs via plain
- * `run`/SYS_EXEC. This exists specifically to close a real, previously
- * named gap: Phase 29/30's own comments on process_exec_with_files()/
- * process_exec_as_shell() already anticipated "a future, more capable
+ * already broadly trusted - today, this kernel's own real PID 1
+ * (userland/novainit-rs/novainit.rs, created via process_exec_as_
+ * init() at boot - Phase 77 renamed this from process_exec_as_shell()
+ * once it stopped being the shell-specific name it had always
+ * mechanically NOT been - see that function's own comment), and, one
+ * hop further, the interactive ring-3 shell it deliberately delegates
+ * the exact same grant to as one of its own `trusted` supervised
+ * services (tools/fixtures/SERVICES.CFG) - has anything real to
+ * delegate, and even then only to programs it explicitly chooses to launch this way - not automatically to
+ * everything it runs via plain `run`/SYS_EXEC. This exists
+ * specifically to close a real, previously named gap: Phase 29/30's
+ * own comments on process_exec_with_files()/process_exec_as_shell()
+ * (as it was named then) already anticipated "a future, more capable
  * shell [that] can deliberately choose what a program it launches may
  * open" as real follow-up work, and Phase 32's own choice to keep the
  * package manager a shell builtin instead of a separate exec'd binary
