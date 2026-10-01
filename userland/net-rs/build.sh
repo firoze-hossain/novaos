@@ -47,13 +47,14 @@ fi
 # relying on coreutils-rs/build.sh's shorter `tr a-z A-Z` one-liner,
 # so a future program in this directory with a longer name fails loud
 # at the mapping instead of silently truncating.
-for prog in nslookup tftp; do
+for prog in nslookup tftp udptest; do
     case "$prog" in
         nslookup) fixture=NSLOOKUP.ELF ;;
         tftp)     fixture=TFTP.ELF ;;
+        udptest)  fixture=UDPTEST.ELF ;;
     esac
 
-    echo "Compiling $prog.rs (Phase 60 - a real ring-3 network utility, in Rust)..."
+    echo "Compiling $prog.rs (a real ring-3 network utility, in Rust)..."
     env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \
         --target "$RUST_SYSROOT/i686-novaos.json" \
         --crate-type bin -C panic=abort -C opt-level=2 \

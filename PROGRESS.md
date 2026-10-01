@@ -8694,7 +8694,270 @@ fixtures `tools/fixtures/SYSTEM.CFG` (regenerated binary, `init_path` ->
 `NOVAINIT.ELF`), `tools/fixtures/SERVICES.CFG` (6-field format, adds a
 `trusted`, `always`-restarted shell entry), rebuilt `NOVAINIT.ELF`.
 
-## Phase 78 and beyond
+## Phase 78: real, multi-socket UDP alongside the existing TCP stack, in Rust
+
+**Status: done and verified. 5 consecutive full `make test` runs, fresh
+disk each time - 3 in the working tree, 2 more on a completely fresh
+clone with the patch freshly applied - all 109/109 assertions (105
+that existed plus 4 new), no regressions.**
+
+### What already existed, found before writing any code
+
+`kernel/net/udp.c` was not new - real UDP send/receive since before
+this phase, backing `kernel/net/tftp.c`/`kernel/net/dns.c`. Its own
+header comment was explicit about its real limit: a single global
+listener slot ("Only one 'socket' can ever be listening at a time...
+enough for everything that currently uses UDP"), never reachable from
+ring 3, checksums always disabled. A third, older, narrower mechanism,
+`SYS_NET_SEND` (Phase 14) - send-only, text-payload-only, gated by a
+per-process `allowed_hosts[]` capability list - has zero userland
+callers today but **is** exercised by two real boot-test assertions
+(the capability-allow and capability-deny cases) and was left
+completely untouched.
+
+### A real compatibility hazard, and the same fix Phase 74 already established
+
+`SYS_SOCKET` is called today with no arguments at all
+(`sys_socket(void)`) - extending it with a type parameter would have
+silently read garbage out of an unset register for every existing
+caller. New syscall numbers instead (`SYS_SOCKET_UDP`/`SYS_SENDTO`/
+`SYS_RECVFROM` = 44/45/46), `SYS_SOCKET`/`SYS_BIND`/`SYS_CONNECT`
+reused unchanged by dispatching on the handle's own kind
+(`OPEN_KIND_UDP_SOCKET`, a new, distinct `open_files[]` kind from
+TCP's `OPEN_KIND_SOCKET`) - the identical hazard, and the identical
+fix, Phase 74's own `SYS_EXEC_ENV`/`SYS_EXEC_TRUSTED_ENV` already
+established for the same reason.
+
+### A design correction that avoided shipping something unusable
+
+The original plan was to gate the new UDP `connect`/`sendto` behind
+the same `allowed_hosts[]` check `SYS_NET_SEND` uses. Investigating
+that found `allowed_hosts[]` is only ever populated at kernel-task
+creation (`process_create_sandboxed_task()`'s own direct arguments) -
+there is no delegation path onto it for an `exec()`'d ring-3 ELF
+binary at all, unlike `can_open_any_file`/`can_spawn`, which `SYS_
+EXEC_TRUSTED` genuinely does delegate. Gating UDP's destination that
+way would have made the feature **unusable by any real program**, not
+merely more restrictive - a broken design, not a stricter one. TCP's
+own `SYS_CONNECT` (Phase 58) already ships with this identical,
+explicitly-documented gap ("an honest, deliberate scope cut... not a
+considered security decision"). UDP matches that exact precedent
+instead of introducing a new inconsistency between two sibling
+mechanisms for no real security gain - documented as a real, now
+doubly-motivated follow-up (extend `allowed_hosts[]` delegation onto
+`SYS_EXEC_TRUSTED` the same way the other two capabilities already
+work, then gate both consistently), not silently left unmentioned.
+
+### What's genuinely new: `kernel/rust/udp.rs`
+
+A real, multi-socket table (`MAX_UDP_SOCKS = 8`, matching `tcp.rs`'s
+own `MAX_TCP_CONNS`), each socket with a small, real receive QUEUE
+(not just "the most recent datagram" the way `kernel/net/udp.c`'s
+single slot works) that drops the OLDEST entry under pressure, not the
+newest. Real Berkeley-sockets connected/unconnected semantics: `SYS_
+CONNECT` records a fixed peer and makes `rust_udp_handle_packet()`
+silently filter out every other sender from then on (real UDP `
+connect()` behaviour, not a handshake), after which plain `SYS_READ`/
+`SYS_WRITE_HANDLE` work with no address needed each call; an
+unconnected socket needs the new `SYS_SENDTO`/`SYS_RECVFROM` to
+specify/discover who each individual datagram is to/from.
+
+A real RFC 768 checksum - computed (pseudo-header + header + payload,
+through the same `net_checksum16()` `ip.c`/`icmp.c` already share) on
+every outgoing datagram, with the correct 0 -> 0xFFFF substitution
+(0 is the reserved "no checksum computed" marker and must never be
+sent as a genuinely-computed value that happens to land on it), and
+verified on every incoming one (skipped only when the sender
+themselves sent the reserved 0) - completing the gap `kernel/net/
+udp.c`'s own header comment already named rather than carrying it
+forward into the new engine too.
+
+### Why two UDP implementations coexist, deliberately
+
+`ip.c`'s packet dispatch hands every incoming UDP datagram to BOTH
+`udp_handle_packet()` (old) and `rust_udp_handle_packet()` (new) -
+each independently decides relevance by its own bound port, the same
+"every handler gets a look" shape `ip.c` already uses to offer one
+packet to ICMP/UDP/TCP by protocol number. `kernel/net/udp.c`/`tftp.c`
+/`dns.c` are completely unmodified - real, already-tested,
+already-shipped code touched for no behavioural gain if rewritten onto
+the new engine (a synchronous, one-transfer-at-a-time TFTP/DNS client
+never needed a second concurrent listener of its own).
+
+### Verification
+
+1. **8 host unit tests** (`rustc --edition 2021 --test kernel/rust/
+   udp.rs`), including one that caught a real bug in the test ITSELF
+   before it shipped: an early version asserted a checksum would hit
+   exactly zero "eventually" across 256 loop iterations without
+   verifying that was actually true - it never hit it, the test failed
+   honestly, and was fixed with an exhaustive, independent search that
+   found one concrete, deterministic input (payload word `0xE7C3`)
+   proven to produce a zero checksum, replacing the hopeful loop with
+   a verified, hardcoded case.
+2. **A second real bug found by actually running the test, not
+   assumed away**: the first boot of `UDPTEST.ELF` (below) failed with
+   `ip_send: ARP resolve failed for next hop 10.0.2.3` - a genuine,
+   previously unconsidered dependency: `ip_send()` resolves its next
+   hop's MAC address via ARP *synchronously* as part of sending, so
+   even the SEND itself (not only any reply) can legitimately fail
+   when this environment's own virtual network is unreachable. The
+   original test design wrongly assumed sending was always
+   deterministic regardless of real connectivity. Fixed by separating
+   what's genuinely deterministic (socket creation, DNS query
+   construction, `SYS_CONNECT`'s own pure local bookkeeping with zero
+   network I/O) - hard-asserted - from what depends on real outbound
+   network/ARP reachability (the actual transmission and any reply) -
+   logged in full, specific detail but never hard-asserted, the
+   identical, already-established reason `kernel/init/main.c`'s own
+   real DNS/HTTP self-tests against `example.com` are logged, not
+   hard-asserted, anywhere in `test_runner.py` (confirmed by reading
+   that file, not assumed).
+3. **`kernel/rust/udp.rs`'s own synthetic self-test**
+   (`rust_udp_selftest()`, called from `kernel/init/main.c` the same
+   way `rust_tcp_selftest()` already is) - bind exclusivity, connect,
+   and the connected-socket sender-filtering rule, exercised directly
+   against the table with no real network needed, matching `tcp.rs`'s
+   own established "unit-test the logic, prove the real network
+   integration separately" split.
+4. **`UDPTEST.ELF`** (`userland/net-rs/udptest.rs`) - a real DNS
+   A-record query, built and parsed by genuinely independent code (not
+   a wrapper around `kernel/net/dns.c`, which this ring-3 program has
+   no access to at all), sent over both the unconnected (`SYS_SENDTO`/
+   `SYS_RECVFROM`) and connected (`SYS_CONNECT` + plain `SYS_WRITE_
+   HANDLE`/`SYS_READ`) paths, cross-checked against `SYS_DNS_RESOLVE`'s
+   own, entirely separate answer for the identical hostname when a
+   real reply does arrive.
+5. **Zero regression**: the full pre-existing 105-assertion suite
+   passes unchanged.
+6. **5 consecutive full `make test` runs, fresh `disk.img` each time,
+   109/109 every time**: 3 in the working tree, 2 more on a completely
+   fresh clone of the upstream repository with this phase's patch
+   freshly applied - stable and non-flaky despite the real DNS/ARP
+   round trip genuinely failing in this sandboxed environment on every
+   one of those runs, exactly the scenario this phase's own corrected
+   test design exists to handle gracefully rather than flake on.
+
+### What's deliberately NOT in scope, the same honest way every other network module in this project documents its own limits
+
+No IP fragmentation/reassembly (this kernel's `ip.c` has none at all) -
+`MAX_DGRAM` (1472 bytes) is the real, standards-based "fits in one
+Ethernet frame" bound, not an arbitrary number; a caller asking to send
+more gets a real, honest failure, not silent truncation. No `allowed_
+hosts[]` capability gate on the destination (see above - a real,
+documented, doubly-motivated follow-up, not an oversight). One socket
+per port, strictly (no `SO_REUSEADDR`/`SO_REUSEPORT` equivalent,
+matching `tcp.rs`'s own `rust_tcp_bind()` exclusivity). No multicast/
+broadcast.
+
+### Files
+
+New: `kernel/rust/udp.rs`, `userland/net-rs/udptest.rs`, fixture
+`UDPTEST.ELF`. Changed: `kernel/rust/lib.rs` (`mod udp;`), `kernel/net/
+ip.c` (dispatch to the new engine, alongside the old), `kernel/arch/
+x86/cpu/syscall.{c,h}` (three new syscalls, `OPEN_KIND_UDP_SOCKET`,
+kind-aware `SYS_BIND`/`SYS_LISTEN`/`SYS_ACCEPT`/`SYS_CONNECT`
+dispatch), `kernel/init/main.c` (the new self-test call, wired the
+same way `rust_tcp_selftest()` already is), `kernel/task/
+exec_trust_demo.c` (the `UDPTEST.ELF` invocation), `userland/libc/
+include/novasys.h` + `userland/libc/syscall.c` (the three new syscall
+wrappers), `userland/net-rs/ffi.rs` + `build.sh` (bindings and the
+build-loop entry for the new test program), `tools/build-disk-
+image.sh` (`UDPTEST.ELF` added to the fixture list), `tools/python/
+test_runner.py` (4 new assertions), `Makefile` (`udp.rs` added to
+`KERNEL_RUST_OBJ`'s own dependency list).
+
+## Phase 78 correction: a real `undefined reference to 'memmove'` link failure, found by a real user build, not caught by this project's own verification
+
+**Status: fixed and verified - including a full, rigorous explanation
+of why this project's own verification sandbox never caught it, not
+just a patch applied and hoped for.**
+
+A person applying Phase 78's own patch to a real, local clone hit a
+hard link failure this project's own repeated `make clean && make &&
+make test` cycles never once reproduced:
+
+```
+ld: build/kernel/rust/lib.o: in function `rust_udp_recv':
+lib...-cgu.0:(.text.rust_udp_recv+0x122): undefined reference to `memmove'
+```
+
+### Root cause, confirmed directly, not assumed
+
+This kernel's own `kernel/lib/string.c` already defined `memcpy`/
+`memset`/`memcmp` - the freestanding C library primitives a `no_std`
+Rust target needs when `compiler_builtins`' own `mem` feature (which
+would otherwise provide them) isn't enabled. `memmove` was the one
+gap: genuinely missing, not merely unused - `rust_udp_recv()`/`rust_
+udp_recvfrom()`'s own `copy_from_slice()` calls are, it turns out, the
+first thing in this whole codebase whose compiled output needs it.
+
+Why this project's own verification sandbox never saw the failure:
+confirmed directly, by deliberately reverting the fix and rebuilding
+clean inside that exact same sandbox, that the link still succeeds
+there even with zero `memmove` definition anywhere in this kernel's
+own source - because this sandbox's own prebuilt `libcompiler_
+builtins.rlib` happens to export a *weak* `memmove` symbol (`nm`:
+`W memmove`) as a fallback, silently satisfying the undefined
+reference. A real nightly toolchain's own `cargo -Z build-std` -
+confirmed as this project's own Makefile's *preferred* path whenever
+`rustup` with a nightly toolchain is available, exactly the path this
+person's real machine took - evidently builds `compiler_builtins`
+without that fallback at all, so the exact same source that links
+silently in this sandbox genuinely fails to link there. Not a
+nondeterministic toolchain quirk and not a flaw in the original design
+- a real, previously unknown difference between how this sandbox's own
+`compiler_builtins` happened to be built and how a real contributor's
+nightly toolchain builds it, invisible without a real build on a real
+machine with that real toolchain to surface it.
+
+### The fix
+
+`kernel/lib/string.c`/`kernel/lib/string.h`: a real, correct `memmove`
+(the standard textbook forward/backward-copy approach depending on
+whether `dest < src`, matching `memcpy`/`memset`'s own equally plain,
+unoptimized byte-at-a-time style already established there) - not
+merely papering over the symptom. Confirmed, this time rigorously, not
+assumed: `nm` on the final linked `novaos.bin` now shows a *strong*
+`T memmove` (this new C function) rather than `compiler_builtins`' own
+weak one, and a byte-for-byte isolated test - reverting only the
+`memmove` addition while keeping every other Phase 78 file intact -
+reproduced the masked-by-a-weak-symbol success in this sandbox
+directly, confirming the fix is what actually changes behavior here,
+not an incidental, untested addition.
+
+### Verification
+
+Every other `undefined reference` this kernel's own Rust code has
+(`nm -u` on `build/kernel/rust/lib.o`) was checked, not just `memmove`
+alone: `core::panicking::*`/bounds-check symbols are `core`'s own
+always-present internal panic infrastructure (unrelated to the `mem`
+feature gap, resolved through this kernel's own registered `#[panic_
+handler]` regardless of toolchain path); every other undefined symbol
+is this kernel's own C or Rust function, already proven working across
+every prior phase. `memcmp`/`memcpy`/`memset`/`memmove` were the only
+four symbols actually at risk from this specific gap, and all four are
+now real, strong, C-defined symbols in this kernel's own source - none
+of the other three were ever actually missing (this kernel already
+defined them), confirmed by `grep` before writing a single line of the
+fix, not assumed. Full `make clean && make && make test` re-run
+afterward: 109/109 assertions, unchanged.
+
+### An honest limit on how far this verification could go
+
+This sandbox still has no `rustup`/nightly toolchain access at all
+(its own install domain isn't reachable from here) - this fix could
+not be verified by literally reproducing the person's own exact
+`cargo -Z build-std` build end to end in this environment, only by
+directly, rigorously tracing the actual root cause (the weak-symbol
+fallback difference, confirmed via `nm` on the real object files
+either side of the fix, not inferred from documentation or guessed at)
+and confirming the fix addresses that confirmed root cause correctly.
+A person with real `rustup`/nightly access remains the only one who
+can confirm the fix resolves the *exact* failure they originally hit,
+end to end, on their own machine.
+
+## Phase 79 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

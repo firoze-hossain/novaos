@@ -485,6 +485,63 @@
 #define SYS_EXEC_ENV 42
 #define SYS_EXEC_TRUSTED_ENV 43
 
+/* Phase 78: real, multi-socket UDP - kernel/rust/udp.rs's own module
+ * comment has the full design. A UDP socket is a second, distinct
+ * open_files[] kind (OPEN_KIND_UDP_SOCKET) from a TCP one
+ * (OPEN_KIND_SOCKET, Phase 58) - not overloaded onto the same kind,
+ * because SYS_READ/SYS_WRITE_HANDLE/SYS_CLOSE's existing dispatch
+ * needs to know which protocol engine (kernel/rust/tcp.rs vs. kernel/
+ * rust/udp.rs) a given handle actually belongs to.
+ *
+ * No arguments - deliberately a NEW syscall number rather than an
+ * argument added to the existing SYS_SOCKET (33), which creates a TCP
+ * socket and takes none: SYS_SOCKET's own existing caller
+ * (userland/libc/syscall.c's sys_socket()) is declared `void` and
+ * never sets any register for an argument to land in, so reading one
+ * from SYS_SOCKET itself would silently read whatever garbage was
+ * last in that register for every caller that predates this phase -
+ * the exact same hazard, and the exact same fix (a new number, the
+ * old one left untouched), Phase 74's own SYS_EXEC_ENV/SYS_EXEC_
+ * TRUSTED_ENV already established for an identical reason. Returns a
+ * handle, or -1 if every UDP socket slot is already in use. */
+#define SYS_SOCKET_UDP 44
+
+/* EBX = handle, ECX = pointer to a 6-byte address record in the
+ * caller's own memory: a little-endian uint32_t IPv4 address (host
+ * byte order, e.g. built with ip_make() - matching every other IP
+ * address this kernel passes around, including SYS_NET_SEND's own
+ * EBX) at offset 0, followed by a little-endian uint16_t port at
+ * offset 4. EDX = buffer, ESI = length. Sends to that address
+ * regardless of whether `handle` is connected (SYS_CONNECT) - a
+ * connected UDP socket's own recorded peer is left untouched by this,
+ * matching real sendto()'s own behaviour on a connected socket. Only
+ * valid for a UDP socket (SYS_SOCKET_UDP) - returns -1 for a TCP
+ * handle, or any other failure (invalid/not-owned handle, the address
+ * pointer is garbage, the payload is larger than this kernel's own
+ * one-Ethernet-frame UDP limit - see kernel/rust/udp.rs's own MAX_
+ * DGRAM comment). Like SYS_CONNECT, no allowed_hosts[] capability
+ * gate on the destination - see kernel/rust/udp.rs's own top comment
+ * for exactly why extending that gate to cover this is real,
+ * documented, deliberately-deferred follow-up, not an oversight.
+ * Returns the number of bytes sent, or -1. */
+#define SYS_SENDTO 45
+
+/* EBX = handle, ECX = buffer, EDX = max length, ESI = pointer to a
+ * 6-byte address record (the same shape SYS_SENDTO's own ECX uses)
+ * the kernel fills in with who the returned datagram actually came
+ * from - pass a null pointer if the caller doesn't care. Non-blocking:
+ * returns 0 immediately if nothing is queued (never blocks the way
+ * SYS_ACCEPT does), the number of bytes copied (truncated to `max
+ * length` if the real datagram was larger - UDP's own honest
+ * "the rest is simply gone" contract, not buffered for a later call),
+ * or -1 (invalid/not-owned/non-UDP handle). Delivers from ANY sender
+ * to this socket's bound port if `handle` isn't connected; only from
+ * the connected peer if it is (see kernel/rust/udp.rs's own top
+ * comment) - use plain SYS_READ instead if that's all a connected
+ * socket ever needs, this exists for the general, sender-varies case
+ * SYS_READ alone cannot express at all. */
+#define SYS_RECVFROM 46
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

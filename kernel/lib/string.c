@@ -9,6 +9,50 @@ void* memcpy(void* dest, const void* src, size_t n) {
     return dest;
 }
 
+/* Found missing, late: this kernel's own rustc-via-`cargo -Z build-
+ * std` build path (Makefile's own "rustup found" branch - the
+ * project's *preferred* path when a nightly toolchain is available,
+ * taken by any real contributor's machine that has one) builds
+ * compiler_builtins from source without its optional `mem` feature,
+ * which is what would otherwise provide memcpy/memmove/memset/memcmp
+ * for a freestanding target with no libc. memcpy/memset/memcmp above
+ * already covered rustc's own occasional calls into them; memmove was
+ * the one gap - genuinely missing, not merely unused, confirmed by a
+ * real `undefined reference to 'memmove'` link failure the moment a
+ * Rust module's compiled output needed it (kernel/rust/udp.rs's own
+ * rust_udp_recv()/rust_udp_recvfrom(), whose copy_from_slice() calls
+ * rustc chose to lower to a memmove call rather than inlining or
+ * emitting memcpy - not something this kernel's own C code had ever
+ * needed to call by this name either, which is exactly why this went
+ * unnoticed until a real build on a real machine with the nightly
+ * toolchain this project's own Makefile prefers actually hit it).
+ *
+ * Unlike memcpy above (undefined behaviour if the regions overlap -
+ * every existing call site in this kernel already avoided that),
+ * memmove must copy correctly even when they do: forward (low
+ * address first) when it's safe to, backward (high address first)
+ * when copying forward would overwrite source bytes not yet read.
+ * The standard, textbook approach - not an optimized one (no bulk
+ * word-at-a-time copying, matching memcpy/memset's own equally plain
+ * byte-at-a-time style above), correct over fast. */
+void* memmove(void* dest, const void* src, size_t n) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    if (d == s || n == 0) {
+        return dest;
+    }
+    if (d < s) {
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+    } else {
+        for (size_t i = n; i > 0; i--) {
+            d[i - 1] = s[i - 1];
+        }
+    }
+    return dest;
+}
+
 void* memset(void* s, int c, size_t n) {
     unsigned char* p = (unsigned char*)s;
     for (size_t i = 0; i < n; i++) {

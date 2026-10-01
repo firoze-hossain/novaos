@@ -42,4 +42,39 @@ extern "C" {
         remote_filename: *const u8,
         local_filename: *const u8,
     ) -> i32;
+
+    /// Phase 78: real, multi-socket UDP - kernel/rust/udp.rs's own
+    /// module comment has the full design. See userland/libc/include/
+    /// novasys.h's own identical declarations (this file's own
+    /// established "bind directly to the unmodified C syscall layer"
+    /// convention, not a reimplementation) for the full contract of
+    /// each.
+    pub fn sys_socket_udp() -> i32;
+    pub fn sys_bind(handle: i32, port: u16) -> i32;
+    pub fn sys_connect(handle: i32, dest_ip: u32, dest_port: u16) -> i32;
+    pub fn sys_sendto(handle: i32, addr: *const NovaUdpAddr, buf: *const u8, len: u32) -> i32;
+    pub fn sys_recvfrom(
+        handle: i32,
+        buf: *mut u8,
+        max_len: u32,
+        out_addr: *mut NovaUdpAddr,
+    ) -> i32;
+    pub fn sys_read(handle: i32, buf: *mut u8, max_len: i32) -> i32;
+    pub fn sys_write_handle(handle: i32, buf: *const u8, len: i32) -> i32;
+    pub fn sys_close(handle: i32);
+}
+
+/// The exact 6-byte layout kernel/arch/x86/cpu/syscall.c's own
+/// nova_udp_addr_t / userland/libc/include/novasys.h's own C
+/// equivalent both use - `#[repr(C)]`, not Rust's own default layout,
+/// since this is read/written directly across the syscall boundary at
+/// a raw pointer, byte-for-byte (see this project's own established
+/// convention for this, e.g. kernel/rust/dynlink.rs's own structs
+/// mirroring kernel/task/elf.c's). `ip` is host byte order, matching
+/// every other IP address this kernel passes around.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NovaUdpAddr {
+    pub ip: u32,
+    pub port: u16,
 }
