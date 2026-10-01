@@ -173,6 +173,41 @@ void exec_trust_demo_task(void) {
                     "correctly - at least one of 45 sequential execs past "
                     "its original capacity did not succeed cleanly.\n");
 
+    /* Phase 78: real, multi-socket UDP - UDPTEST.ELF (userland/net-rs/
+     * udptest.rs) builds a genuine DNS query by hand and exercises the
+     * new raw socket API (SYS_SOCKET_UDP/SYS_SENDTO/SYS_CONNECT/SYS_
+     * WRITE_HANDLE), both the unconnected and connected paths,
+     * printing its own detailed [udptest] PASS/FAIL/INFO lines. Only
+     * socket creation, DNS query construction, and SYS_CONNECT's own
+     * pure local bookkeeping (no network I/O at all - see kernel/
+     * rust/udp.rs's own rust_udp_connect()) are hard-asserted on, via
+     * this program's own exit code - a real, previously unconsidered
+     * dependency this phase's own testing surfaced: ip_send() ARP-
+     * resolves its next hop SYNCHRONOUSLY as part of sending, so even
+     * the SEND itself (not just any reply) can legitimately fail when
+     * this environment's own virtual network is unreachable, not only
+     * the receive side. Whether a real packet actually made it onto
+     * the wire or a real reply came back is logged in full detail but
+     * never hard-asserted, the same honest reason kernel/init/main.c's
+     * own real DNS/HTTP self-tests against example.com are logged, not
+     * hard-asserted, anywhere in tools/python/test_runner.py. No
+     * special capability needed (UDP sendto/connect have no allowed_
+     * hosts[] gate - see kernel/rust/udp.rs's own top comment for
+     * exactly why), so plain sys_exec_trusted() here delegates nothing
+     * this program actually uses - called anyway, for the same
+     * consistency with this function's other calls as everywhere else
+     * in this file. */
+    const char* argv_udp[] = {"UDPTEST.ELF"};
+    int pid_udp = sys_exec_trusted("UDPTEST.ELF", argv_udp, 1);
+    int code_udp = (pid_udp >= 0) ? sys_wait(pid_udp) : -1;
+    sys_write(pid_udp >= 0 && code_udp == 0
+                  ? "[sandbox] PASS: UDPTEST.ELF (real UDP sockets, both "
+                    "the unconnected and connected API paths) created "
+                    "its sockets and connected correctly.\n"
+                  : "[sandbox] FAIL: UDPTEST.ELF did not exit cleanly - "
+                    "UDP socket creation or SYS_CONNECT itself failed, "
+                    "not merely a network-unreachable send.\n");
+
     sys_exit(0);
 
     for (;;) { }

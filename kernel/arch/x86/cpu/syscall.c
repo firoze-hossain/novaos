@@ -60,6 +60,14 @@ typedef enum {
      * handle_close() below recognize this kind - see kernel/rust/tcp.rs
      * for the real recv()/send()/close() logic each dispatches to. */
     OPEN_KIND_SOCKET,
+    /* Phase 78: a UDP socket handle - kept as its own, separate kind
+     * rather than reused alongside OPEN_KIND_SOCKET above, because
+     * every dispatch site that checks `kind` needs to know which
+     * protocol engine (kernel/rust/tcp.rs vs. kernel/rust/udp.rs) a
+     * given handle actually belongs to - the two are not
+     * interchangeable (a UDP handle has no SYS_LISTEN/SYS_ACCEPT, and
+     * now has its own SYS_SENDTO/SYS_RECVFROM a TCP handle doesn't). */
+    OPEN_KIND_UDP_SOCKET,
 } open_kind_t;
 
 typedef struct {
@@ -70,9 +78,13 @@ typedef struct {
                        already happened at SYS_OPEN time */
     open_kind_t kind;
     int pipe_id;    /* meaningful only when kind != OPEN_KIND_VFS - also
-                        doubles as the socket's kernel/rust/tcp.rs
-                        connection id when kind == OPEN_KIND_SOCKET,
-                        the same field reused rather than adding a
+                        doubles as the socket's own connection/socket id
+                        (kernel/rust/tcp.rs's for OPEN_KIND_SOCKET,
+                        kernel/rust/udp.rs's for OPEN_KIND_UDP_SOCKET -
+                        each its own, separate table, so the SAME small
+                        integer here means a different thing depending
+                        on `kind`) when kind is either socket kind, the
+                        same field reused rather than adding a
                         second, mutually-exclusive id field */
     char filename[13];
     uint32_t offset;
@@ -117,6 +129,22 @@ extern int rust_tcp_connect(int id, uint32_t remote_ip, uint16_t remote_port);
 extern int rust_tcp_send(int id, const uint8_t* buf, uint32_t len);
 extern int rust_tcp_recv(int id, uint8_t* buf, uint32_t max_len);
 extern void rust_tcp_close(int id);
+
+/* Phase 78: kernel/rust/udp.rs's own exported functions - see that
+ * file's own doc comments for the full contract of each. A separate
+ * table/id space from the rust_tcp_* ones above - see OPEN_KIND_UDP_
+ * SOCKET's own comment on why a handle's `kind` is what disambiguates
+ * which of the two a given `pipe_id` actually indexes into. */
+extern int rust_udp_socket(void);
+extern int rust_udp_bind(int id, uint16_t port);
+extern int rust_udp_connect(int id, uint32_t remote_ip, uint16_t remote_port);
+extern int rust_udp_send(int id, const uint8_t* buf, uint32_t len);
+extern int rust_udp_recv(int id, uint8_t* buf, uint32_t max_len);
+extern int rust_udp_sendto(int id, const uint8_t* buf, uint32_t len,
+                            uint32_t dest_ip, uint16_t dest_port);
+extern int rust_udp_recvfrom(int id, uint8_t* buf, uint32_t max_len,
+                              uint32_t* out_src_ip, uint16_t* out_src_port);
+extern void rust_udp_close(int id);
 
 static int str_eq_ci(const char* a, const char* b) {
     while (*a && *b) {
@@ -271,6 +299,18 @@ static void handle_read(registers_t* regs) {
         return;
     }
 
+    if (open_files[handle].kind == OPEN_KIND_UDP_SOCKET) {
+        /* Phase 78: only meaningful for a connected UDP socket - see
+         * rust_udp_recv()'s own doc comment, which returns -1 (not a
+         * crash or a hang) for an unconnected one, exactly the "real,
+         * honest failure" EDESTADDRREQ-style contract a plain SYS_READ
+         * on an unconnected UDP socket should have. */
+        int sock_id = open_files[handle].pipe_id;
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)rust_udp_recv(sock_id, (uint8_t*)buf, max_len);
+        return;
+    }
+
     /* Phase 73: a real offset read. This used to re-read the whole file
      * into read_scratch on every call and slice out the requested piece
      * - which meant a file was only ever readable up to the scratch
@@ -337,6 +377,16 @@ static void handle_write_handle(registers_t* regs) {
         int conn_id = open_files[handle].pipe_id;
         spinlock_release(&open_files_lock, flags);
         regs->eax = (uint32_t)rust_tcp_send(conn_id, (const uint8_t*)buf, len);
+        return;
+    }
+
+    if (open_files[handle].kind == OPEN_KIND_UDP_SOCKET) {
+        /* Phase 78: only meaningful for a connected UDP socket - see
+         * rust_udp_send()'s own doc comment (-1, the real
+         * EDESTADDRREQ-style failure, for an unconnected one). */
+        int sock_id = open_files[handle].pipe_id;
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)rust_udp_send(sock_id, (const uint8_t*)buf, len);
         return;
     }
 
@@ -524,6 +574,16 @@ static void handle_close(registers_t* regs) {
              * handle doesn't mean the connection tears down
              * instantly). */
             rust_tcp_close(pipe_id);
+        } else if (kind == OPEN_KIND_UDP_SOCKET) {
+            /* Phase 78: unlike TCP, nothing "finishes in the
+             * background" for UDP (no connection to tear down) -
+             * rust_udp_close() just frees the socket slot immediately,
+             * but is still called after this handle's own open_files[]
+             * slot is freed, for the same reason: simpler to reason
+             * about one consistent close ordering for every socket
+             * kind than a special case for the one that happens not to
+             * need it. */
+            rust_udp_close(pipe_id);
         }
         return;
     }
@@ -1081,19 +1141,71 @@ static void handle_socket(registers_t* regs) {
     regs->eax = (uint32_t)slot;
 }
 
-/* Shared validation for SYS_BIND/SYS_LISTEN/SYS_ACCEPT/SYS_CONNECT:
- * confirms `handle` is a currently-open, calling-process-owned socket
- * handle and returns its underlying kernel/rust/tcp.rs connection id,
- * or -1 (and logs, the same [SECURITY] pattern every other handle-
+/* Phase 78: SYS_SOCKET_UDP - identical shape to handle_socket() above,
+ * creating a kernel/rust/udp.rs socket (OPEN_KIND_UDP_SOCKET) instead
+ * of a TCP one. Kept as its own function rather than folding a branch
+ * into handle_socket() itself: the two have no shared logic worth
+ * factoring out beyond the open_files[] slot-claiming loop (which
+ * handle_fork()/handle_pipe() above also each repeat their own copy
+ * of, this project's existing convention for this particular bit of
+ * duplication rather than a shared helper). */
+static void handle_socket_udp(registers_t* regs) {
+    process_t* p = process_current();
+    if (p == NULL) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    int sock_id = rust_udp_socket();
+    if (sock_id < 0) {
+        kernel_log("[FAULT] SYS_SOCKET_UDP: no free UDP socket slots\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    uint32_t flags = spinlock_acquire(&open_files_lock);
+    int slot = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!open_files[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        spinlock_release(&open_files_lock, flags);
+        rust_udp_close(sock_id);
+        kernel_log("[FAULT] SYS_SOCKET_UDP: open file table full\n");
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    open_files[slot].in_use = true;
+    open_files[slot].owner_pid = p->pid;
+    open_files[slot].kind = OPEN_KIND_UDP_SOCKET;
+    open_files[slot].pipe_id = sock_id;
+    spinlock_release(&open_files_lock, flags);
+
+    kernel_log("[SYSCALL] pid %d SYS_SOCKET_UDP -> handle %d (udp sock %d)\n",
+               p->pid, slot, sock_id);
+    regs->eax = (uint32_t)slot;
+}
+
+/* Shared validation for SYS_BIND/SYS_LISTEN/SYS_ACCEPT/SYS_CONNECT/
+ * SYS_SENDTO/SYS_RECVFROM: confirms `handle` is a currently-open,
+ * calling-process-owned socket handle of EITHER kind (Phase 78 -
+ * originally TCP-only) and returns its underlying connection/socket
+ * id, filling in *out_kind so the caller knows which of kernel/rust/
+ * tcp.rs or kernel/rust/udp.rs that id actually indexes into, or -1
+ * (and logs, the same [SECURITY] pattern every other handle-
  * validating syscall in this file already uses) if not. Always
  * releases open_files_lock itself before returning - callers never see
  * it held. */
-static int lookup_socket_conn_id(int handle) {
+static int lookup_socket_conn_id(int handle, open_kind_t* out_kind) {
     process_t* p = process_current();
     uint32_t flags = spinlock_acquire(&open_files_lock);
     if (handle < 0 || handle >= MAX_OPEN_FILES || !open_files[handle].in_use ||
         open_files[handle].owner_pid != (p != NULL ? p->pid : -1) ||
-        open_files[handle].kind != OPEN_KIND_SOCKET) {
+        (open_files[handle].kind != OPEN_KIND_SOCKET &&
+         open_files[handle].kind != OPEN_KIND_UDP_SOCKET)) {
         spinlock_release(&open_files_lock, flags);
         kernel_log("[SECURITY] pid %d used an invalid/not-owned/non-socket "
                    "handle %d for a socket syscall\n",
@@ -1101,22 +1213,41 @@ static int lookup_socket_conn_id(int handle) {
         return -1;
     }
     int conn_id = open_files[handle].pipe_id;
+    *out_kind = open_files[handle].kind;
     spinlock_release(&open_files_lock, flags);
     return conn_id;
 }
 
 static void handle_bind(registers_t* regs) {
-    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    open_kind_t kind;
+    int conn_id = lookup_socket_conn_id((int)regs->ebx, &kind);
     if (conn_id < 0) {
         regs->eax = (uint32_t)-1;
         return;
     }
-    regs->eax = (uint32_t)rust_tcp_bind(conn_id, (uint16_t)regs->ecx);
+    if (kind == OPEN_KIND_UDP_SOCKET) {
+        regs->eax = (uint32_t)rust_udp_bind(conn_id, (uint16_t)regs->ecx);
+    } else {
+        regs->eax = (uint32_t)rust_tcp_bind(conn_id, (uint16_t)regs->ecx);
+    }
 }
 
 static void handle_listen(registers_t* regs) {
-    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    open_kind_t kind;
+    int conn_id = lookup_socket_conn_id((int)regs->ebx, &kind);
     if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    if (kind != OPEN_KIND_SOCKET) {
+        /* Phase 78: UDP is connectionless - there is nothing to
+         * listen for a connection ON. A real, explicit failure
+         * (ENOTSUP-equivalent), not silently treated as a no-op
+         * success. */
+        process_t* p = process_current();
+        kernel_log("[FAULT] pid %d SYS_LISTEN on a UDP socket (handle %d) "
+                   "- not supported, UDP has no connections to listen for\n",
+                   p != NULL ? p->pid : -1, (int)regs->ebx);
         regs->eax = (uint32_t)-1;
         return;
     }
@@ -1124,7 +1255,8 @@ static void handle_listen(registers_t* regs) {
 }
 
 static void handle_connect(registers_t* regs) {
-    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    open_kind_t kind;
+    int conn_id = lookup_socket_conn_id((int)regs->ebx, &kind);
     if (conn_id < 0) {
         regs->eax = (uint32_t)-1;
         return;
@@ -1132,6 +1264,20 @@ static void handle_connect(registers_t* regs) {
     process_t* p = process_current();
     uint32_t dest_ip = regs->ecx;
     uint16_t dest_port = (uint16_t)regs->edx;
+    if (kind == OPEN_KIND_UDP_SOCKET) {
+        /* Phase 78: records a fixed peer - no handshake, no capability
+         * gate (see kernel/rust/udp.rs's own top comment for exactly
+         * why, mirroring SYS_CONNECT's own already-documented,
+         * deliberate scope cut for TCP below rather than introducing
+         * a new inconsistency between the two). */
+        kernel_log("[SYSCALL] pid %d SYS_CONNECT (UDP) handle %d -> "
+                   "%d.%d.%d.%d:%d\n", p != NULL ? p->pid : -1,
+                   (int)regs->ebx, (int)(dest_ip >> 24) & 0xFF,
+                   (int)(dest_ip >> 16) & 0xFF, (int)(dest_ip >> 8) & 0xFF,
+                   (int)dest_ip & 0xFF, (int)dest_port);
+        regs->eax = (uint32_t)rust_udp_connect(conn_id, dest_ip, dest_port);
+        return;
+    }
     kernel_log("[SYSCALL] pid %d SYS_CONNECT handle %d -> %d.%d.%d.%d:%d\n",
                p != NULL ? p->pid : -1, (int)regs->ebx,
                (int)(dest_ip >> 24) & 0xFF, (int)(dest_ip >> 16) & 0xFF,
@@ -1146,8 +1292,19 @@ static void handle_connect(registers_t* regs) {
  * across a blocking/yielding call" discipline Phase 57's own audit
  * established for every other lock in this kernel. */
 static void handle_accept(registers_t* regs) {
-    int conn_id = lookup_socket_conn_id((int)regs->ebx);
+    open_kind_t kind;
+    int conn_id = lookup_socket_conn_id((int)regs->ebx, &kind);
     if (conn_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    if (kind != OPEN_KIND_SOCKET) {
+        /* Phase 78: same reasoning as handle_listen() above - UDP has
+         * no connections to accept. */
+        process_t* p = process_current();
+        kernel_log("[FAULT] pid %d SYS_ACCEPT on a UDP socket (handle %d) "
+                   "- not supported\n", p != NULL ? p->pid : -1,
+                   (int)regs->ebx);
         regs->eax = (uint32_t)-1;
         return;
     }
@@ -1183,6 +1340,78 @@ static void handle_accept(registers_t* regs) {
     kernel_log("[SYSCALL] pid %d SYS_ACCEPT -> handle %d (tcp conn %d)\n",
                p != NULL ? p->pid : -1, slot, new_conn_id);
     regs->eax = (uint32_t)slot;
+}
+
+/* Phase 78: the exact 6-byte layout SYS_SENDTO/SYS_RECVFROM's own
+ * address-pointer arguments use - see syscall.h's own comment on each
+ * for the full contract. Packed (no padding) since this is read/
+ * written directly at a ring-3-supplied pointer, byte-for-byte - not
+ * a struct either side merely happens to agree on, but the literal
+ * wire contract between this kernel and userland/libc/include/
+ * novasys.h's own identical nova_udp_addr_t, kept in sync by comment
+ * and convention rather than a shared header, the same as every other
+ * small FFI-boundary struct in this project (see e.g. kernel/rust/
+ * dynlink.rs's own structs mirroring kernel/task/elf.c's). */
+typedef struct __attribute__((packed)) {
+    uint32_t ip;
+    uint16_t port;
+} nova_udp_addr_t;
+
+static void handle_sendto(registers_t* regs) {
+    open_kind_t kind;
+    int sock_id = lookup_socket_conn_id((int)regs->ebx, &kind);
+    if (sock_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    process_t* p = process_current();
+    if (kind != OPEN_KIND_UDP_SOCKET) {
+        kernel_log("[FAULT] pid %d SYS_SENDTO on a TCP socket (handle %d) "
+                   "- not supported, use SYS_WRITE_HANDLE instead\n",
+                   p != NULL ? p->pid : -1, (int)regs->ebx);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    const nova_udp_addr_t* addr = (const nova_udp_addr_t*)regs->ecx;
+    const uint8_t* buf = (const uint8_t*)regs->edx;
+    uint32_t len = regs->esi;
+    uint32_t dest_ip = addr->ip;
+    uint16_t dest_port = addr->port;
+    int sent = rust_udp_sendto(sock_id, buf, len, dest_ip, dest_port);
+    kernel_log("[SYSCALL] pid %d SYS_SENDTO handle %d -> %d.%d.%d.%d:%d "
+               "(%d bytes) -> %s\n", p != NULL ? p->pid : -1, (int)regs->ebx,
+               (int)(dest_ip >> 24) & 0xFF, (int)(dest_ip >> 16) & 0xFF,
+               (int)(dest_ip >> 8) & 0xFF, (int)dest_ip & 0xFF,
+               (int)dest_port, (int)len, sent >= 0 ? "sent" : "failed");
+    regs->eax = (uint32_t)sent;
+}
+
+static void handle_recvfrom(registers_t* regs) {
+    open_kind_t kind;
+    int sock_id = lookup_socket_conn_id((int)regs->ebx, &kind);
+    if (sock_id < 0) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    if (kind != OPEN_KIND_UDP_SOCKET) {
+        process_t* p = process_current();
+        kernel_log("[FAULT] pid %d SYS_RECVFROM on a TCP socket (handle %d) "
+                   "- not supported, use SYS_READ instead\n",
+                   p != NULL ? p->pid : -1, (int)regs->ebx);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    uint8_t* buf = (uint8_t*)regs->ecx;
+    uint32_t max_len = regs->edx;
+    nova_udp_addr_t* out_addr = (nova_udp_addr_t*)regs->esi;
+    uint32_t src_ip = 0;
+    uint16_t src_port = 0;
+    int n = rust_udp_recvfrom(sock_id, buf, max_len, &src_ip, &src_port);
+    if (n > 0 && out_addr != NULL) {
+        out_addr->ip = src_ip;
+        out_addr->port = src_port;
+    }
+    regs->eax = (uint32_t)n;
 }
 
 void syscall_handler(registers_t* regs) {
@@ -1362,6 +1591,18 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_EXEC_TRUSTED_ENV:
             handle_exec_trusted_env(regs);
+            break;
+
+        case SYS_SOCKET_UDP:
+            handle_socket_udp(regs);
+            break;
+
+        case SYS_SENDTO:
+            handle_sendto(regs);
+            break;
+
+        case SYS_RECVFROM:
+            handle_recvfrom(regs);
             break;
 
         default:

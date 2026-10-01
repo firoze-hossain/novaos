@@ -4,6 +4,11 @@
 #include "../include/types.h"
 
 void* memcpy(void* dest, const void* src, size_t n);
+/* See string.c's own comment on why this exists at all - a real gap
+ * found by a real `undefined reference to 'memmove'` link failure on
+ * this project's own preferred (nightly + `cargo -Z build-std`)
+ * build path, not a speculative addition. */
+void* memmove(void* dest, const void* src, size_t n);
 void* memset(void* s, int c, size_t n);
 int memcmp(const void* s1, const void* s2, size_t n);
 size_t strlen(const char* s);

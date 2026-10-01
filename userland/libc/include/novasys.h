@@ -224,4 +224,57 @@ int sys_dns_resolve(const char* hostname, unsigned int* out_ip);
 int sys_tftp_fetch(unsigned int server_ip, const char* remote_filename,
                     const char* local_filename);
 
+/* Phase 78: real, multi-socket UDP - see kernel/rust/udp.rs's own
+ * module comment for the full design. sys_socket_udp() is a new,
+ * separate syscall from sys_socket() (TCP) rather than a type
+ * argument added to it, because sys_socket()'s own existing callers
+ * (and this file's own ABI, matching how every other syscall number
+ * here is a small, stable integer a raw int-0x80 caller might also
+ * use directly) never set a register for such an argument to land in
+ * - see kernel/arch/x86/cpu/syscall.h's own comment on SYS_SOCKET_UDP
+ * for the full reasoning, the identical hazard and the identical fix
+ * Phase 74's SYS_EXEC_ENV/SYS_EXEC_TRUSTED_ENV already established. */
+#define SYS_SOCKET_UDP 44
+#define SYS_SENDTO 45
+#define SYS_RECVFROM 46
+
+/* The exact 6-byte wire layout kernel/arch/x86/cpu/syscall.c's own
+ * SYS_SENDTO/SYS_RECVFROM read/write directly at a pointer passed in
+ * a register - see that file's own nova_udp_addr_t, which this
+ * mirrors byte-for-byte (kept in sync by comment and convention
+ * rather than a shared header, this project's established convention
+ * for a small FFI-boundary struct). `ip` is host byte order, matching
+ * every other IP address this kernel passes around (ip_make(),
+ * sys_connect()'s own dest_ip, ...). */
+typedef struct {
+    unsigned int ip;
+    unsigned short port;
+} nova_udp_addr_t;
+
+/* sys_socket_udp()/sys_bind()/sys_connect() (the latter two already
+ * declared above, reused unchanged - a UDP handle dispatches
+ * correctly through them exactly as a TCP one already does) create
+ * and configure a UDP socket. Once connected (sys_connect()), the
+ * existing sys_read()/sys_write_handle()/sys_close() work against
+ * that one fixed peer - no new syscalls needed for that case, the
+ * same "reuse read/write/close" design SYS_SOCKET's own Phase 58
+ * comment already established for TCP.
+ *
+ * sys_sendto()/sys_recvfrom() are the general, per-packet-addressed
+ * case connect()+read/write cannot express at all: sys_sendto() sends
+ * to `addr` regardless of whether the socket is connected (a
+ * connected socket's own recorded peer is left untouched - real
+ * sendto() semantics), returning the number of bytes sent or -1.
+ * sys_recvfrom() is non-blocking - 0 if nothing has arrived yet (never
+ * blocks the way sys_accept() does), the byte count copied (truncated
+ * to `max_len` if the real datagram was larger - the honest, real UDP
+ * "the rest is simply gone" contract) with `*out_addr` filled in with
+ * who it was actually from, or -1. Both are UDP-only - calling either
+ * on a TCP handle fails, use sys_read()/sys_write_handle() for that. */
+int sys_socket_udp(void);
+int sys_sendto(int handle, const nova_udp_addr_t* addr, const void* buf,
+               unsigned int len);
+int sys_recvfrom(int handle, void* buf, unsigned int max_len,
+                  nova_udp_addr_t* out_addr);
+
 #endif

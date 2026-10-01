@@ -643,6 +643,28 @@ void kernel_late_init(void) {
                        (result & 32) ? "FAIL" : "pass");
         }
 
+        /* Phase 78: kernel/rust/udp.rs's own self-test - the same
+         * "exercise the table/filtering logic directly, synthetically"
+         * reasoning as rust_tcp_selftest() just above: bind/connect/
+         * the connected-socket sender-filtering rule are all local
+         * bookkeeping with no real peer required to exercise correctly
+         * (unlike the real, external round-trip UDPTEST.ELF performs -
+         * see kernel/task/exec_trust_demo.c - which depends on real
+         * outbound network access this kernel doesn't control, the
+         * same honest reason the real DNS/HTTP tests just above are
+         * logged, not hard-asserted). Returns a single discriminating
+         * error code (0 = every check passed), not a bitmask - see
+         * rust_udp_selftest()'s own doc comment for exactly which
+         * negative value means which specific check failed. */
+        {
+            extern int rust_udp_selftest(void);
+            int result = rust_udp_selftest();
+            kernel_log("[ %s ] Kernel-side Rust UDP self-test (bind/"
+                       "connect/sender-filtering, synthetic): result=%d\n",
+                       result == 0 ? "OK" : "FAIL", result);
+        }
+
+
         /* Phase 64: kernel/rust/http.rs's own self-test - proves the
          * request-formatting/response-parsing logic directly (a
          * hand-built response, the three real edge cases that logic

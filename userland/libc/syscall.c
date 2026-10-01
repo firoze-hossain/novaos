@@ -353,3 +353,30 @@ int sys_tftp_fetch(unsigned int server_ip, const char* remote_filename,
                        : "memory", "cc");
     return result;
 }
+
+int sys_socket_udp(void) {
+    int result = SYS_SOCKET_UDP;
+    __asm__ volatile ("int $0x80" : "+a"(result) : : "memory", "cc");
+    return result;
+}
+
+int sys_sendto(int handle, const nova_udp_addr_t* addr, const void* buf,
+               unsigned int len) {
+    int result = SYS_SENDTO;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(addr), "d"(buf), "S"(len)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_recvfrom(int handle, void* buf, unsigned int max_len,
+                  nova_udp_addr_t* out_addr) {
+    int result = SYS_RECVFROM;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(handle), "c"(buf), "d"(max_len), "S"(out_addr)
+                       : "memory", "cc");
+    return result;
+}
+

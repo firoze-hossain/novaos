@@ -38,6 +38,7 @@ mod journal;
 mod crashdump;
 mod apic;
 mod tcp;
+mod udp;
 mod http;
 mod pkgsign_core;
 mod pkgsign;

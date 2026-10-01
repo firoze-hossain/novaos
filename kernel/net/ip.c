@@ -21,6 +21,16 @@
 extern void rust_tcp_handle_packet(uint32_t src_ip, const uint8_t* payload,
                                     uint16_t length);
 
+/* Phase 78: kernel/rust/udp.rs's own real, multi-socket engine - see
+ * that file's own top comment on why this runs ALONGSIDE, not instead
+ * of, udp_handle_packet() below (kernel/net/udp.c's older, single-
+ * listener mechanism, which stays completely unmodified and keeps
+ * backing kernel/net/tftp.c/dns.c exactly as before). Every incoming
+ * UDP datagram is offered to both; each independently decides whether
+ * its own destination port is relevant. */
+extern void rust_udp_handle_packet(uint32_t src_ip, const uint8_t* payload,
+                                    uint16_t length);
+
 typedef struct __attribute__((packed)) {
     uint8_t  version_ihl;
     uint8_t  tos;
@@ -132,6 +142,7 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
             break;
         case IP_PROTO_UDP:
             udp_handle_packet(src_ip, transport, transport_len);
+            rust_udp_handle_packet(src_ip, transport, transport_len);
             break;
         case IP_PROTO_TCP:
             rust_tcp_handle_packet(src_ip, transport, transport_len);
