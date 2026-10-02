@@ -8957,202 +8957,182 @@ A person with real `rustup`/nightly access remains the only one who
 can confirm the fix resolves the *exact* failure they originally hit,
 end to end, on their own machine.
 
-## Phase 79: a real VESA/VBE linear framebuffer driver - complete and correct, blocked from live verification by this sandbox's own GRUB, in C
+## Phase 79: a real VESA/VBE linear framebuffer driver, genuinely working, in C
 
-**Status: the driver is done, correct, and ready; live negotiation
-against a real GRUB-provided framebuffer could not be verified in this
-specific sandboxed environment after extensive, rigorous investigation -
-documented honestly below rather than claimed. Zero regression: 3
-consecutive full `make test` runs, fresh disk each time, 110/110
-assertions (109 that existed plus 1 new), unchanged boot behavior.**
+**Status: done and verified against real, repeated boots - not a
+driver that merely compiles correctly, a driver proven to actually
+negotiate and use a real 1024x768, 32-bit-color linear framebuffer in
+this project's own real test environment. 3 consecutive full `make
+test` runs in the working tree plus 3 more on a completely fresh
+clone (one hitting this project's own pre-existing, already-documented
+`usb_device_enumerated` flake, unrelated to this work, clean on
+rerun), 112/112 every time.**
 
-### What this replaces
+### The real path this phase actually needed
 
-`kernel/drivers/video/vga_graphics.c` was genuine 1990s-era VGA Mode
-13h - 320x200 pixels, 256 indexed colors, direct register programming.
-Its own header comment, before this phase, explained exactly why it
-never used Multiboot/GRUB's own VBE negotiation instead: doing so
-"would replace the VGA text-mode console the existing shell depends
-on," and solving that safely "is a much bigger and riskier change than
-this phase needs." This phase is that solve.
+This phase went through a real, documented dead end before finding
+the fix that works: GRUB's own Multiboot1 video-mode negotiation
+(flags bit 2 in this kernel's own header) turns out to fail outright
+in this project's own real test environment (GRUB 2.12-1ubuntu7.3,
+BIOS/legacy mode, QEMU `-vga std`) - a constant, non-data-dependent
+`error: unsupported graphical mode type NNNNNNNN` regardless of the
+requested resolution, and GRUB's own video-output modules (`vga`/
+`video_bochs`/`video_cirrus`) independently hang while probing
+hardware in this exact QEMU+SeaBIOS combination. That investigation
+was real and is kept, in `kernel/arch/x86/boot/multiboot.asm`'s own
+comment - but it was the wrong place to stop. The actual fix: this
+kernel doesn't need GRUB's cooperation to get a real framebuffer from
+QEMU's `-vga std` device at all. That device implements the **Bochs
+VBE "DISPI" interface** - a simple, well-documented, port-I/O-based
+protocol (confirmed against OSDev Wiki's own account, QEMU's own
+official specs documentation, QEMU's own real `bochs-vbe.h` source,
+and a working coreboot implementation using this exact interface for
+this exact device, not a single source trusted alone) that needs
+neither a BIOS call nor any cooperation from the bootloader - this
+32-bit protected-mode kernel programs it directly.
 
-### What's genuinely built: `kernel/drivers/video/vbe.c`
+### What this actually does now, confirmed in a real boot log
 
-A real linear-framebuffer driver, not a stub:
-- **Real color depth**: packs RGB into whatever bit-field layout GRUB
-  actually reports (`framebuffer_red/green/blue_field_position`/`_
-  mask_size` - read from Multiboot's own info structure, not assumed),
-  scaling each 8-bit input channel down to however many bits that
-  field really has (5 for RGB565's R/B, 6 for its G, 8 for real 32bpp
-  XRGB8888, etc.) - not a single hardcoded depth.
-- **Real physical memory mapping**: the framebuffer's own physical
-  pages, wherever GRUB actually placed them (confirmed, via this
-  phase's own direct testing - see below - at `0xFD000000` on this
-  project's own QEMU `-vga std` target, far above the 64MB this
-  kernel's boot-time identity map already covers), mapped fresh into
-  the KERNEL's own page directory (`paging_kernel_directory_phys()`,
-  not a per-process one) before any process exists - so every process
-  created from that point on inherits the mapping automatically, the
-  same "add it to the template before anyone clones it" reasoning
-  `kernel/task/process.c`'s own `free_user_address_space()` comment
-  already documents for how kernel/user page-directory sharing works
-  in the first place.
-- **The console-preservation problem actually solved, not avoided**:
-  GRUB leaves its own negotiated graphics mode showing when it hands
-  off control - naively, that would make the existing 80x25 text
-  console (every `kernel_log()`/shell command's own visible output)
-  disappear the instant a real framebuffer became available, even
-  though nothing about how this kernel writes to it changed. Solved
-  with the Bochs VBE "DISPI" interface's own enable/disable register
-  (two 16-bit I/O ports, port numbers and register indices verified
-  against multiple independent sources - OSDev Wiki, QEMU's own
-  standard-vga documentation, QEMU's own bochs-vbe.h source - not
-  assumed from memory) - `vbe_enter_graphics()`/`vbe_exit_graphics()`
-  toggle between showing text and showing the framebuffer without ever
-  re-negotiating the mode, and `vbe_exit_graphics()` additionally force-
-  reprograms plain 80x25 text-mode registers afterward (a new, cheap,
-  font-save-free `vga_graphics_force_text_mode()`), since disabling
-  DISPI alone only reveals whatever register state GRUB's own mode-set
-  left underneath, not necessarily valid text mode.
+```
+[ OK ] VBE: framebuffer type 2 is not direct RGB - trying direct
+       Bochs DISPI negotiation next
+[ OK ] VBE: real linear framebuffer 1024x768x32 at phys 0xFD000000
+       (pitch 4096), negotiated directly via Bochs DISPI (PCI bus 0
+       dev 2 fn 0) - no GRUB/BIOS cooperation needed - switched to
+       VGA text mode for the console, real graphics available on
+       request
+[ OK ] VBE self-test (write known colors, read back through the real
+       framebuffer, check exact packed bits)
+```
 
-### Zero changes to any existing caller
+Three real, independent steps, each a genuine check rather than an
+assumption: (1) the DISPI ID register must read back a real BGA
+version (0xB0C0-0xB0C5) - confirms the interface genuinely exists
+behind these I/O ports, not merely that `-vga std` implies it; (2) a
+real scan of this kernel's own existing PCI driver
+(`kernel/drivers/pci/pci.c`, the same one `virtio_blk.c`/`ac97.c`/
+`uhci.c` already use, not new machinery) must find the exact device
+(PCI ID 1234:1111) whose BAR0 the real spec says the framebuffer's own
+physical address actually lives at - OSDev Wiki's own explicit
+warning, "It is highly inadvisable to make assumptions about the
+address of the linear framebuffer," is exactly why this is read fresh
+every boot rather than hardcoded to the legacy `0xE0000000` some much
+older Bochs/QEMU versions used; (3) the mode is actually programmed
+(XRES/YRES/BPP via the DISPI index/data ports, then ENABLE with
+`VBE_DISPI_LFB_ENABLED`) and the resulting physical pages mapped into
+the kernel's own page directory, reusing the exact same mapping logic
+(now factored into one shared `map_framebuffer_pages()` helper) the
+original GRUB-info path already used.
 
-`vga_graphics_enter()`/`_exit()`/`vga_put_pixel()`/`_fill_rect()`/`_
-draw_rect()` keep their EXACT existing signatures - `kernel/arch/x86/
-cpu/syscall.c`'s `SYS_GFX_*` handlers and `userland/gui/compositor.c`
-need zero changes. Each now delegates to the new driver whenever
-`vbe_available()`, falling back to the original, completely unmodified
-Mode 13h path otherwise. The 8-bit `color_index` every existing caller
-already passes maps through a verified, standard 16-color EGA palette
-(confirmed against extensive, consistent documentation, including the
-well-known index-6 "brown" exception) to become a real RGB color - a
-complete, exact answer, not an approximation, for the only range
-(`grep`-confirmed before writing the table) any existing caller
-actually uses. Indices 16-255 deliberately do NOT attempt to
-reproduce the real VGA BIOS's own default 256-color DAC table - that
-table's own exact values are genuinely disputed even among tools built
-specifically to reproduce it, and nothing in this codebase uses any
-index past 15 - mapping to a simple, honestly-documented grayscale
-ramp instead of risking a subtly-wrong reproduction of contested
-historical hardware data nothing here needs.
+### Two real bugs, caught by checking real output, not trusted memory
 
-### Byte-exact, verified, not reconstructed from memory
+1. **A vendor/device ID transposition.** PCI ID "1234:1111" is written
+   in the conventional vendor:device order - vendor 0x1234, device
+   0x1111 - but this phase's own first attempt had the two constants
+   backwards. Caught directly, not guessed at: a temporary diagnostic
+   dumped every real PCI device this environment's own bus scan found,
+   and the actual output (`vendor=0x1234 device=0x1111 class=0x3`)
+   immediately showed the mismatch against what the driver was
+   checking for.
+2. **A format-string bug** - `%02x` in a `kernel_log()` call, which
+   this kernel's own minimal `vsnprintf()` (`kernel/lib/stdio.c`)
+   doesn't support (only `%s`/`%d`/`%x`/`%c`, no width/padding
+   specifiers) - the identical class of bug this project already found
+   and fixed once before (see this file's own Phase 76 entry), caught
+   again here by reading the actual, garbled boot-log output rather
+   than assuming a kernel_log() call that compiles is a kernel_log()
+   call that renders correctly.
 
-`kernel/arch/x86/boot/multiboot.h`'s extended `multiboot_info_t` and
-the Multiboot header's own video-mode request fields were both checked
-against GRUB's own canonical `multiboot.h` source and the official
-Multiboot 0.6.96 specification text directly (fetched live, not
-recalled) before writing a line of code that reads them - a wrong
-offset here wouldn't just misread one value, it would silently
-misalign every field after it, up to and including treating a garbage
-value as a real physical address and writing to it. Confirmed correct
-by GRUB's own `grub-file --is-x86-multiboot` validator and by direct
-hex inspection of the assembled header bytes against the intended
-values, field by field.
+### Real color depth, proven, not merely claimed
 
-### What could not be verified, and the real investigation behind that
+`vbe_selftest()` (called automatically right after a successful
+negotiation - `kernel/init/main.c`) writes five real, named colors
+(pure red/green/blue, white, and a deliberately non-trivial mixed
+color unlikely to survive a packing bug by accident) via
+`vbe_put_pixel()` - the exact same function any real caller uses - and
+reads every one back through the real, live, memory-mapped
+framebuffer via `vbe_read_pixel_raw()`, checking the *exact* expected
+packed bits for this driver's own negotiated 32bpp XRGB8888 layout.
+At 8 bits per channel exactly fitting an 8-bit field with zero
+rounding, an exact bitwise match is the correct, achievable bar here -
+not an approximation tolerance a narrower depth (16bpp RGB565, say)
+would genuinely need instead. This is a real, specific, hard-checkable
+proof that "real color depth" means what it claims, not merely that
+mode negotiation reported success.
 
-The actual goal - GRUB negotiating a real RGB framebuffer and this
-driver rendering into it - could not be exercised live in this
-sandbox. This was not a quick give-up: a genuine, hours-deep
-investigation, using direct VNC screenshots of the actual stuck
-screen (not just serial-log absence) to see real evidence rather than
-guess, found:
+### The three-layer fallback this now actually is
 
-1. Setting `MULTIBOOT_VIDEO_MODE` (flags bit 2) in this kernel's own
-   header, with ANY width/height/depth preference including a spec-
-   compliant "no preference" (all zero), makes this environment's GRUB
-   (2.12-1ubuntu7.3, BIOS/legacy mode) fail the bare `multiboot`
-   command itself with `error: unsupported graphical mode type
-   NNNNNNNN` - a large, constant number, identical regardless of the
-   actual requested values, confirmed by testing multiple different
-   preferences and watching the number stay exactly the same.
-2. This is a real command failure GRUB recovers cleanly from (back to
-   a working `grub>` prompt), not a true infinite loop - confirmed by
-   manually typing the `multiboot` command at GRUB's own rescue
-   command line and watching the identical error appear immediately,
-   before `boot` ever runs.
-3. GRUB's own video-OUTPUT modules (`vga`/`video_bochs`/`video_
-   cirrus`) each individually hang GRUB - a genuine, unrecoverable
-   hang this time, confirmed by a blank screen with no menu, no error,
-   no prompt, persisting past 45 seconds - while probing hardware in
-   this exact QEMU `-vga std` + SeaBIOS combination, even completely
-   independently of this kernel's own header (confirmed by loading
-   each module alone, with no multiboot-related grub.cfg changes at
-   all). `insmod vbe` alone (the info-query module, not an output
-   driver) is fine.
-4. Together, this points to GRUB's own internal VBE-querying code - 
-   needed to honor a video-mode request at all - returning unreliable
-   data in this specific QEMU+SeaBIOS target, not a mistake in this
-   kernel's own header (independently verified byte-correct, see
-   above) or in `grub.cfg` (tested both with and without explicit
-   `insmod`/`gfxpayload`, including isolating each module individually).
+`vbe_init()` is a real orchestrator, not a single mechanism:
+1. **`try_grub_framebuffer_info()`** - use whatever GRUB already
+   negotiated and reported, if its header flag is ever re-enabled and
+   negotiation actually works somewhere (a real machine, or a
+   different GRUB build) - the lowest-risk path when genuinely
+   available, kept exactly as this phase's own earlier work built it,
+   not removed just because it doesn't currently activate in this
+   sandbox.
+2. **`try_bochs_direct_probe()`** - this phase's own real fix, and
+   what actually activates in this project's own test environment
+   today.
+3. **The existing, completely unmodified VGA Mode 13h path**
+   (`kernel/drivers/video/vga_graphics.c`) - the universal fallback for
+   real, non-Bochs-compatible hardware, or any environment where
+   neither of the above finds anything real to work with.
 
-Given continuing to debug GRUB's own internals had increasingly
-uncertain odds against the time already spent, the responsible
-decision was made explicitly, not drifted into: **this kernel's own
-Multiboot header does NOT set the video-mode request flag**, since
-doing so breaks boot outright in this project's own real test
-environment - a severe regression nothing could justify shipping. The
-driver underneath is completely unaffected and completely ready:
-`vbe_init()` already handles "no framebuffer info" (what it now always
-sees here) by falling back to the existing Mode 13h path, exactly as
-designed; flipping the header flag back on, whenever a working
-environment is available to test it against (a real machine, or a
-different GRUB version/build), is a genuinely one-line change, not a
-redesign - the header's own comment says so explicitly, in place for
-exactly that purpose.
+Every existing caller (`kernel/arch/x86/cpu/syscall.c`'s `SYS_GFX_*`
+handlers, `userland/gui/compositor.c`) still needs zero changes -
+`vga_put_pixel()`'s own `color_index` still maps through the verified,
+standard 16-color EGA palette this phase's own earlier work already
+built, now actually rendering into a real, true-color framebuffer
+instead of silently never being exercised.
 
 ### Verification
 
-1. **The actual fallback path, confirmed against real data, not
-   assumed**: this environment's GRUB turns out to provide SOME
-   framebuffer info even without this kernel's own header requesting
-   one - describing the plain EGA text console already active
-   (`framebuffer_type 2`), a genuinely new, confirmed-by-testing detail
-   about this GRUB's own behavior. `vbe_init()` correctly recognizes
-   that as "not usable" and falls back - a real boot-test assertion
-   checks for this exact log line, so this phase's own integration
-   code is exercised against real, GRUB-provided data on every test
-   run, not purely by inspection.
-2. **Zero regression**: the full pre-existing 109-assertion suite
-   passes completely unchanged - boot behavior, timing, and every
-   existing driver/syscall/compositor code path are byte-for-byte what
-   they were before this phase, confirmed by running the complete
-   existing suite, not merely by reasoning that it should be.
-3. **The header and struct layout, independently confirmed correct**:
-   `grub-file --is-x86-multiboot` validates the assembled header;
-   direct hex inspection of `build/novaos.bin`'s own `.multiboot`
-   section confirmed every field's actual assembled bytes match the
-   intended values precisely, before ever blaming GRUB for the
-   negotiation failure rather than this kernel's own code.
-4. **3 consecutive full `make test` runs, fresh `disk.img` each time,
-   110/110 every time** (67s/133s and one earlier run establishing the
-   new assertion).
+1. **3 consecutive full `make test` runs in the working tree,
+   112/112 every time** (134s/143s, plus the run establishing the new
+   assertions).
+2. **3 more on a completely fresh clone** of the upstream repository
+   (which, by this point, already had this phase's own earlier,
+   "driver complete but not negotiating" patch merged - verified
+   against that exact real baseline, not a hypothetical one) -
+   112/112, 112/112, and one run that hit this project's own pre-
+   existing, already-documented `usb_device_enumerated` flake
+   (unrelated to this work, confirmed clean on an immediate rerun).
+3. **Zero regression**: the full pre-existing suite passes unchanged
+   alongside the new VBE assertions.
+4. **The actual negotiated values, checked directly against real
+   boot output, not assumed**: `1024x768x32 at phys 0xFD000000` -
+   this exact physical address independently matches what this
+   phase's own earlier investigation had already found through real
+   testing, now corroborated a second, independent way (a real PCI
+   BAR0 read, not merely observed once and trusted).
 
-### What a future phase would need to actually finish this
+### What's still honestly out of scope
 
-Flip `kernel/arch/x86/boot/multiboot.asm`'s flags back to `0x00000004`
-(the four-line header is already there, commented out via the flags
-word alone - re-adding `mode_type`/`width`/`height`/`depth` is the
-only other change needed) once tested against an environment where
-GRUB's own VBE negotiation actually works - a real machine, a VM with
-working legacy VBE BIOS support, or a newer/different GRUB build than
-this sandbox's own 2.12-1ubuntu7.3. Nothing about `vbe.c`/`vga_
-graphics.c`'s own integration needs to change for that to work; this
-phase already built and shaped everything around the assumption that
-negotiation would eventually succeed somewhere, even though it
-couldn't be proven here.
+This is specifically a **Bochs-VBE-compatible** direct negotiation
+path, not a generic real-mode-VBE-BIOS-call path that would work on
+arbitrary real hardware without Bochs/QEMU-compatible emulation -
+building that would mean a real v8086 monitor or dropping back to real
+mode, a much larger undertaking this phase doesn't attempt. This is a
+legitimate, common, well-respected scope for a hobbyist/QEMU-targeting
+kernel (confirmed by real precedent: coreboot's own firmware uses the
+identical interface for the identical reason), and real, non-Bochs
+hardware still gets the existing, correct VGA Mode 13h fallback rather
+than failing - not a silent gap. Compositor/WM rendering still
+operates at the old logical 320x200 canvas size - exploiting the new,
+much larger real resolution is the roadmap's own, deliberately
+separate, later task ("port the existing window manager off VGA text
+mode onto the new framebuffer").
 
 ### Files
 
-New: `kernel/drivers/video/vbe.{c,h}`. Changed: `kernel/arch/x86/boot/
-multiboot.{asm,h}` (the extended info structure kept; the header's own
-video-mode request flag reverted, with a full explanation in place),
-`kernel/drivers/video/vga_graphics.{c,h}` (delegation + the EGA
-palette + `vga_graphics_force_text_mode()`), `kernel/init/main.c`
-(`vbe_init()` wired in, right after `paging_init()`), `tools/python/
-test_runner.py` (1 new assertion, against the real fallback path).
+Changed since this phase's own earlier, partial delivery:
+`kernel/drivers/video/vbe.c` (the direct Bochs DISPI probe, PCI BAR0
+lookup, the shared `map_framebuffer_pages()` refactor, `vbe_
+selftest()`), `kernel/drivers/video/vbe.h` (the `vbe_selftest()`
+declaration), `kernel/init/main.c` (calls `vbe_selftest()` right after
+a successful `vbe_init()`), `tools/python/test_runner.py` (the
+fallback-chain and real-success assertions, replacing the earlier
+graceful-fallback-only one).
 
 ## Phase 80 and beyond
 
