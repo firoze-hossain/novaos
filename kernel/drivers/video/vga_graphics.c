@@ -16,7 +16,52 @@
  * VGA standard defines these modes, not a NovaOS-specific choice.
  */
 #include "vga_graphics.h"
+#include "vbe.h"
 #include "../../arch/x86/io.h"
+
+/* Phase 79: the standard, widely-documented 16-color EGA/CGA palette -
+ * the exact RGB values every DOS-era/VGA-text-mode reference agrees
+ * on (the "dim" IRGB combinations at 0xAA/170, "bright" at 0xFF/255,
+ * with the one well-known historical exception - index 6, "brown" -
+ * deliberately (170,85,0), not the "expected" (170,170,0), an IBM EGA
+ * quirk every reference source repeats identically). Used to map the
+ * existing `color_index` callers already pass (see vga_put_pixel()'s
+ * own comment) into a real RGB color once there's a real color depth
+ * (kernel/drivers/video/vbe.c) to render it in - every existing
+ * caller this project has (grep-confirmed before writing this table)
+ * only ever uses indices in exactly this 0-15 range, so this is a
+ * complete, exact answer for them, not an approximation.
+ *
+ * Indices 16-255 are NOT the real VGA BIOS's own default 256-color
+ * DAC table - that table's own exact values are genuinely disputed
+ * even among dedicated tools built to reproduce it (its own "9 color
+ * cycles" structure past the first 16 has no single, universally-
+ * agreed 8-bit upconversion), and nothing in this codebase currently
+ * uses any index past 15 to begin with. Rather than risk shipping a
+ * subtly-wrong reproduction of contested historical hardware data,
+ * indices 16-255 map to a simple, honestly-documented grayscale ramp
+ * instead - a real, defined color for every possible uint8_t input,
+ * just not a historical VGA DAC reproduction. */
+static const uint8_t EGA_PALETTE[16][3] = {
+    {0x00, 0x00, 0x00}, {0x00, 0x00, 0xAA}, {0x00, 0xAA, 0x00}, {0x00, 0xAA, 0xAA},
+    {0xAA, 0x00, 0x00}, {0xAA, 0x00, 0xAA}, {0xAA, 0x55, 0x00}, {0xAA, 0xAA, 0xAA},
+    {0x55, 0x55, 0x55}, {0x55, 0x55, 0xFF}, {0x55, 0xFF, 0x55}, {0x55, 0xFF, 0xFF},
+    {0xFF, 0x55, 0x55}, {0xFF, 0x55, 0xFF}, {0xFF, 0xFF, 0x55}, {0xFF, 0xFF, 0xFF},
+};
+
+static void color_index_to_rgb(uint8_t color_index, uint8_t* r, uint8_t* g,
+                                uint8_t* b) {
+    if (color_index < 16) {
+        *r = EGA_PALETTE[color_index][0];
+        *g = EGA_PALETTE[color_index][1];
+        *b = EGA_PALETTE[color_index][2];
+        return;
+    }
+    /* See this table's own comment above - a defined, honest
+     * grayscale fallback, not a guess at disputed hardware data
+     * nothing here actually needs. */
+    *r = *g = *b = color_index;
+}
 
 #define VGA_MISC_WRITE 0x3C2
 
@@ -187,12 +232,24 @@ static void write_vga_regs(const vga_regs_t* regs) {
     outb(VGA_AC_INDEX_DATA, 0x20);
 }
 
+void vga_graphics_force_text_mode(void) {
+    write_vga_regs(&MODE_TEXT_80X25);
+}
+
 void vga_graphics_enter(void) {
+    if (vbe_available()) {
+        vbe_enter_graphics();
+        return;
+    }
     save_font_plane();
     write_vga_regs(&MODE_13H);
 }
 
 void vga_graphics_exit(void) {
+    if (vbe_available()) {
+        vbe_exit_graphics();
+        return;
+    }
     write_vga_regs(&MODE_TEXT_80X25);
     restore_font_plane();
     /* restore_font_plane()'s unchain step leaves SEQ4/GC5/GC6 in
@@ -204,6 +261,20 @@ void vga_graphics_exit(void) {
 }
 
 void vga_put_pixel(int x, int y, uint8_t color_index) {
+    if (vbe_available()) {
+        /* Phase 79: real resolution/color depth - (x, y) still means
+         * exactly what it always did (the old 320x200 logical canvas
+         * every existing caller already assumes; see this project's
+         * own roadmap - porting the compositor/WM onto the new
+         * framebuffer's own, larger real resolution is deliberately a
+         * separate, later task, not this one), `color_index` now maps
+         * through the real palette above to a real RGB color instead
+         * of a raw VGA memory byte. */
+        uint8_t r, g, b;
+        color_index_to_rgb(color_index, &r, &g, &b);
+        vbe_put_pixel(x, y, r, g, b);
+        return;
+    }
     if (x < 0 || y < 0 || x >= VGA_GFX_WIDTH || y >= VGA_GFX_HEIGHT) {
         return;
     }
