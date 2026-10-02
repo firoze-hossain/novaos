@@ -181,7 +181,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * environment's own GRUB, a real machine whose BIOS can't provide
      * the requested mode, ...); kernel/drivers/video/vga_graphics.c's
      * own existing Mode 13h path is the fallback either way. */
-    vbe_init((const multiboot_info_t*)multiboot_info_addr);
+    if (vbe_init((const multiboot_info_t*)multiboot_info_addr)) {
+        /* A real framebuffer is active - prove "real color depth"
+         * actually means what it claims, not just that negotiation
+         * reported success (see vbe_selftest()'s own doc comment). */
+        bool vbe_ok = vbe_selftest();
+        kernel_log("[ %s ] VBE self-test (write known colors, read "
+                   "back through the real framebuffer, check exact "
+                   "packed bits)\n", vbe_ok ? "OK" : "FAIL");
+    }
 
     heap_init();
     kernel_log("[ OK ] Heap initialized (2 MB arena)\n");

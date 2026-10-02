@@ -85,4 +85,15 @@ void vbe_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b);
  * available() is false or (x, y) is out of bounds. */
 bool vbe_read_pixel_raw(int x, int y, uint32_t* out_raw);
 
+/* The real, boot-time self-test vbe_read_pixel_raw()'s own comment
+ * above already named: writes several real, named colors and reads
+ * each back through the live framebuffer, checking the exact expected
+ * packed bits - not merely "got something back." Returns false
+ * immediately (no checks performed) if vbe_available() is false -
+ * calling this when there's no real framebuffer to test isn't a
+ * meaningful "all zero checks passed," it's simply nothing to verify
+ * yet. See kernel/init/main.c's own call site for how that distinction
+ * is actually logged. */
+bool vbe_selftest(void);
+
 #endif
