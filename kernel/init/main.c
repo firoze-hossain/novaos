@@ -1,5 +1,6 @@
 #include "../include/kernel.h"
 #include "../drivers/vga/vga.h"
+#include "../drivers/video/vbe.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -166,6 +167,21 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     pmm_init((const multiboot_info_t*)multiboot_info_addr, magic_valid);
 
     paging_init();
+
+    /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
+     * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
+     * header request) - see kernel/drivers/video/vbe.c's own vbe_
+     * init() for the full account, including why this runs right
+     * here (immediately after paging_init(), well before process_
+     * init() - the framebuffer's own physical pages need to be
+     * mapped into the kernel's own page directory before any process
+     * exists to inherit that mapping from it). Gracefully returns
+     * false - already logged, nothing further needed here - for
+     * every honest reason that can happen (no video modules in this
+     * environment's own GRUB, a real machine whose BIOS can't provide
+     * the requested mode, ...); kernel/drivers/video/vga_graphics.c's
+     * own existing Mode 13h path is the fallback either way. */
+    vbe_init((const multiboot_info_t*)multiboot_info_addr);
 
     heap_init();
     kernel_log("[ OK ] Heap initialized (2 MB arena)\n");
