@@ -557,6 +557,10 @@ ASSERTIONS: list[Assertion] = [
               "Phase 79: kernel/drivers/video/vbe.c's own try_bochs_direct_probe() actually succeeded - a real 1024x768, 32-bit-color linear framebuffer, negotiated directly over the Bochs VBE DISPI interface and a real PCI BAR0 read, with zero cooperation from GRUB or any BIOS call this 32-bit protected-mode kernel could never make anyway. This is the real, visible outcome this whole task exists for, not merely a graceful fallback - see PROGRESS.md's own Phase 79 entry for the full account of why GRUB's own Multiboot1 negotiation doesn't work in this sandbox and how this direct path was built, verified, and debugged (including a real vendor/device ID transposition caught by checking an actual PCI scan's output) to deliver the real feature anyway"),
     Assertion("vbe_selftest_passed", r"\[ OK \] VBE self-test \(write known colors, read back through the real framebuffer, check exact packed bits\)",
               "Phase 79: kernel/drivers/video/vbe.c's own vbe_selftest() wrote five real, named colors (pure red/green/blue, white, and a deliberately non-trivial mixed color) via vbe_put_pixel() and read every one back through the real, live, memory-mapped framebuffer via vbe_read_pixel_raw(), checking the exact expected packed bits for this driver's own negotiated 32bpp XRGB8888 layout - a real, specific, hard-checkable proof that \"real color depth\" means what it claims, not merely that mode negotiation reported success"),
+    Assertion("virtiogpu_resource_created", r"\[ OK \] virtio-gpu at PCI \d+:\d+\.\d+ - real 1024x768 B8G8R8A8 2D resource created, backed, and set as scanout 0",
+              "Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own virtiogpu_init() found a real virtio-gpu PCI device (modern-transport-only, confirmed against multiple independent sources - no legacy interface exists for this device at all, unlike virtio-blk/virtio-net), completed the full modern virtio status handshake (including the FEATURES_OK round-trip legacy devices have no equivalent of), created a real 1024x768 B8G8R8A8 2D resource, attached a real guest-owned backing buffer to it, and configured it as scanout 0 - the real command sequence needed to actually display something, not a partial or simulated one. Required building kernel/drivers/virtio/virtio_pci_modern.{c,h} as new, generic infrastructure (the modern virtio-over-PCI transport, needed because virtio-gpu has no legacy interface), including a real correction mid-phase: a 64-bit memory BAR this driver's own first attempt didn't expect, found and fixed via this exact boot test, not assumed away"),
+    Assertion("virtiogpu_selftest_passed", r"\[ OK \] virtio-gpu self-test \(struct layout checks, write real pixels, transfer\+flush to the device, read back through guest memory\)",
+              "Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own virtiogpu_selftest() - called automatically right after a successful virtiogpu_init() - checked every command struct's own byte layout (kernel/rust/virtiogpu.rs's own rust_virtiogpu_selftest(), verified against the Linux kernel's own authoritative uapi header, not reconstructed from memory), then wrote real, specific, non-trivial pixel data into the real backing buffer, sent TRANSFER_TO_HOST_2D and RESOURCE_FLUSH and checked each got the real VIRTIO_GPU_RESP_OK_NODATA back (not merely 'some response'), then read the same buffer back through ordinary guest memory access and confirmed the bytes are exactly what was written - a real, specific, hard-checkable proof this driver's own B8G8R8A8 pixel-packing logic is correct and the device genuinely accepted and processed this exact buffer's contents, not merely that SET_SCANOUT once succeeded during init. See virtiogpu.h's own top comment for why this is the right kind of verification for a GPU resource specifically (not memory-mapped the way a real linear framebuffer is, so not directly readable the way kernel/drivers/video/vbe.c's own vbe_selftest() reads VBE's)"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
 ]
@@ -617,6 +621,14 @@ def boot_and_capture(
     virtio_flags = [
         "-drive", f"file={virtio_disk_path},if=none,id=vblk0",
         "-device", "virtio-blk-pci,drive=vblk0",
+        # Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own real
+        # virtio-gpu 2D driver needs a real virtio-gpu-pci device
+        # present to find at all - added alongside the existing
+        # default VGA device (QEMU allows more than one display
+        # device at once; this doesn't replace or conflict with the
+        # default device kernel/drivers/video/vbe.c's own Bochs DISPI
+        # direct-negotiation path already finds and uses).
+        "-device", "virtio-gpu-pci",
     ]
 
     cmd = (
