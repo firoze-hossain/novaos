@@ -159,7 +159,9 @@
 
 /* Phase 32b: the foundational syscalls a ring-3 graphics program
  * needs - graphics mode switching, drawing primitives, and mouse
- * input. Deliberately scoped to a proof-of-concept ring-3 graphics
+ * input. (Phase 81: SYS_GFX_* is the legacy, kernel-draws-every-pixel
+ * API; new programs should use SYS_FB_* below instead - see the Phase
+ * 81 block near SYS_RECVFROM.) Deliberately scoped to a proof-of-concept ring-3 graphics
  * demo in this pass, not a full port of the existing compositor's
  * multi-window management or the Store's package-browsing UI - see
  * PROGRESS.md for why that's a substantially larger undertaking left
@@ -541,6 +543,41 @@
  * socket ever needs, this exists for the general, sender-varies case
  * SYS_READ alone cannot express at all. */
 #define SYS_RECVFROM 46
+
+/* Phase 81: the framebuffer graphics API - the replacement for
+ * SYS_GFX_PUT_PIXEL/FILL_RECT above (which remain, unchanged, for the
+ * programs that use them - see the compatibility note below). The
+ * model, the argument structs, the limits, the capability bits and
+ * every error condition are specified in ONE place, shared by kernel
+ * and userland: userland/libc/include/nova_fb_abi.h. The implementation
+ * is kernel/drivers/video/fb.c. Summary:
+ *
+ *   SYS_FB_INFO     EBX = nova_fb_info_t* (out)         -> 0 | -errno
+ *   SYS_FB_ACQUIRE  EBX = backend id (0 = any)          -> 0 | -errno
+ *   SYS_FB_RELEASE  (no args)                           -> 0 | -errno
+ *   SYS_FB_CREATE   EBX = nova_fb_create_t* (in/out)    -> 0 | -errno
+ *   SYS_FB_DESTROY  EBX = surface handle                -> 0 | -errno
+ *   SYS_FB_PRESENT  EBX = nova_fb_present_t* (in)       -> 0 | -errno
+ *   SYS_FB_READBACK EBX = nova_fb_readback_t* (in)      -> 0 | -errno
+ *
+ * Return values are 0 on success and a NEGATIVE errno on failure -
+ * unlike most syscalls above, which return -1 for every failure.
+ * Every user pointer is validated (mapped, user-accessible, writable
+ * where the kernel writes); a bad one is -EFAULT, never a kernel fault.
+ *
+ * Compatibility: the old SYS_GFX_* calls keep working exactly as
+ * before, with one rule - while a process owns the display through
+ * SYS_FB_ACQUIRE, SYS_GFX_* calls are ignored, so a legacy program
+ * cannot draw over (or switch away from) a new-API client's screen.
+ * Porting the in-tree users of the old calls (the WM, `gui`) is the
+ * roadmap's separate compositor task, not part of this phase. */
+#define SYS_FB_INFO     47
+#define SYS_FB_ACQUIRE  48
+#define SYS_FB_RELEASE  49
+#define SYS_FB_CREATE   50
+#define SYS_FB_DESTROY  51
+#define SYS_FB_PRESENT  52
+#define SYS_FB_READBACK 53
 
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate

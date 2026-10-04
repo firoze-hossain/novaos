@@ -62,4 +62,20 @@ void vga_draw_rect(int x, int y, int w, int h, uint8_t color_index);
  * still go through vga_graphics_exit() above. */
 void vga_graphics_force_text_mode(void);
 
+/* Phase 81: the text-mode font lives in VGA plane 2, which on the
+ * Bochs/QEMU std-VGA device the VBE linear framebuffer aliases (its
+ * first 8 rows) - so graphics output destroys it. See vga_graphics.c's
+ * comment on these three for the full account. save: call while the
+ * font is intact, before anything writes the framebuffer. restore: sets
+ * up text mode and puts the saved font back. intact: true if plane 2
+ * currently matches the saved copy (leaves text mode configured) - the
+ * deterministic check kernel/drivers/video/vbe.c's boot self-test uses
+ * instead of hoping a screenshot catches it. */
+void vga_graphics_save_text_font(void);
+void vga_graphics_restore_text_font(void);
+bool vga_graphics_text_font_intact(void);
+/* True if the saved copy looks like a real font (not blank): see the
+ * comment in vga_graphics.c on how a blank "saved" font went unnoticed. */
+bool vga_graphics_saved_font_is_plausible(void);
+
 #endif

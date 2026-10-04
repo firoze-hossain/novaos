@@ -58,6 +58,92 @@ uint32_t paging_create_address_space(void);
 bool paging_map_page(uint32_t* page_directory, uint32_t virt_addr,
                       uint32_t phys_addr, uint32_t flags);
 
+/* The size of the kernel's boot-time identity map (virtual == physical
+ * for 0 .. this). Exported (not just a private constant in paging.c)
+ * because code that allocates a frame with pmm_alloc_frame() and then
+ * touches it through its physical address - zeroing a page about to be
+ * mapped into user space, say - is only safe if that frame is below this
+ * line; the PMM tracks ALL of RAM, so on a machine that has used more
+ * than this much, a freshly allocated frame can be one the kernel has
+ * no mapping for, and touching it is a page fault the kernel treats as
+ * fatal. paging.c asserts this matches IDENTITY_MAP_TABLES. */
+#define PAGING_IDENTITY_MAP_BYTES (64u * 1024u * 1024u)
+
+/* Phase 81: is page-directory entry `pde` (the one at `index` of some
+ * process's directory) one of the KERNEL'S OWN shared page tables,
+ * rather than a page table that process owns?
+ *
+ * Every process directory starts as a copy of the kernel's, so entries
+ * 0-15 (the 64MB identity map) point at page tables that are shared by
+ * every process and must never be freed, rewritten or made
+ * copy-on-write on a process's behalf. This is the question
+ * free_user_address_space(), cow_share_address_space() and
+ * paging_user_range_ok() all need answered - and it is answered by
+ * comparing the page-table FRAME ADDRESS (bits 31:12) only.
+ *
+ * It used to be answered by comparing the whole entry for equality
+ * (`pd[i] == kernel_pd[i]`), which is wrong in a way that only shows up
+ * under memory pressure: the CPU sets the Accessed flag (bit 5) in the
+ * PDE it used for a translation, in whichever directory was loaded at
+ * the time. A process's copy of an entry therefore gains bit 5 as soon
+ * as the kernel touches memory in that 4MB window while running on that
+ * process's behalf - while the kernel directory's own copy may never
+ * have been touched (nothing at boot reached that window), so it stays
+ * clear. The two stop comparing equal, the shared page table looks
+ * process-owned, and reaping the process freed every frame it mapped -
+ * the kernel's own memory - and then the page table itself. Found by
+ * the Phase 81 framebuffer conformance test, whose multi-megabyte
+ * surfaces were the first workload to push allocations past 20MB; see
+ * PROGRESS.md for the full account. Only the frame address says which
+ * table an entry points at, so only the frame address is compared. */
+bool paging_pde_is_kernel_shared(uint32_t pde, uint32_t index);
+
+/* Phase 81: removes the mapping for one 4KB page and returns the old
+ * page-table entry (so the caller can see the frame, and whether it
+ * was a copy-on-write page it must NOT free - see the COW notes in
+ * process.c's free_user_address_space()), or 0 if nothing was mapped.
+ * Flushes the TLB entry if `page_directory` is the one currently loaded
+ * in CR3. Does not free the frame and does not free an emptied page
+ * table (those are reclaimed when the address space is torn down). */
+uint32_t paging_unmap_page(uint32_t* page_directory, uint32_t virt_addr);
+
+/* Phase 81: may the kernel safely read (or, with for_write, write)
+ * `len` bytes at user address `addr` on behalf of the CURRENT process?
+ * Walks the loaded page tables and requires every page in the range to
+ * be present, user-accessible, and PROCESS-OWNED memory - so unmapped
+ * addresses, ranges that wrap past 4GB, and pointers into the kernel's
+ * shared identity map (including NULL) are all rejected, instead of
+ * becoming a kernel-mode page fault (which this kernel treats as
+ * fatal - one bad pointer from ring 3 would otherwise be a way to
+ * panic the machine).
+ *
+ * What this does NOT claim: it does not make kernel memory safe from
+ * ring 3. The identity map is deliberately PAGE_USER (documented in
+ * paging.c's build_identity_map(), unchanged since Phase 4), so a
+ * ring-3 program can still read and write kernel memory directly with
+ * ordinary loads and stores; closing that is the per-process-isolation
+ * work PROGRESS.md has tracked since Phase 3, far outside this phase.
+ * What the check buys is that SYSCALLS never do it on a program's
+ * behalf by accident or confusion - a wild pointer becomes -EFAULT
+ * instead of a silent kernel write - and that their contract does not
+ * silently change when that isolation work lands. A consequence worth
+ * stating: code running in ring 3 FROM the kernel image (the in-kernel
+ * demo tasks) cannot pass pointers to syscalls that use this check,
+ * since everything it owns lives in the shared map. None does.
+ *
+ * for_write additionally requires each page be writable. A page that
+ * is read-only only because it is copy-on-write (shared with a
+ * fork()'d relative) is NOT refused: it is resolved right here, giving
+ * this process its private copy first. That is required for
+ * correctness, not a convenience: this kernel runs with CR0.WP clear,
+ * so a ring-0 store to a read-only page does not fault - it silently
+ * modifies the frame every sharer sees, which would let a syscall's
+ * output scribble on the parent's (or child's) memory.
+ *
+ * len == 0 is accepted for any address. Intended to be called in
+ * syscall context, where CR3 is the calling process's page directory. */
+bool paging_user_range_ok(uint32_t addr, uint32_t len, bool for_write);
+
 /* Loads CR3. Called by the scheduler on every context switch. */
 void paging_switch_address_space(uint32_t page_directory_phys);
 

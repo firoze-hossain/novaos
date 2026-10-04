@@ -208,6 +208,63 @@ void exec_trust_demo_task(void) {
                     "UDP socket creation or SYS_CONNECT itself failed, "
                     "not merely a network-unreachable send.\n");
 
+    /* Phase 81: the framebuffer graphics API (SYS_FB_*) - GFXTEST.ELF
+     * (userland/gfxtest/gfxtest.c) is a ~120-check conformance suite
+     * that runs the whole API from ring 3 against the real kernel and
+     * checks the real display contents by reading them back, printing
+     * its own "[gfxtest] PASS/FAIL" lines. It needs no delegated
+     * capability (drawing to the screen reads nothing sensitive - see
+     * kernel/arch/x86/cpu/syscall.c's SYS_FB_* handlers), so plain
+     * sys_exec() is the right call here, not sys_exec_trusted():
+     * handing a test program rights it does not use would only weaken
+     * what the test shows.
+     *
+     * Order matters. "leak" first: it acquires the display and exits
+     * WITHOUT releasing it. Each full run below must then be able to
+     * acquire the display (the process-exit hook handed it back) and
+     * must find it black (acquire cleared the leaker's picture) - the
+     * suite's first checks. Then the suite once per backend: "auto"
+     * (whatever the kernel picks), "vbe" and "gpu" explicitly, so BOTH
+     * display paths - the CPU framebuffer copy and the virtio-gpu
+     * TRANSFER_TO_HOST_2D + RESOURCE_FLUSH path - are exercised end to
+     * end on every boot. */
+    static const char* const gfx_leak[] = {"GFXTEST.ELF", "vbe", "leak"};
+    static const char* const gfx_auto[] = {"GFXTEST.ELF", "auto"};
+    static const char* const gfx_vbe[]  = {"GFXTEST.ELF", "vbe"};
+    static const char* const gfx_gpu[]  = {"GFXTEST.ELF", "gpu"};
+
+    int pid_gl = sys_exec("GFXTEST.ELF", (const char**)gfx_leak, 3);
+    int code_gl = (pid_gl >= 0) ? sys_wait(pid_gl) : -1;
+    sys_write(pid_gl >= 0 && code_gl == 0
+                  ? "[sandbox] PASS: GFXTEST.ELF leak (a process that exits "
+                    "holding the display).\n"
+                  : "[sandbox] FAIL: GFXTEST.ELF leak run did not exit "
+                    "cleanly.\n");
+
+    int pid_ga = sys_exec("GFXTEST.ELF", (const char**)gfx_auto, 2);
+    int code_ga = (pid_ga >= 0) ? sys_wait(pid_ga) : -1;
+    sys_write(pid_ga >= 0 && code_ga == 0
+                  ? "[sandbox] PASS: GFXTEST.ELF auto (framebuffer API "
+                    "conformance, default backend).\n"
+                  : "[sandbox] FAIL: GFXTEST.ELF auto - the framebuffer "
+                    "API conformance suite did not pass.\n");
+
+    int pid_gv = sys_exec("GFXTEST.ELF", (const char**)gfx_vbe, 2);
+    int code_gv = (pid_gv >= 0) ? sys_wait(pid_gv) : -1;
+    sys_write(pid_gv >= 0 && code_gv == 0
+                  ? "[sandbox] PASS: GFXTEST.ELF vbe (framebuffer API "
+                    "conformance, VESA/VBE backend).\n"
+                  : "[sandbox] FAIL: GFXTEST.ELF vbe - the framebuffer "
+                    "API conformance suite did not pass.\n");
+
+    int pid_gg = sys_exec("GFXTEST.ELF", (const char**)gfx_gpu, 2);
+    int code_gg = (pid_gg >= 0) ? sys_wait(pid_gg) : -1;
+    sys_write(pid_gg >= 0 && code_gg == 0
+                  ? "[sandbox] PASS: GFXTEST.ELF gpu (framebuffer API "
+                    "conformance, virtio-gpu backend).\n"
+                  : "[sandbox] FAIL: GFXTEST.ELF gpu - the framebuffer "
+                    "API conformance suite did not pass.\n");
+
     sys_exit(0);
 
     for (;;) { }

@@ -85,6 +85,23 @@ void vbe_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b);
  * available() is false or (x, y) is out of bounds. */
 bool vbe_read_pixel_raw(int x, int y, uint32_t* out_raw);
 
+/* Phase 81: the framebuffer API's (kernel/drivers/video/fb.c) window
+ * onto this driver. Returns true - and fills the outputs - only if a
+ * real framebuffer is active AND its layout is exactly 32bpp XRGB8888
+ * (blue at bit 0, green at 8, red at 16, 8 bits each): the one pixel
+ * format the SYS_FB_* ABI defines (NOVA_FB_FORMAT_XRGB8888), which
+ * lets present/readback be a straight row copy with no per-pixel
+ * conversion. That is what the direct Bochs DISPI path always
+ * negotiates, so on this project's own QEMU target it always holds.
+ * Any other negotiated layout (16bpp, 24bpp, or a GRUB-provided one
+ * with unusual field positions) returns false: the framebuffer API
+ * then reports no VBE backend rather than claiming to convert formats
+ * this driver has no way to test here - an honest "not supported", not
+ * a silent wrong-colors fallback. `*out_base` is the identity-mapped
+ * address of the first pixel; rows are `*out_pitch` bytes apart. */
+bool vbe_get_xrgb8888_surface(volatile uint8_t** out_base, uint32_t* out_width,
+                              uint32_t* out_height, uint32_t* out_pitch);
+
 /* The real, boot-time self-test vbe_read_pixel_raw()'s own comment
  * above already named: writes several real, named colors and reads
  * each back through the live framebuffer, checking the exact expected
@@ -95,5 +112,14 @@ bool vbe_read_pixel_raw(int x, int y, uint32_t* out_raw);
  * yet. See kernel/init/main.c's own call site for how that distinction
  * is actually logged. */
 bool vbe_selftest(void);
+
+/* Phase 81: proves the text-mode font survives a graphics session. The
+ * linear framebuffer aliases the VGA RAM that holds the font, so writing
+ * pixels destroys it; this scribbles over exactly that region, ends the
+ * session the way real callers do, and checks the font is byte-identical
+ * afterwards (and that the scribble really did destroy it first, so the
+ * check cannot pass vacuously). Returns false if there is no framebuffer
+ * or the font did not come back. */
+bool vbe_font_selftest(void);
 
 #endif

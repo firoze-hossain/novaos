@@ -10,6 +10,7 @@
  * it mid-save, plus (for a user task) a fake IRET frame sitting right
  * after the fake return address.
  */
+#include "../drivers/video/fb.h"
 #include "process.h"
 #include "scheduler.h"
 #include "elf.h"
@@ -484,14 +485,17 @@ int process_create_sandboxed_task_trusted(const char* name,
  * process itself added via paging_map_page() are ever freed. */
 static void free_user_address_space(uint32_t page_directory_phys) {
     uint32_t* pd = (uint32_t*)page_directory_phys;
-    uint32_t* kernel_pd = (uint32_t*)paging_kernel_directory_phys();
 
     for (uint32_t i = 0; i < 1024; i++) {
         if (!(pd[i] & PAGE_PRESENT)) {
             continue;
         }
-        if (pd[i] == kernel_pd[i]) {
-            continue; /* shared kernel entry - not this process's to free */
+        if (paging_pde_is_kernel_shared(pd[i], i)) {
+            continue; /* shared kernel entry - not this process's to free.
+                         (Frame-address comparison, NOT whole-entry
+                         equality: see paging_pde_is_kernel_shared()'s
+                         comment for the memory-corruption bug the
+                         whole-entry test used to cause.) */
         }
 
         uint32_t pt_phys = pd[i] & 0xFFFFF000u;
@@ -556,16 +560,17 @@ static bool cow_share_address_space(uint32_t parent_pd_phys,
                                      uint32_t child_pd_phys) {
     uint32_t* parent_pd = (uint32_t*)parent_pd_phys;
     uint32_t* child_pd = (uint32_t*)child_pd_phys;
-    uint32_t* kernel_pd = (uint32_t*)paging_kernel_directory_phys();
 
     for (uint32_t i = 0; i < 1024; i++) {
         if (!(parent_pd[i] & PAGE_PRESENT)) {
             continue;
         }
-        if (parent_pd[i] == kernel_pd[i]) {
+        if (paging_pde_is_kernel_shared(parent_pd[i], i)) {
             continue; /* shared kernel entry - paging_create_address_
                           space() already gave the child this same
-                          entry; nothing to do */
+                          entry; nothing to do. (Frame-address test, not
+                          whole-entry equality - see paging_pde_is_
+                          kernel_shared().) */
         }
 
         uint32_t* parent_pt = (uint32_t*)(parent_pd[i] & 0xFFFFF000u);
@@ -610,13 +615,156 @@ static bool cow_share_address_space(uint32_t parent_pd_phys,
     return true;
 }
 
+
+/* Phase 81: deterministic regression test for the shared-page-table bug
+ * described at paging_pde_is_kernel_shared() in paging.h. The bug only
+ * fired when the CPU had happened to set the Accessed bit in a
+ * process's copy of a kernel page-directory entry - which depends on
+ * where the allocator happened to put frames - so a test that merely
+ * exercises fork()/exit() would pass or fail by luck. This one makes
+ * the condition happen on purpose: build a fresh address space, set
+ * bit 5 (Accessed) in EVERY present entry, which is exactly what the
+ * CPU does to entries it walks, and then run the two operations that
+ * used to misjudge it:
+ *
+ *   1. cow_share_address_space() (fork): the child must come out with
+ *      the kernel's shared page tables untouched - the same frames, not
+ *      private copies - and the kernel's identity map must not have been
+ *      rewritten as copy-on-write (checked on a sample of the kernel's
+ *      own page-table entries before and after).
+ *   2. free_user_address_space() (reap): must free exactly what the
+ *      process owned - its one private page, that page's page table,
+ *      and the directory itself - 3 frames, counted through the PMM,
+ *      not the thousands it used to free by treating shared kernel
+ *      tables as its own.
+ *
+ * If the bug ever returns this reports it LOUDLY and immediately; it
+ * cannot be made harmless (the buggy teardown really does free the
+ * kernel's own page tables), but a clear FAIL line the moment it
+ * happens beats a mysterious page fault many seconds later. */
+bool process_selftest_shared_pde_accessed_bit(void) {
+    uint32_t* kernel_pd = (uint32_t*)paging_kernel_directory_phys();
+
+    uint32_t parent_pd = paging_create_address_space();
+    uint32_t child_pd = paging_create_address_space();
+    uint32_t frame = pmm_alloc_frame();
+    if (parent_pd == 0 || child_pd == 0 || frame == 0) {
+        kernel_log("[FAULT] shared-PDE self-test: out of memory\n");
+        return false;
+    }
+    uint32_t* ppd = (uint32_t*)parent_pd;
+    uint32_t* cpd = (uint32_t*)child_pd;
+
+    /* Simulate the CPU having walked every shared entry in both. */
+    for (uint32_t i = 0; i < 1024; i++) {
+        if (ppd[i] & PAGE_PRESENT) ppd[i] |= 0x20;
+        if (cpd[i] & PAGE_PRESENT) cpd[i] |= 0x20;
+    }
+    if (!paging_map_page(ppd, 0x08048000u, frame,
+                         PAGE_PRESENT | PAGE_WRITE | PAGE_USER)) {
+        kernel_log("[FAULT] shared-PDE self-test: could not map a page\n");
+        return false;
+    }
+
+    /* Snapshot some of the kernel's identity-map page-table entries -
+     * the ones the bug used to rewrite. */
+    uint32_t sample_idx[4] = {0, 5, 11, 15};
+    uint32_t before[4][4];
+    for (int s = 0; s < 4; s++) {
+        uint32_t* kpt = (uint32_t*)(kernel_pd[sample_idx[s]] & 0xFFFFF000u);
+        for (int e = 0; e < 4; e++) {
+            before[s][e] = kpt[0x40 + e * 37];
+        }
+    }
+
+    bool ok = true;
+    if (!cow_share_address_space(parent_pd, child_pd)) {
+        kernel_log("[FAULT] shared-PDE self-test: cow_share failed\n");
+        ok = false;
+    }
+    for (int s = 0; s < 4 && ok; s++) {
+        uint32_t i = sample_idx[s];
+        /* The child must still point at the kernel's own page table. */
+        if ((cpd[i] & 0xFFFFF000u) != (kernel_pd[i] & 0xFFFFF000u)) {
+            kernel_log("[FAULT] shared-PDE self-test: fork gave the child a "
+                       "private copy of kernel page table %d\n", (int)i);
+            ok = false;
+        }
+        uint32_t* kpt = (uint32_t*)(kernel_pd[i] & 0xFFFFF000u);
+        for (int e = 0; e < 4; e++) {
+            if (kpt[0x40 + e * 37] != before[s][e]) {
+                kernel_log("[FAULT] shared-PDE self-test: fork rewrote the "
+                           "kernel's identity map (table %d)\n", (int)i);
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (!ok) {
+        return false; /* do NOT go on to free_user_address_space() on a
+                          directory we now know is mis-built */
+    }
+
+    pmm_stats_t s0, s1;
+    pmm_get_stats(&s0);
+    free_user_address_space(child_pd);
+    pmm_get_stats(&s1);
+    /* The child got a private copy of the one mapped page's PT plus the
+     * COW-marked page itself (COW frames are deliberately never freed -
+     * see free_user_address_space()), so what it owns and frees is its
+     * page table and its directory: 2 frames. */
+    uint32_t freed_child = s1.free_frames - s0.free_frames;
+    pmm_get_stats(&s0);
+    free_user_address_space(parent_pd);
+    pmm_get_stats(&s1);
+    /* The parent: its COW-marked page is skipped too (also never
+     * freed), leaving its page table and directory: 2 frames. */
+    uint32_t freed_parent = s1.free_frames - s0.free_frames;
+
+    if (freed_child != 2 || freed_parent != 2) {
+        kernel_log("[FAULT] shared-PDE self-test: teardown freed %d (child) "
+                   "and %d (parent) frames, expected 2 and 2 - it is "
+                   "freeing page tables it does not own\n",
+                   (int)freed_child, (int)freed_parent);
+        return false;
+    }
+    return true;
+}
+
 void process_exit_current(int exit_code) {
     process_t* p = scheduler_current();
     if (p != NULL) {
+        /* Phase 81: if this process owns the display (or any
+         * framebuffer surfaces), let go of them NOW, on the way out -
+         * not at reap time. The display especially cannot wait: a
+         * graphics app that crashed or simply forgot SYS_FB_RELEASE
+         * would otherwise leave the machine stuck in graphics mode,
+         * with the text console invisible, until someone happened to
+         * wait() on it.
+         *
+         * ORDER MATTERS, and getting it wrong was a real bug caught by
+         * the Phase 81 conformance test: this must happen BEFORE the
+         * state becomes PROCESS_TERMINATED, not after. A parent blocked
+         * in wait() (on the other CPU) returns the instant it observes
+         * TERMINATED, and the very next thing a well-behaved parent does
+         * is acquire the display for itself; if the release came after
+         * the state change that acquire could win the race and see
+         * -EBUSY from a child that is, by then, dead to everything but
+         * this one line. Doing it first makes "wait() returned" imply
+         * "the child's display is already free" - an invariant callers
+         * can rely on, not a timing accident.
+         *
+         * Surface MEMORY is deliberately not touched here - it is mapped
+         * in this process's own page tables and freed with them by
+         * free_user_address_space() at reap time, like every other page
+         * it owns (freeing it here too would be a double free). */
+        fb_process_exit(p->pid);
+
         p->exit_code = exit_code;
         p->state = PROCESS_TERMINATED;
         kernel_log("[ OK ] Process '%s' (pid %d) exited with code %d\n",
                    p->name, p->pid, exit_code);
+
 
         /* A real, confirmed use-after-free bug used to be here: this
          * function runs ON the exiting process's own kernel stack

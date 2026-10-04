@@ -76,6 +76,7 @@ static uint32_t g_pitch;
 static uint32_t g_width;
 static uint32_t g_height;
 static uint32_t g_bpp;
+static void save_text_font_once(void); /* defined with enter/exit below */
 static uint8_t g_red_pos, g_red_size;
 static uint8_t g_green_pos, g_green_size;
 static uint8_t g_blue_pos, g_blue_size;
@@ -223,6 +224,20 @@ static bool try_bochs_direct_probe(void) {
     }
     uint32_t phys_addr = g_bochs_location.bar0 & 0xFFFFFFF0;
 
+    /* SAVE THE TEXT FONT BEFORE THE FIRST ENABLE - not after. The Bochs
+     * VBE interface clears video memory every time the mode is enabled
+     * unless the NOCLEARMEM flag (0x80) is given, and the VGA text font
+     * lives in that memory (plane 2 = the framebuffer's first 8 rows).
+     * An earlier version of this file saved the font only after this
+     * function had enabled the mode and switched back to text - i.e.
+     * after the device had already zeroed it - so it saved zeros, and
+     * the font "restore" then faithfully restored zeros: the text
+     * console went blank at the very first call and every self-test
+     * said everything was fine, because each one compared the font to
+     * that already-wrecked copy. The blank console was only found by
+     * looking at the screen. */
+    save_text_font_once();
+
     dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
     dispi_write(VBE_DISPI_INDEX_XRES, BOCHS_DIRECT_WIDTH);
     dispi_write(VBE_DISPI_INDEX_YRES, BOCHS_DIRECT_HEIGHT);
@@ -255,6 +270,8 @@ static bool try_bochs_direct_probe(void) {
 
     g_available = true;
     vbe_exit_graphics();
+    save_text_font_once(); /* font still pristine: nothing has written
+                              the framebuffer yet */
     /* %x, not %02x: kernel/lib/stdio.c's own minimal vsnprintf() only
      * recognises %s/%d/%x/%c, no width/padding specifiers - the exact
      * same class of bug this project already caught once before (see
@@ -362,6 +379,8 @@ static bool try_grub_framebuffer_info(const multiboot_info_t* mbi) {
      * point on, even though nothing about how this kernel writes to
      * it actually changed. */
     vbe_exit_graphics();
+    save_text_font_once(); /* font still pristine: nothing has written
+                              the framebuffer yet */
 
     kernel_log("[ OK ] VBE: real linear framebuffer %dx%dx%d at phys "
                "0x%x (pitch %d), negotiated by GRUB - switched to VGA "
@@ -396,6 +415,28 @@ bool vbe_init(const multiboot_info_t* mbi) {
     return false;
 }
 
+bool vbe_get_xrgb8888_surface(volatile uint8_t** out_base, uint32_t* out_width,
+                              uint32_t* out_height, uint32_t* out_pitch) {
+    if (!g_available || g_bpp != 32 ||
+        g_red_pos != 16 || g_red_size != 8 ||
+        g_green_pos != 8 || g_green_size != 8 ||
+        g_blue_pos != 0 || g_blue_size != 8) {
+        return false;
+    }
+    /* A pitch smaller than a row of pixels would make every row copy
+     * overlap its neighbour - cannot happen with the layouts this
+     * driver produces, but this is the one gate between a device-
+     * reported number and kernel memory writes, so it is checked. */
+    if (g_pitch < g_width * 4u) {
+        return false;
+    }
+    *out_base = (volatile uint8_t*)g_phys_addr;
+    *out_width = g_width;
+    *out_height = g_height;
+    *out_pitch = g_pitch;
+    return true;
+}
+
 bool vbe_available(void) {
     return g_available;
 }
@@ -404,10 +445,26 @@ uint32_t vbe_get_width(void) { return g_width; }
 uint32_t vbe_get_height(void) { return g_height; }
 uint32_t vbe_get_bpp(void) { return g_bpp; }
 
+/* Saved once, at init, while the text font is still intact (nothing has
+ * been able to write the framebuffer yet) - see vga_graphics.c's
+ * vga_graphics_save_text_font() for why the font needs saving at all. */
+static bool g_font_saved;
+
+static void save_text_font_once(void) {
+    if (!g_font_saved) {
+        vga_graphics_save_text_font();
+        g_font_saved = true;
+    }
+}
+
 void vbe_enter_graphics(void) {
     if (!g_available) {
         return;
     }
+    /* Normally already done by vbe_init(); repeated here (it is a no-op
+     * the second time) so that no path can reach the first framebuffer
+     * write with the font unsaved. */
+    save_text_font_once();
     dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_ENABLED);
 }
 
@@ -418,15 +475,52 @@ void vbe_exit_graphics(void) {
     dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
     /* Disabling VBE alone reveals whatever ordinary VGA register
      * state already exists underneath - it does not, by itself,
-     * guarantee that state is valid 80x25 text mode (GRUB's own
-     * mode-set may have left the underlying VGA registers in some
-     * GRUB/BIOS-specific state this kernel never chose). Force it
-     * explicitly, every time - cheap (plain port I/O, no font-plane
-     * save/restore - see vga_graphics_force_text_mode()'s own
-     * comment on why it's the right function for exactly this), and
-     * removes any doubt about what's actually on screen once this
-     * returns. */
-    vga_graphics_force_text_mode();
+     * guarantee that state is valid 80x25 text mode, and it certainly
+     * does not bring back the font: the linear framebuffer aliases the
+     * VGA RAM the font lives in, so any pixel written has overwritten
+     * it. Restore text mode AND the font explicitly, every time. (The
+     * very first call, from vbe_init() before any graphics has
+     * happened, has nothing saved yet and nothing to restore - the
+     * font is still the BIOS's - so it only sets text mode.) */
+    if (g_font_saved) {
+        vga_graphics_restore_text_font();
+    } else {
+        vga_graphics_force_text_mode();
+    }
+}
+
+bool vbe_font_selftest(void) {
+    if (!g_available || !g_font_saved) {
+        return false;
+    }
+    /* 1. The saved copy must BE a font. This is the check whose absence
+     *    let a blank console ship: every other check here compares the
+     *    live font to the saved one, which passes trivially if the saved
+     *    one is garbage. */
+    if (!vga_graphics_saved_font_is_plausible()) {
+        kernel_log("[FAULT] VBE font self-test: the saved text font is blank - "
+                   "it was saved after something had already wiped it\n");
+        return false;
+    }
+    /* 2. A real session, the way callers run one: enter graphics (the
+     *    device clears video memory), scribble over exactly the region
+     *    the font aliases (the framebuffer's first 8 rows, 4096 bytes
+     *    each), exit. The font must be byte-identical afterwards. */
+    volatile uint32_t* lfb = (volatile uint32_t*)g_phys_addr;
+    vbe_enter_graphics();
+    for (uint32_t i = 0; i < 8192; i++) {
+        lfb[i] = 0xDEADBEEFu;
+    }
+    /* Not vacuous: the scribble must really have destroyed it first,
+     * or this would pass on a device where there is nothing to restore. */
+    bool destroyed = !vga_graphics_text_font_intact();
+    vbe_exit_graphics();
+    bool restored = vga_graphics_text_font_intact();
+    if (!destroyed) {
+        kernel_log("[ .. ] VBE font self-test: scribbling the framebuffer did "
+                   "not disturb the font on this device (nothing to restore)\n");
+    }
+    return restored;
 }
 
 void vbe_put_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {

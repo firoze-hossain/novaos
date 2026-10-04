@@ -34,6 +34,8 @@
 #include "../../lib/spinlock.h"
 #include "../../include/kernel.h"
 #include "../../drivers/video/vga_graphics.h"
+#include "../../drivers/video/fb.h"
+#include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
 #include "../../net/dns.h"
@@ -742,18 +744,32 @@ static void handle_delete_file(registers_t* regs) {
     regs->eax = vfs_delete_file(filename) ? 1u : (uint32_t)-1;
 }
 
+/* Phase 81: while a process owns the display through SYS_FB_ACQUIRE,
+ * the legacy SYS_GFX_* calls do nothing (they return void, so there is
+ * no error to give). Without this, a program still using the old API
+ * could switch the display out from under a new-API client or draw
+ * 320x200 palette pixels over its picture. */
 static void handle_gfx_enter(registers_t* regs) {
     (void)regs;
+    if (fb_display_is_owned()) {
+        return;
+    }
     vga_graphics_enter();
 }
 
 static void handle_gfx_exit(registers_t* regs) {
     (void)regs;
+    if (fb_display_is_owned()) {
+        return;
+    }
     vga_graphics_exit();
     vga_clear();
 }
 
 static void handle_gfx_put_pixel(registers_t* regs) {
+    if (fb_display_is_owned()) {
+        return;
+    }
     int x = (int)regs->ebx;
     int y = (int)regs->ecx;
     uint8_t color = (uint8_t)regs->edx;
@@ -761,10 +777,27 @@ static void handle_gfx_put_pixel(registers_t* regs) {
 }
 
 static void handle_gfx_fill_rect(registers_t* regs) {
+    if (fb_display_is_owned()) {
+        return;
+    }
     /* {x, y, w, h, color} as five consecutive ints in the caller's
      * buffer - see SYS_GFX_FILL_RECT's comment in syscall.h for why
-     * a buffer instead of more register arguments. */
-    int* params = (int*)regs->ebx;
+     * a buffer instead of more register arguments.
+     *
+     * Phase 81: the pointer is now validated first. It used to be
+     * dereferenced as-is, and since any kernel-mode page fault is a
+     * kernel panic here (isr.c/paging.c), a ring-3 program passing a
+     * bad pointer to this call could take the whole machine down.
+     * The legacy call returns void, so a bad pointer is simply
+     * ignored. (Other older syscalls share the same unvalidated-
+     * pointer pattern; this one is fixed because it belongs to the
+     * graphics family this phase replaces - the rest is outside its
+     * scope.) */
+    if (!paging_user_range_ok(regs->ebx, 5 * sizeof(int), false)) {
+        return;
+    }
+    int params[5];
+    memcpy(params, (const void*)regs->ebx, sizeof params);
     vga_fill_rect(params[0], params[1], params[2], params[3],
                   (uint8_t)params[4]);
 }
@@ -774,9 +807,70 @@ static void handle_mouse_read(registers_t* regs) {
         regs->eax = 0;
         return;
     }
-    mouse_state_t* out = (mouse_state_t*)regs->ebx;
-    *out = ps2mouse_read();
+    /* Phase 81: validated, for the same reason handle_gfx_fill_rect()
+     * now is - this is the other half of the graphics input path
+     * every graphics program uses, and it wrote through the raw user
+     * pointer. A bad pointer reports "no mouse data" (0). */
+    if (!paging_user_range_ok(regs->ebx, sizeof(mouse_state_t), true)) {
+        regs->eax = 0;
+        return;
+    }
+    mouse_state_t state = ps2mouse_read();
+    memcpy((void*)regs->ebx, &state, sizeof state);
     regs->eax = 1;
+}
+
+/* Phase 81: the SYS_FB_* handlers. Deliberately thin - all the policy
+ * (ownership, validation, clipping, backends) lives in kernel/drivers/
+ * video/fb.c; these only supply who is asking (pid, page directory)
+ * and the raw argument. No capability gate, for the same reason the
+ * SYS_GFX_* calls have none: drawing to the screen reads nothing
+ * sensitive, and exclusive ownership (SYS_FB_ACQUIRE -> -EBUSY) already
+ * stops one program from interfering with another's display. */
+static void handle_fb_info(registers_t* regs) {
+    regs->eax = (uint32_t)fb_sys_info(regs->ebx);
+}
+
+static void handle_fb_acquire(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL) ? (uint32_t)-NOVA_FB_ERR_PERM
+                            : (uint32_t)fb_sys_acquire(p->pid, regs->ebx);
+}
+
+static void handle_fb_release(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL) ? (uint32_t)-NOVA_FB_ERR_PERM
+                            : (uint32_t)fb_sys_release(p->pid);
+}
+
+static void handle_fb_create(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL || !p->is_user)
+                    ? (uint32_t)-NOVA_FB_ERR_PERM
+                    : (uint32_t)fb_sys_create(
+                          p->pid, (uint32_t*)p->page_directory_phys,
+                          regs->ebx);
+}
+
+static void handle_fb_destroy(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL || !p->is_user)
+                    ? (uint32_t)-NOVA_FB_ERR_PERM
+                    : (uint32_t)fb_sys_destroy(
+                          p->pid, (uint32_t*)p->page_directory_phys,
+                          regs->ebx);
+}
+
+static void handle_fb_present(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL) ? (uint32_t)-NOVA_FB_ERR_PERM
+                            : (uint32_t)fb_sys_present(p->pid, regs->ebx);
+}
+
+static void handle_fb_readback(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL) ? (uint32_t)-NOVA_FB_ERR_PERM
+                            : (uint32_t)fb_sys_readback(p->pid, regs->ebx);
 }
 
 static void handle_ping_start(registers_t* regs) {
@@ -1603,6 +1697,34 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_RECVFROM:
             handle_recvfrom(regs);
+            break;
+
+        case SYS_FB_INFO:
+            handle_fb_info(regs);
+            break;
+
+        case SYS_FB_ACQUIRE:
+            handle_fb_acquire(regs);
+            break;
+
+        case SYS_FB_RELEASE:
+            handle_fb_release(regs);
+            break;
+
+        case SYS_FB_CREATE:
+            handle_fb_create(regs);
+            break;
+
+        case SYS_FB_DESTROY:
+            handle_fb_destroy(regs);
+            break;
+
+        case SYS_FB_PRESENT:
+            handle_fb_present(regs);
+            break;
+
+        case SYS_FB_READBACK:
+            handle_fb_readback(regs);
             break;
 
         default:

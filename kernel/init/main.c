@@ -2,6 +2,7 @@
 #include "../drivers/vga/vga.h"
 #include "../drivers/video/vbe.h"
 #include "../drivers/virtiogpu/virtiogpu.h"
+#include "../drivers/video/fb.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -190,6 +191,18 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         kernel_log("[ %s ] VBE self-test (write known colors, read "
                    "back through the real framebuffer, check exact "
                    "packed bits)\n", vbe_ok ? "OK" : "FAIL");
+
+        /* Phase 81: the text console must come back from a graphics
+         * session. On this device the framebuffer aliases the VGA RAM
+         * holding the text font, so every pixel write destroys it -
+         * see vga_graphics.c's vga_graphics_save_text_font(). Found by
+         * actually looking at the screen after a graphics session (the
+         * console was blank: only the CRTC-drawn cursor survived), a
+         * check Phase 79's own "console preserved" claim never made. */
+        bool font_ok = vbe_font_selftest();
+        kernel_log("[ %s ] VBE text-mode font survives a graphics session "
+                   "(framebuffer aliases the font plane; saved at init, "
+                   "restored on exit)\n", font_ok ? "OK" : "FAIL");
     }
 
     heap_init();
@@ -464,6 +477,25 @@ void kernel_late_init(void) {
                    "write real pixels, transfer+flush to the device, "
                    "read back through guest memory)\n",
                    gpu_ok ? "OK" : "FAIL");
+    }
+
+    /* Phase 81: the framebuffer graphics API (SYS_FB_*) sits on top of
+     * whichever of the two display drivers above came up - VBE
+     * (Phase 79, initialized right after paging) and virtio-gpu
+     * (Phase 80, just above). Probes them and logs what a program
+     * asking for "any backend" would get; see kernel/drivers/video/
+     * fb.h for the layering. */
+    fb_init();
+
+    /* Phase 81: the framebuffer work surfaced a latent corruption bug
+     * in how fork()/process teardown recognise the kernel's shared page
+     * tables; this proves it stays fixed, deterministically - see
+     * process_selftest_shared_pde_accessed_bit()'s own comment. */
+    {
+        bool pde_ok = process_selftest_shared_pde_accessed_bit();
+        kernel_log("[ %s ] Shared page tables survive fork + teardown even "
+                   "with the Accessed bit set (frame-address comparison)\n",
+                   pde_ok ? "OK" : "FAIL");
     }
 
     /* Self-test: if an AC97 audio device is present, play a short

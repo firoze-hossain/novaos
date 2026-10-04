@@ -2,6 +2,7 @@
 #define NOVASYS_H
 
 #include <stdbool.h>
+#include "nova_fb_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -127,6 +128,13 @@ int sys_lspci(char* buf, int buf_size);
 int sys_beep(void);
 int sys_write_file(const char* filename, const void* data, unsigned int size);
 int sys_delete_file(const char* filename);
+int sys_fb_info(nova_fb_info_t* out);
+int sys_fb_acquire(unsigned int backend);
+int sys_fb_release(void);
+int sys_fb_create(nova_fb_create_t* req);
+int sys_fb_destroy(unsigned int handle);
+int sys_fb_present(const nova_fb_present_t* req);
+int sys_fb_readback(const nova_fb_readback_t* req);
 void sys_gfx_enter(void);
 void sys_gfx_exit(void);
 void sys_gfx_put_pixel(int x, int y, unsigned char color);
@@ -237,6 +245,19 @@ int sys_tftp_fetch(unsigned int server_ip, const char* remote_filename,
 #define SYS_SOCKET_UDP 44
 #define SYS_SENDTO 45
 #define SYS_RECVFROM 46
+
+/* Phase 81: the framebuffer graphics API. The model, structs, limits
+ * and error conditions are all in nova_fb_abi.h (included above);
+ * novagfx.h wraps these in a friendlier surface API with drawing
+ * helpers. Every call returns 0 (or a non-negative result) on success
+ * and a NEGATIVE errno on failure - NOT -1 plus errno. */
+#define SYS_FB_INFO     47
+#define SYS_FB_ACQUIRE  48
+#define SYS_FB_RELEASE  49
+#define SYS_FB_CREATE   50
+#define SYS_FB_DESTROY  51
+#define SYS_FB_PRESENT  52
+#define SYS_FB_READBACK 53
 
 /* The exact 6-byte wire layout kernel/arch/x86/cpu/syscall.c's own
  * SYS_SENDTO/SYS_RECVFROM read/write directly at a pointer passed in
