@@ -9299,7 +9299,226 @@ right after the `DRIVER_PHASE_AFTER_PCI` phase), `Makefile`
 `tools/python/test_runner.py` (`-device virtio-gpu-pci` added to the
 test QEMU invocation, 2 new assertions).
 
-## Phase 81 and beyond
+## Phase 81: the framebuffer graphics syscall API (SYS_FB_*), in C
+
+**Status: done and verified. Boot suite 126 assertions (114 before, 12
+new); `make fb-test` ~2.6M host checks; `make libc-test` still 1,010/
+1,010. Three consecutive full boot runs on the finished code: 126/126,
+126/126, and 125/126 with the one miss being `usb_device_enumerated`,
+the project's long-documented UHCI timing flake. Real screenshots taken
+of both display heads and of the text console afterwards (below).**
+
+### What it is, and why this shape
+
+The old API (`SYS_GFX_PUT_PIXEL` / `SYS_GFX_FILL_RECT`) makes the kernel
+draw: a syscall per pixel, no memory the app owns, only one thing it
+can ever be backed by. Nothing a GPU could take over, because nothing
+the app owns is describable to one. This API inverts it, the model
+virtio-gpu, KMS/DRM dumb buffers and Wayland's `wl_shm` all converge on:
+
+1. `SYS_FB_CREATE` - the kernel maps a **surface** (XRGB8888, zeroed)
+   into the caller's own address space. The app draws with ordinary
+   loads and stores. No syscall in the inner loop.
+2. `SYS_FB_PRESENT` - show a **damage rectangle** of the surface at a
+   position on the display. One syscall per frame (or per damaged
+   region), not per pixel. The destination is clipped (a window partly
+   off-screen is normal); a source rectangle outside the surface is
+   `-EINVAL` (that is a caller bug, not something to hide by clipping).
+3. The kernel's **backend** decides how pixels reach the screen: a CPU
+   copy into the VESA/VBE linear framebuffer (Phase 79), or a copy into
+   the virtio-gpu resource's backing store followed by
+   `TRANSFER_TO_HOST_2D` + `RESOURCE_FLUSH` of exactly the damaged
+   rectangle (Phase 80). A third backend is one more row in
+   `kernel/drivers/video/fb.c`'s table; the ABI does not change.
+
+That last sentence is the roadmap's "hand off to a GPU later
+without a rewrite", and it is demonstrated rather than asserted: the
+same ring-3 program drawing the same test card through the two
+backends produces screenshots that differ in **0 of 786,432 pixels**.
+
+Seven syscalls (47-53): `INFO`, `ACQUIRE`, `RELEASE`, `CREATE`,
+`DESTROY`, `PRESENT`, `READBACK`. Every call returns 0 / a handle or a
+**negative errno** (not -1), and none can fault the kernel on a hostile
+argument. `SYS_FB_INFO` takes the caller's `struct_size` so the struct
+can grow without breaking old binaries. Display ownership is exclusive
+(`ACQUIRE` -> `-EBUSY`), starts from a black screen (a client can never
+read back a previous owner's frame), and is released automatically when
+the owner exits. Capability bits (`DAMAGE_PRESENT`, `GPU_TRANSFER`,
+`READBACK`) are reported honestly per backend. The old `SYS_GFX_*`
+calls keep working unchanged, and are ignored while a new-API client
+owns the display. Porting the in-tree users of the old calls (the WM,
+`gui`) is the roadmap's separate compositor task.
+
+Design choices worth knowing: the automatic backend is **VBE first**
+(it drives the same display head the text console and every existing
+program use, so a machine with both behaves exactly as before; the GPU
+is chosen automatically only when VBE is absent, or when asked for by
+id). `READBACK` exists because it makes the whole stack testable from
+ring 3 and doubles as a screenshot facility. virtio-gpu's B8G8R8A8 has
+a live alpha byte, so presenting forces it opaque and readback strips
+it - an app's zero X byte must never become a transparent screen.
+
+### Files
+
+New: `userland/libc/include/nova_fb_abi.h` (the one shared ABI header,
+included by kernel and userland, with size assertions),
+`userland/libc/include/novagfx.h` (app-side library: surfaces plus
+clipped `put_pixel` / `fill_rect` / overlap-safe `copy_rect`),
+`kernel/drivers/video/fb.{c,h}` (ownership, surfaces, validation,
+backends), `kernel/drivers/video/fb_geom.h` (pure overflow-safe
+rectangle math), `userland/gfxtest/` (`GFXTEST.ELF`, the in-OS
+conformance suite), `tools/tests/` (host tests). Changed: syscall
+dispatch, `paging.{c,h}`, `pmm.c`, `process.c`, `vbe.{c,h}`,
+`vga_graphics.{c,h}`, `virtiogpu.{c,h,rs}` (damage-rectangle transfer,
+a lock - the command path shares one buffer pair and one queue, which
+was fine until presents could arrive from either CPU), libc wrappers,
+the boot harness and the test runner.
+
+### Verification, and how much each piece can be trusted
+
+* **Host tests (`make fb-test`).** The kernel's rectangle arithmetic
+  (`fb_geom.h`) and the userland drawing helpers (`novagfx.h`) are
+  compiled from the REAL headers and checked against independent
+  oracles that share no code with them: a pixel-set oracle for clipping
+  (enumerate every pixel, keep the ones that land on screen), a
+  wide-integer oracle for the INT_MIN/INT_MAX extremes, and guard words
+  around every surface to catch any out-of-bounds store. UBSan and
+  ASan clean. They also confirm `fb_geom.h` pulls in no libgcc 64-bit
+  helper (the kernel does not link libgcc).
+  **A green first run proves little, so both suites were mutation
+  tested**: 7 plausible bugs in the geometry (dropping the 64-bit
+  widening, an off-by-one in a clip, forgetting to advance the source on
+  a left-clip, ...) and 8 in the drawing code (ignoring memmove
+  direction, assuming stride == width*4, ...). All 15 were caught.
+* **`GFXTEST.ELF`**, a genuine ring-3 program, run on each backend. It
+  keeps an independent MODEL of what the display must contain, applies
+  every operation to it with deliberately dumb per-pixel loops, and
+  after every step reads back the ENTIRE 1024x768 display and requires
+  exact equality - one comparison that checks "the right pixels
+  changed" and "nothing else did". Covers present, damage rectangles,
+  an unpresented change staying invisible, sub-rect moves, clipping off
+  every edge, off-screen presents, rejected presents drawing nothing,
+  full-screen present, legacy-call guard, and re-acquire-starts-black;
+  plus hostile pointers (NULL, kernel image, unmapped, wrapping past
+  4GB, straddling the end of mapped memory), limits, zeroed fresh
+  surfaces (proved by destroying a pattern-filled surface and creating
+  again), handle generations, and fork()-safe syscall output.
+* **Screenshots.** The test card (8 colour bars in the right order, a
+  gradient, diagonals, border) captured from the VBE head and from the
+  virtio-gpu head via the QEMU monitor; sampled pixels match the
+  intended colours exactly. A like-for-like screenshot of the text
+  console after all three graphics sessions shows legible output.
+  Caveat on how these were produced: the card was launched by a
+  temporary boot-harness step (since reverted), because injecting
+  keystrokes did not drive the shell in this headless setup. The shell
+  command `run GFXTEST.ELF show 20` is the intended way to look at it
+  yourself, but I did not exercise that path interactively.
+
+### Defects found by building this - several of them older than this phase
+
+The conformance suite was written to be hostile, and it found real
+bugs, most not in the new code.
+
+1. **Unvalidated user pointers.** `SYS_GFX_FILL_RECT` and
+   `SYS_MOUSE_READ` dereferenced raw user pointers, and any kernel-mode
+   fault here is a panic, so a ring-3 program could take the machine
+   down with one bad argument. Both fixed. (Other older syscalls share
+   the pattern; not touched - outside this phase.)
+2. **A latent memory-corruption bug in fork and process teardown.**
+   `free_user_address_space()` and `cow_share_address_space()` decided
+   whether a page-directory entry was the kernel's shared mapping by
+   comparing whole entries for equality. The CPU sets the Accessed bit
+   (0x20) in whichever copy it walked, so the copies stop comparing
+   equal the moment the kernel touches memory in a 4MB window it had not
+   touched at boot - and then reaping a process FREED EVERY FRAME THE
+   KERNEL'S OWN IDENTITY-MAP PAGE TABLE MAPPED, and the table itself
+   (fork would instead rewrite it as copy-on-write). It needs
+   allocations to reach 20MB or more, which is why nothing had hit it;
+   multi-megabyte surfaces make that routine. Presented as a kernel
+   "page not present" at 0x14AB000 with a zeroed PTE and a PDE that
+   differed from the kernel's by exactly 0x20. Fixed at all three
+   sites with `paging_pde_is_kernel_shared()` (compares the page-table
+   frame only). A deterministic regression test forces the condition
+   (Accessed bit set on every present entry) rather than hoping for it,
+   and was verified to fail when the fix is reverted - on table 5, the
+   very entry from the original crash.
+3. **The PMM handed out frames the kernel cannot touch.** It tracks all
+   of RAM, but only the first 64MB is identity-mapped, so once memory
+   use reached 64MB the next allocation (exactly 0x4000000) faulted
+   instead of failing. The allocator now stops at the identity-map
+   ceiling; what the PMM TRACKS (the Phase 3 "511MB" proof point, the
+   shell's memory report) is unchanged, and a log line says so.
+4. **The text console had been dead since the VBE driver (Phase 79)
+   first appeared.** The VGA text font lives in video RAM that the VBE
+   framebuffer aliases (its first 8 rows) AND that the Bochs device
+   clears every time the VBE mode is enabled (unless NOCLEARMEM), so
+   the very first `vbe_init()` wiped it: every glyph blank, only the
+   CRTC-drawn cursor surviving. Every test passed, because they read
+   serial. Phase 79's "console preserved" claim was never checked by
+   looking. Fixed by saving the font before the first enable and
+   restoring it after every return to text mode.
+5. **An exit-hook ordering bug.** The display release ran after the
+   process was marked TERMINATED. A parent's `wait()` on the other CPU
+   could return and try to acquire (`-EBUSY`) - and worse, could reap
+   the child and free its kernel stack and page directory while the
+   child was still executing the hook on them (the same use-after-free
+   class `process_exit_current`'s comments already warn about). The
+   hook now runs first, so "`wait()` returned" implies "its display is
+   free". A 200-round stress test catches the old order decisively.
+6. **Kernel-mode writes into copy-on-write pages.** The kernel runs
+   with CR0.WP clear, so a ring-0 store to a read-only COW page does not
+   fault - it silently writes the frame every sharer sees. Left alone, a
+   forked child calling `sys_fb_info()` would rewrite its PARENT's memory.
+   `paging_user_range_ok()` resolves COW before the kernel writes; a
+   test with sentinels on page-aligned .bss structs (a stack variable
+   would not do - the child privatises its stack at the first call)
+   checks it.
+7. **The user-accessible identity map defeats a U-bit check.**
+   `build_identity_map()` marks all 64MB `PAGE_USER` (documented, since
+   Phase 4; the in-kernel ring-3 demo tasks run from it). A validator
+   that trusted the U bit accepted `NULL` and `0x100000`, and
+   `SYS_FB_READBACK` really did overwrite 256 bytes of the kernel image
+   during one test run. The validator now refuses shared kernel
+   mappings. This does NOT close the older hole - ring 3 can still read
+   and write kernel memory with plain loads and stores; it makes the
+   syscalls' contract independent of it.
+
+Mistakes of mine worth recording, because they are the failure modes of
+this kind of work: (a) I compared "early boot" screenshots against
+Phase 78 and concluded the console was fine - those frames were the
+GRUB menu, still counting down; (b) my first font fix saved the font
+AFTER the device had wiped it, so it faithfully restored zeros, and my
+self-test compared the font to that same wrecked copy and passed
+(the test now first requires the saved copy to be a plausible font - a
+blank one is exactly what it would have shown); (c) the suite's first
+design forked after allocating 6MB of constantly-rewritten buffers,
+leaking megabytes per fork through the (documented) COW leak and
+exhausting memory - which is what exposed (3); (d) one of my own PASS
+messages contained "EFAULT" and tripped the project's deliberately
+blunt `PANIC|FAULT|FAIL` assertion.
+
+### Known limits (not fixed here)
+
+* `process_sbrk` hands user processes unzeroed frames (surfaces are
+  zeroed; the heap is not). A real information leak, pre-existing.
+* A forked parent leaks the pages it later rewrites and any COW page
+  still shared at exit (the documented COW-frame leak). `fb_sys_destroy`
+  follows the same conservative rule and does not free COW frames.
+* The VBE backend supports exactly 32bpp XRGB8888 (what the direct
+  Bochs path always produces); any other negotiated layout reports no
+  VBE backend rather than converting formats nothing here can test.
+  There is no software fallback backend for a machine with neither VBE
+  nor virtio-gpu: those return `-ENODEV` and the legacy Mode 13h calls
+  remain the way to draw there.
+* Ring-3 code that runs from inside the kernel image (the in-kernel
+  demo tasks) cannot pass pointers to these syscalls; none does.
+* The boot-time text screen is cleared once by `vbe_init` (the device
+  wipes video RAM when the mode is enabled).
+* `SYS_FB_READBACK` returns what was presented to the display, not a
+  GPU-side readback; on a future 3D backend it would be served from a
+  CPU shadow.
+
+## Phase 82 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

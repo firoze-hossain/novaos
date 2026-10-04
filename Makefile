@@ -373,6 +373,12 @@ test: $(ISO_FILE) $(DISK_IMG)
 libc-test:
 	@sh userland/libc/tests/run.sh
 
+# Phase 81: host-side tests for the framebuffer API's pure logic - the
+# kernel's rectangle arithmetic and userland's drawing helpers - each
+# checked against an independent oracle. No QEMU needed.
+fb-test:
+	@sh tools/tests/run_fb_tests.sh
+
 # Clean
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG)
@@ -459,4 +465,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test clean setup check-prereqs help install-image test-custom-boot

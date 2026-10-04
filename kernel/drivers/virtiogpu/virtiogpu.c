@@ -6,6 +6,7 @@
 #include "../virtio/virtio_pci_modern.h"
 #include "../../arch/x86/mm/pmm.h"
 #include "../../lib/string.h"
+#include "../../lib/spinlock.h"
 #include "../../include/kernel.h"
 #include "../driver.h"
 
@@ -73,6 +74,15 @@ extern void gpu_build_transfer_to_host_2d(uint8_t* out, uint32_t resource_id,
 extern void gpu_build_resource_flush(uint8_t* out, uint32_t resource_id,
                                       uint32_t width, uint32_t height);
 extern void gpu_build_get_display_info(uint8_t* out);
+extern void gpu_build_transfer_to_host_2d_rect(uint8_t* out,
+                                                uint32_t resource_id,
+                                                uint32_t x, uint32_t y,
+                                                uint32_t width,
+                                                uint32_t height,
+                                                uint32_t stride_bytes);
+extern void gpu_build_resource_flush_rect(uint8_t* out, uint32_t resource_id,
+                                           uint32_t x, uint32_t y,
+                                           uint32_t width, uint32_t height);
 extern uint32_t gpu_response_type(const uint8_t* buf);
 extern int rust_virtiogpu_selftest(void);
 
@@ -92,6 +102,18 @@ static uint16_t queue_size = 0;
 static uint16_t last_used_idx = 0;
 static volatile uint16_t* notify_addr = 0;
 static uint32_t backing_phys = 0;
+
+/* Phase 81: serializes everything that uses g_request/g_response and
+ * the control virtqueue. Until the framebuffer syscalls existed, every
+ * command was sent from boot code (init, then the one self-test) with
+ * no other CPU able to reach this driver, so none of this needed a
+ * lock. SYS_FB_PRESENT changes that: it can run on either CPU, from
+ * any process that owns the display, at any time - and a second
+ * command built into g_request while the first is still in flight
+ * would be a silent corruption of a DMA buffer the device is reading.
+ * Held across build + submit + poll as one unit (the poll is bounded -
+ * see poll_for_completion() - so the hold time is bounded too). */
+static spinlock_t g_gpu_lock;
 
 /* 4096 bytes is comfortably larger than every command/response struct
  * this driver builds (the largest, resource_attach_backing with one
@@ -159,6 +181,7 @@ static bool send_command(uint32_t request_len, uint32_t response_len,
 
 void virtiogpu_init(void) {
     present = false;
+    spinlock_init(&g_gpu_lock);
 
     if (!virtio_pci_modern_init(VIRTIO_VENDOR_ID, VIRTIO_GPU_DEVICE_ID,
                                  &g_dev)) {
@@ -294,6 +317,46 @@ bool virtiogpu_is_present(void) {
     return present;
 }
 
+bool virtiogpu_get_surface(uint8_t** out_backing, uint32_t* out_width,
+                           uint32_t* out_height) {
+    if (!present) {
+        return false;
+    }
+    *out_backing = (uint8_t*)backing_phys;
+    *out_width = GPU_WIDTH;
+    *out_height = GPU_HEIGHT;
+    return true;
+}
+
+bool virtiogpu_flush_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (!present) {
+        return false;
+    }
+    /* The only gate between a caller's numbers and a DMA transfer the
+     * device performs from kernel memory: the rectangle must lie inside
+     * the resource. Written as w <= W - x (not x + w <= W) so the check
+     * itself cannot overflow. fb.c clips before calling, so this should
+     * never fire - it is here because a wrong rect would not fail, it
+     * would make the device read past the backing buffer. */
+    if (w == 0 || h == 0 || x >= GPU_WIDTH || y >= GPU_HEIGHT ||
+        w > GPU_WIDTH - x || h > GPU_HEIGHT - y) {
+        return false;
+    }
+
+    uint32_t lock_flags = spinlock_acquire(&g_gpu_lock);
+    gpu_build_transfer_to_host_2d_rect(g_request, RESOURCE_ID, x, y, w, h,
+                                        GPU_WIDTH * GPU_BYTES_PER_PIXEL);
+    bool ok = send_command(56, CTRLHDR_RESP_SIZE, RESP_OK_NODATA,
+                            "TRANSFER_TO_HOST_2D (damage rect)");
+    if (ok) {
+        gpu_build_resource_flush_rect(g_request, RESOURCE_ID, x, y, w, h);
+        ok = send_command(48, CTRLHDR_RESP_SIZE, RESP_OK_NODATA,
+                           "RESOURCE_FLUSH (damage rect)");
+    }
+    spinlock_release(&g_gpu_lock, lock_flags);
+    return ok;
+}
+
 bool virtiogpu_selftest(void) {
     if (!present) {
         return false;
@@ -333,18 +396,22 @@ bool virtiogpu_selftest(void) {
     pixels[off + 2] = 0xC7; /* R */
     pixels[off + 3] = 0xFF; /* A */
 
+    uint32_t lock_flags = spinlock_acquire(&g_gpu_lock);
     gpu_build_transfer_to_host_2d(g_request, RESOURCE_ID, GPU_WIDTH,
                                    GPU_HEIGHT);
     if (!send_command(56, CTRLHDR_RESP_SIZE, RESP_OK_NODATA,
                        "TRANSFER_TO_HOST_2D")) {
+        spinlock_release(&g_gpu_lock, lock_flags);
         return false;
     }
 
     gpu_build_resource_flush(g_request, RESOURCE_ID, GPU_WIDTH, GPU_HEIGHT);
     if (!send_command(48, CTRLHDR_RESP_SIZE, RESP_OK_NODATA,
                        "RESOURCE_FLUSH")) {
+        spinlock_release(&g_gpu_lock, lock_flags);
         return false;
     }
+    spinlock_release(&g_gpu_lock, lock_flags);
 
     if (pixels[off + 0] != 0x42 || pixels[off + 1] != 0x99 ||
         pixels[off + 2] != 0xC7 || pixels[off + 3] != 0xFF) {

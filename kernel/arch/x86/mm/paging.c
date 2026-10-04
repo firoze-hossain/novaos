@@ -24,6 +24,12 @@
 
 #define IDENTITY_MAP_TABLES 16 /* 16 * 4MB = 64MB */
 
+/* paging.h's PAGING_IDENTITY_MAP_BYTES is a promise other code relies
+ * on; make it impossible for the two to drift apart. */
+typedef char paging_identity_size_check
+    [((uint32_t)IDENTITY_MAP_TABLES * 4u * 1024u * 1024u ==
+      PAGING_IDENTITY_MAP_BYTES) ? 1 : -1];
+
 static uint32_t page_directory[1024] __attribute__((aligned(4096)));
 static uint32_t page_tables[IDENTITY_MAP_TABLES][1024]
     __attribute__((aligned(4096)));
@@ -115,6 +121,28 @@ static void page_fault_handler(registers_t* regs) {
                (int)regs->cs, (int)regs->eflags, (int)regs->eax,
                (int)regs->ebx, (int)regs->ecx, (int)regs->edx,
                (int)regs->esi, (int)regs->edi, (int)regs->ebp);
+    {
+        /* Phase 81: which page directory was loaded, and what it (and
+         * the kernel's own) said about the faulting address. A "page
+         * not present" fault inside the kernel's own identity-mapped
+         * range - which is always present in the kernel directory - can
+         * only mean the faulting process's directory or a shared page
+         * table was damaged; this is the evidence that tells those
+         * apart, and without it that diagnosis took a debugger. */
+        uint32_t cr3_now;
+        __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3_now));
+        uint32_t* cur_pd = (uint32_t*)cr3_now;
+        uint32_t* kern_pd = (uint32_t*)paging_kernel_directory_phys();
+        uint32_t idx = faulting_address >> 22;
+        uint32_t pde = cur_pd[idx];
+        uint32_t pte = 0;
+        if (pde & PAGE_PRESENT) {
+            pte = ((uint32_t*)(pde & 0xFFFFF000u))[(faulting_address >> 12) & 0x3FF];
+        }
+        kernel_log("[DIAG] cr3=0x%x (kernel pd 0x%x) pde[%d]=0x%x (kernel's 0x%x) "
+                   "pte=0x%x\n", (int)cr3_now, (int)(uint32_t)kern_pd, (int)idx,
+                   (int)pde, (int)kern_pd[idx], (int)pte);
+    }
     /* Kept deliberately, not temporary debug code: this is the exact
      * diagnostic that isolated two real, confirmed use-after-free
      * bugs this same investigation found and fixed (a process's own
@@ -256,4 +284,103 @@ bool paging_map_page(uint32_t* page_directory_ptr, uint32_t virt_addr,
 void paging_switch_address_space(uint32_t page_directory_phys) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(page_directory_phys)
                        : "memory");
+}
+
+uint32_t paging_unmap_page(uint32_t* page_directory_ptr, uint32_t virt_addr) {
+    uint32_t pd_index = virt_addr >> 22;
+    uint32_t pt_index = (virt_addr >> 12) & 0x3FF;
+
+    if (!(page_directory_ptr[pd_index] & PAGE_PRESENT)) {
+        return 0;
+    }
+    uint32_t* table = (uint32_t*)(page_directory_ptr[pd_index] & 0xFFFFF000u);
+    uint32_t old = table[pt_index];
+    if (!(old & PAGE_PRESENT)) {
+        return 0;
+    }
+    table[pt_index] = 0;
+
+    uint32_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    if (cr3 == (uint32_t)page_directory_ptr) {
+        __asm__ volatile ("invlpg (%0)" : : "r"(virt_addr) : "memory");
+    }
+    return old;
+}
+
+bool paging_user_range_ok(uint32_t addr, uint32_t len, bool for_write) {
+    if (len == 0) {
+        return true;
+    }
+    /* addr + len - 1 must not wrap past 4GB. */
+    if (len - 1u > 0xFFFFFFFFu - addr) {
+        return false;
+    }
+    uint32_t last = addr + (len - 1u);
+
+    uint32_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    uint32_t* pd = (uint32_t*)cr3;
+
+    /* Walk page by page. `page` is the page-aligned start of each page
+     * the range touches; computing it by masking (and stopping once the
+     * page containing `last` has been checked) means a range ending in
+     * the very last page of the address space cannot overflow the loop
+     * counter. */
+    uint32_t page = addr & 0xFFFFF000u;
+    uint32_t last_page = last & 0xFFFFF000u;
+    for (;;) {
+        uint32_t pde = pd[page >> 22];
+        if (!(pde & PAGE_PRESENT) || !(pde & PAGE_USER)) {
+            return false;
+        }
+        /* A PDE identical to the kernel's own is a SHARED KERNEL
+         * mapping (every process's directory starts as a copy of the
+         * kernel's - see paging_create_address_space()), not memory
+         * this process owns: refuse it however its flag bits read.
+         * The flag bits alone cannot be trusted to say so, and
+         * confirmed the hard way: build_identity_map() deliberately
+         * marks the whole 64MB identity map PAGE_USER (the in-kernel
+         * ring-3 demo tasks execute from it), so a U-bit check alone
+         * accepted pointers into the kernel image and into page 0 -
+         * Phase 81's own conformance test caught SYS_FB_READBACK
+         * happily writing pixels over 0x100000. This is the same
+         * test process.c's free_user_address_space() uses to tell the
+         * two apart (paging_pde_is_kernel_shared() - frame address
+         * only; comparing whole entries is wrong, see its comment). It also makes
+         * NULL a clean -EFAULT instead of a silent hit on the real-mode
+         * vector table (page 0 is mapped read/write here). */
+        if (paging_pde_is_kernel_shared(pde, page >> 22)) {
+            return false;
+        }
+        uint32_t* pt = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t pte = pt[(page >> 12) & 0x3FFu];
+        if (!(pte & PAGE_PRESENT) || !(pte & PAGE_USER)) {
+            return false;
+        }
+        if (for_write && !(pte & PAGE_WRITE)) {
+            /* Read-only is acceptable only as copy-on-write, and only
+             * after giving this process its private copy (see
+             * paging.h for why that must happen before the kernel
+             * stores anything). */
+            if (!(pte & PAGE_COW) || !try_resolve_cow_fault(page)) {
+                return false;
+            }
+        }
+        if (page == last_page) {
+            return true;
+        }
+        page += 4096u;
+    }
+}
+
+bool paging_pde_is_kernel_shared(uint32_t pde, uint32_t index) {
+    if (index >= 1024 || !(pde & PAGE_PRESENT)) {
+        return false;
+    }
+    uint32_t kernel_pde = page_directory[index];
+    if (!(kernel_pde & PAGE_PRESENT)) {
+        return false;
+    }
+    return ((pde ^ kernel_pde) & 0xFFFFF000u) == 0;
 }

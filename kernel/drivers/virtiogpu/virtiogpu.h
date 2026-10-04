@@ -79,6 +79,23 @@ void virtiogpu_init(void);
 
 bool virtiogpu_is_present(void);
 
+/* Phase 81: the framebuffer API's (kernel/drivers/video/fb.c) window
+ * onto this driver. Returns the guest-owned backing buffer the 2D
+ * resource is attached to - 4 bytes per pixel, B8G8R8A8, rows exactly
+ * width*4 bytes apart (the layout RESOURCE_CREATE_2D declared) - and
+ * the resource's size. The caller writes pixels into the buffer and
+ * then calls virtiogpu_flush_rect() to make the device take them. */
+bool virtiogpu_get_surface(uint8_t** out_backing, uint32_t* out_width,
+                           uint32_t* out_height);
+
+/* Phase 81: sends TRANSFER_TO_HOST_2D + RESOURCE_FLUSH for ONE damage
+ * rectangle (x, y, w, h) of the resource - the GPU-side half of a
+ * present. Thread-safe (internally serialized). Returns false if the
+ * rectangle is empty or not inside the resource, or if the device did
+ * not answer either command with the specific RESP_OK_NODATA the
+ * protocol promises. */
+bool virtiogpu_flush_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+
 /* Real, checkable proof the whole pipeline actually works - see this
  * file's own top comment's "Verification note" for exactly what this
  * checks and why. Returns false immediately (nothing to verify yet)

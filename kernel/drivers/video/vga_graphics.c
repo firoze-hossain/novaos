@@ -299,3 +299,80 @@ void vga_draw_rect(int x, int y, int w, int h, uint8_t color_index) {
         vga_put_pixel(x + w - 1, row, color_index);
     }
 }
+
+/* Phase 81: font save/restore for the VBE path.
+ *
+ * The same bug the Mode 13h comment above documents, found a second
+ * time on a different path - and this time it had been shipping,
+ * unnoticed, since the VBE driver first appeared. The VGA text font
+ * lives in video RAM (plane 2: the first 32KB, which a linear
+ * framebuffer sees as its first 8 rows), and on the Bochs/QEMU "std"
+ * VGA device TWO separate things destroy it:
+ *
+ *   1. Writing pixels to the linear framebuffer - the same RAM.
+ *   2. Enabling the VBE mode at all. The Bochs interface clears video
+ *      memory on every disabled->enabled transition unless the
+ *      NOCLEARMEM flag is passed. So the font is gone the instant
+ *      kernel/drivers/video/vbe.c first programs the mode, before any
+ *      pixel is drawn.
+ *
+ * The original VBE driver's comment argued no save/restore was needed
+ * because "callers never touch VGA's planar memory at all" - reasoning
+ * about which API gets called, not about what the hardware is. The
+ * result: from the first boot of that driver onward the text console
+ * rendered nothing (blank glyphs; only the cursor, which the CRTC draws
+ * itself, survived), while every test passed because they read the
+ * serial log. It was found only by taking a screenshot after the first
+ * real graphics session, and then fixed wrongly twice before being
+ * understood: first by saving the font AFTER the mode was first
+ * enabled (so the "saved" font was already zeros, and restoring it
+ * restored nothing), and verified by a self-test that compared the
+ * font to that same wrecked copy.
+ *
+ * The rule that makes it right: save while the BIOS's font is still
+ * intact - before the first time the VBE mode is enabled (vbe_init()
+ * does this, as its first act) - and restore after every return to
+ * text mode. vga_graphics_saved_font_is_plausible() exists so a test
+ * can notice a blank saved copy, which is how this should have been
+ * caught. save_font_plane() leaves SEQ4/GC5/GC6 in their linear-planar
+ * configuration, so text mode's register set is reapplied after it,
+ * exactly as vga_graphics_exit() does around restore_font_plane(). */
+void vga_graphics_save_text_font(void) {
+    save_font_plane();
+    write_vga_regs(&MODE_TEXT_80X25);
+}
+
+void vga_graphics_restore_text_font(void) {
+    write_vga_regs(&MODE_TEXT_80X25);
+    restore_font_plane();
+    write_vga_regs(&MODE_TEXT_80X25);
+}
+
+bool vga_graphics_text_font_intact(void) {
+    unchain_for_plane_access();
+    outb(VGA_GC_INDEX, 0x04);
+    outb(VGA_GC_DATA, 0x02); /* Read Map Select = plane 2 */
+    bool same = true;
+    for (int i = 0; i < VGA_FONT_SAVE_SIZE; i++) {
+        if (saved_font_plane2[i] != VGA_FRAMEBUFFER[i]) {
+            same = false;
+            break;
+        }
+    }
+    write_vga_regs(&MODE_TEXT_80X25);
+    return same;
+}
+
+bool vga_graphics_saved_font_is_plausible(void) {
+    /* A real VGA font is dense: well over a thousand non-zero bytes
+     * across its 256 glyphs. An all-zero (or nearly so) copy is not a
+     * font - it means the save happened after something already wiped
+     * it. */
+    int nonzero = 0;
+    for (int i = 0; i < VGA_FONT_SAVE_SIZE; i++) {
+        if (saved_font_plane2[i] != 0) {
+            nonzero++;
+        }
+    }
+    return nonzero > 1000;
+}

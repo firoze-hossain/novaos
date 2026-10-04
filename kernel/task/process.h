@@ -520,4 +520,11 @@ bool process_sudo(process_t* p, const char* password);
  * affinity feature. A no-op if `pid` doesn't currently exist. */
 void process_pin_to_bsp(int pid);
 
+/* Phase 81: deterministic regression test for the "Accessed bit makes a
+ * shared kernel page table look process-owned" bug - see
+ * paging_pde_is_kernel_shared() in paging.h and the test's own comment
+ * in process.c. Returns true if fork-sharing and teardown both leave
+ * the kernel's shared page tables alone. */
+bool process_selftest_shared_pde_accessed_bit(void);
+
 #endif

@@ -16,6 +16,7 @@
  * tables, DMA buffers, a future per-process address space in Phase 4).
  */
 #include "pmm.h"
+#include "paging.h"
 #include "../../../include/kernel.h"
 #include "../../../lib/spinlock.h"
 
@@ -72,6 +73,32 @@ static void free_range(uint32_t phys_start, uint32_t phys_end) {
     }
 }
 
+
+/* Phase 81: the highest frame the allocator will hand out + 1.
+ *
+ * The PMM TRACKS all of RAM (so the boot-time "PMM initialized (N frames
+ * tracked, 511MB)" proof point and the shell's memory report still show
+ * the machine's real size), but the kernel can only TOUCH the first
+ * PAGING_IDENTITY_MAP_BYTES of it: that is all paging.c identity-maps,
+ * and nearly every consumer reaches a frame through its own physical
+ * address (zeroing a new page table, copying an ELF segment, resolving
+ * a copy-on-write fault, filling a DMA buffer). Handing out a frame past
+ * that line did not give anyone more memory - it gave them a frame whose
+ * first write is a kernel page fault, i.e. a kernel panic. Confirmed
+ * rather than theorized: the Phase 81 framebuffer test exhausted the
+ * first 64MB (a fork()'d process leaks the pages it later rewrites - a
+ * documented limitation) and the next allocation, at exactly 0x4000000,
+ * panicked the machine instead of failing.
+ *
+ * Capping the ALLOCATOR (not the tracking) turns that into what every
+ * caller already handles: pmm_alloc_*() returning 0, and the caller
+ * failing cleanly (-ENOMEM, a failed fork/exec, a failed sbrk). The day
+ * paging maps all of RAM, raising this ceiling is a one-line change. */
+static uint32_t allocatable_frames(void) {
+    uint32_t cap = PAGING_IDENTITY_MAP_BYTES / PMM_FRAME_SIZE;
+    return total_frames < cap ? total_frames : cap;
+}
+
 void pmm_init(const multiboot_info_t* mbi, bool magic_valid) {
     spinlock_init(&pmm_lock);
 
@@ -124,11 +151,16 @@ void pmm_init(const multiboot_info_t* mbi, bool magic_valid) {
 
     kernel_log("[ OK ] PMM initialized (%d frames tracked, %dMB)\n",
                (int)total_frames, (int)(total_frames * PMM_FRAME_SIZE / (1024 * 1024)));
+    kernel_log("[ OK ] PMM allocator ceiling: first %dMB only (the kernel's "
+               "identity map - frames beyond it are tracked but never handed "
+               "out; running out now fails cleanly instead of faulting)\n",
+               (int)(allocatable_frames() * PMM_FRAME_SIZE / (1024 * 1024)));
 }
 
 uint32_t pmm_alloc_frame(void) {
     uint32_t flags = spinlock_acquire(&pmm_lock);
-    for (uint32_t f = 0; f < total_frames; f++) {
+    uint32_t limit = allocatable_frames();
+    for (uint32_t f = 0; f < limit; f++) {
         if (!bitmap_test(f)) {
             bitmap_set(f);
             spinlock_release(&pmm_lock, flags);
@@ -161,7 +193,8 @@ uint32_t pmm_alloc_contiguous(uint32_t count) {
     uint32_t flags = spinlock_acquire(&pmm_lock);
     uint32_t run_start = 0;
     uint32_t run_len = 0;
-    for (uint32_t f = 0; f < total_frames; f++) {
+    uint32_t limit = allocatable_frames();
+    for (uint32_t f = 0; f < limit; f++) {
         if (bitmap_test(f)) {
             run_len = 0;
             continue;

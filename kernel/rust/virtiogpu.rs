@@ -213,6 +213,60 @@ pub unsafe extern "C" fn gpu_build_resource_flush(
     core::ptr::write_unaligned(out.add(44) as *mut u32, 0u32); // padding
 }
 
+/// Phase 81: TRANSFER_TO_HOST_2D for a DAMAGE RECTANGLE, not the whole
+/// resource - what makes `SYS_FB_PRESENT` of a small region cost a
+/// small transfer instead of re-sending 3MB. Same 56-byte struct as
+/// `gpu_build_transfer_to_host_2d` above; two fields differ:
+///
+///  * `r` is `{x, y, width, height}` rather than `{0, 0, w, h}`.
+///  * `offset` is where, in the guest's backing memory, the first byte
+///    of THAT rectangle's data sits: `y * stride_bytes + x * 4`. The
+///    device reads row `i` of the rectangle at `offset + i *
+///    stride_bytes` and writes it at `(y + i)` in the host resource -
+///    so for a resource whose backing is laid out exactly like the
+///    resource itself (which is how virtiogpu.c allocates it, row
+///    stride = width * 4), the offset is simply the rectangle's own
+///    position in the backing buffer. Getting this wrong does not fail
+///    loudly: the device happily transfers the wrong bytes (a shifted
+///    picture), which is why `rust_virtiogpu_selftest()` checks the
+///    computed value against a hand-worked case.
+#[no_mangle]
+pub unsafe extern "C" fn gpu_build_transfer_to_host_2d_rect(
+    out: *mut u8,
+    resource_id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    stride_bytes: u32,
+) {
+    core::ptr::write_unaligned(out as *mut CtrlHdr, ctrl_hdr(CMD_TRANSFER_TO_HOST_2D));
+    let r = Rect { x, y, width, height };
+    core::ptr::write_unaligned(out.add(24) as *mut Rect, r);
+    let offset: u64 = (y as u64) * (stride_bytes as u64) + (x as u64) * 4;
+    core::ptr::write_unaligned(out.add(40) as *mut u64, offset);
+    core::ptr::write_unaligned(out.add(48) as *mut u32, resource_id);
+    core::ptr::write_unaligned(out.add(52) as *mut u32, 0u32); // padding
+}
+
+/// Phase 81: RESOURCE_FLUSH for a damage rectangle - same 48-byte
+/// struct as `gpu_build_resource_flush`, with a real `{x, y, w, h}`.
+#[no_mangle]
+pub unsafe extern "C" fn gpu_build_resource_flush_rect(
+    out: *mut u8,
+    resource_id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) {
+    core::ptr::write_unaligned(out as *mut CtrlHdr, ctrl_hdr(CMD_RESOURCE_FLUSH));
+    let r = Rect { x, y, width, height };
+    core::ptr::write_unaligned(out.add(24) as *mut Rect, r);
+    core::ptr::write_unaligned(out.add(40) as *mut u32, resource_id);
+    core::ptr::write_unaligned(out.add(44) as *mut u32, 0u32); // padding
+}
+
 /// GET_DISPLAY_INFO's own request is a bare ctrl_hdr - no extra
 /// fields (the device already knows which display it's describing;
 /// there's only ever one request shape, not one per scanout).
@@ -360,6 +414,48 @@ pub extern "C" fn rust_virtiogpu_selftest() -> i32 {
             || entry_len != 0x100000
         {
             code |= 128;
+        }
+    }
+
+    // Phase 81: the damage-rectangle builders. The transfer offset is
+    // the one value here that can be wrong without anything failing
+    // loudly (the device just moves the wrong bytes), so it is checked
+    // against a hand-worked case: rect at (3, 2), stride 4096 ->
+    // 2*4096 + 3*4 = 8204.
+    unsafe {
+        let mut b2 = [0u8; 64];
+        gpu_build_transfer_to_host_2d_rect(b2.as_mut_ptr(), 9, 3, 2, 100, 50, 4096);
+        let rx = core::ptr::read_unaligned(b2.as_ptr().add(24) as *const u32);
+        let ry = core::ptr::read_unaligned(b2.as_ptr().add(28) as *const u32);
+        let rw = core::ptr::read_unaligned(b2.as_ptr().add(32) as *const u32);
+        let rh = core::ptr::read_unaligned(b2.as_ptr().add(36) as *const u32);
+        let off = core::ptr::read_unaligned(b2.as_ptr().add(40) as *const u64);
+        let rid = core::ptr::read_unaligned(b2.as_ptr().add(48) as *const u32);
+        if rx != 3 || ry != 2 || rw != 100 || rh != 50 || off != 8204 || rid != 9 {
+            code |= 256;
+        }
+        if gpu_response_type(b2.as_ptr()) != CMD_TRANSFER_TO_HOST_2D {
+            code |= 512;
+        }
+        // A rect near the far corner must not overflow the offset:
+        // (1023, 767) at stride 4096 -> 767*4096 + 1023*4 = 3_145_724.
+        gpu_build_transfer_to_host_2d_rect(b2.as_mut_ptr(), 1, 1023, 767, 1, 1, 4096);
+        let off2 = core::ptr::read_unaligned(b2.as_ptr().add(40) as *const u64);
+        if off2 != 3_145_724 {
+            code |= 1024;
+        }
+
+        gpu_build_resource_flush_rect(b2.as_mut_ptr(), 9, 3, 2, 100, 50);
+        let fx = core::ptr::read_unaligned(b2.as_ptr().add(24) as *const u32);
+        let fy = core::ptr::read_unaligned(b2.as_ptr().add(28) as *const u32);
+        let fw = core::ptr::read_unaligned(b2.as_ptr().add(32) as *const u32);
+        let fh = core::ptr::read_unaligned(b2.as_ptr().add(36) as *const u32);
+        let frid = core::ptr::read_unaligned(b2.as_ptr().add(40) as *const u32);
+        if fx != 3 || fy != 2 || fw != 100 || fh != 50 || frid != 9 {
+            code |= 2048;
+        }
+        if gpu_response_type(b2.as_ptr()) != CMD_RESOURCE_FLUSH {
+            code |= 4096;
         }
     }
 

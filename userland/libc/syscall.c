@@ -380,3 +380,42 @@ int sys_recvfrom(int handle, void* buf, unsigned int max_len,
     return result;
 }
 
+/* Phase 81: framebuffer API wrappers. One-argument int 0x80 calls whose
+ * result (0, or a negative errno) is returned as-is. "memory" clobber
+ * because the kernel reads and/or writes the structs these point at. */
+static int fb_call1(int number, unsigned int arg) {
+    int result = number;
+    __asm__ volatile ("int $0x80"
+                       : "+a"(result)
+                       : "b"(arg)
+                       : "memory", "cc");
+    return result;
+}
+
+int sys_fb_info(nova_fb_info_t* out) {
+    return fb_call1(SYS_FB_INFO, (unsigned int)out);
+}
+
+int sys_fb_acquire(unsigned int backend) {
+    return fb_call1(SYS_FB_ACQUIRE, backend);
+}
+
+int sys_fb_release(void) {
+    return fb_call1(SYS_FB_RELEASE, 0);
+}
+
+int sys_fb_create(nova_fb_create_t* req) {
+    return fb_call1(SYS_FB_CREATE, (unsigned int)req);
+}
+
+int sys_fb_destroy(unsigned int handle) {
+    return fb_call1(SYS_FB_DESTROY, handle);
+}
+
+int sys_fb_present(const nova_fb_present_t* req) {
+    return fb_call1(SYS_FB_PRESENT, (unsigned int)req);
+}
+
+int sys_fb_readback(const nova_fb_readback_t* req) {
+    return fb_call1(SYS_FB_READBACK, (unsigned int)req);
+}
