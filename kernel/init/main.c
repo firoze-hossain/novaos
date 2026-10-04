@@ -1,6 +1,7 @@
 #include "../include/kernel.h"
 #include "../drivers/vga/vga.h"
 #include "../drivers/video/vbe.h"
+#include "../drivers/virtiogpu/virtiogpu.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -448,6 +449,22 @@ void kernel_late_init(void) {
      * which is exactly why DRIVER_PHASE_AFTER_PCI exists as its own
      * phase rather than lumping every driver into one flat list. */
     driver_init_all(DRIVER_PHASE_AFTER_PCI);
+
+    /* Phase 80: if a real virtio-gpu PCI device was found and the
+     * full init sequence (modern transport handshake, resource
+     * creation, backing attachment, scanout) succeeded, prove the
+     * whole pipeline actually works end to end - see virtiogpu.h's
+     * own "Verification note" for exactly what this checks and why a
+     * GPU resource can't be verified the same memory-mapped-readback
+     * way kernel/drivers/video/vbe.c's own vbe_selftest() checks a
+     * real linear framebuffer. */
+    if (virtiogpu_is_present()) {
+        bool gpu_ok = virtiogpu_selftest();
+        kernel_log("[ %s ] virtio-gpu self-test (struct layout checks, "
+                   "write real pixels, transfer+flush to the device, "
+                   "read back through guest memory)\n",
+                   gpu_ok ? "OK" : "FAIL");
+    }
 
     /* Self-test: if an AC97 audio device is present, play a short
      * beep. Unlike every earlier self-test, there's no way to check

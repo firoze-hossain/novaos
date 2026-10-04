@@ -14,6 +14,25 @@
 //! wired into the VFS as a boot device - see kernel/drivers/virtio/
 //! virtio_blk.c's own header comment for the full scope reasoning.
 //!
+//! Phase 80: this module's own virtqueue ring mechanics (layout
+//! computation, zero-init, used-ring polling) turned out to be
+//! exactly as reusable as this file's own original header comment
+//! above implied they structurally could be: kernel/drivers/virtio/
+//! virtio_pci_modern.c (the *modern* virtio-over-PCI transport,
+//! needed because virtio-gpu has no legacy interface at all - see
+//! that file's own top comment) and kernel/drivers/virtiogpu/
+//! virtiogpu.c now call into these same functions too, not a
+//! reimplementation - the legacy and modern transports use a byte-
+//! identical virtqueue ring format, only how the device is told
+//! *where* the three regions are differs (see virtio_pci_modern.h's
+//! own top comment on why this file's own choice to keep them
+//! contiguous makes that reuse valid). rust_virtqueue_submit_request()
+//! stays virtio-blk-specific (its own 3-descriptor header/data/status
+//! chain is block-I/O's own request shape, not a generic one) -
+//! virtio-gpu's own, differently-shaped command submission lives in
+//! kernel/rust/virtiogpu.rs instead, calling the same layout/init/
+//! poll functions this file exports.
+//!
 //! Why the virtqueue specifically belongs in Rust: a virtqueue is a
 //! fixed-size ring of descriptors plus two more rings (available,
 //! used) layered on top, all cross-referenced by index - structurally
@@ -76,6 +95,29 @@ pub extern "C" fn rust_virtqueue_total_bytes(queue_size: u16) -> u32 {
 #[no_mangle]
 pub extern "C" fn rust_virtqueue_pages_needed(queue_size: u16) -> u32 {
     (rust_virtqueue_total_bytes(queue_size) / 4096) as u32
+}
+
+/// Phase 80: the avail ring's own byte offset within the queue's
+/// contiguous memory region - exposed for kernel/drivers/virtio/
+/// virtio_pci_modern.c's own virtio_pci_modern_setup_queue(), which
+/// (unlike the legacy transport's single PFN register) must tell the
+/// device the avail ring's own address as an independent 64-bit
+/// field. Just `virtqueue_layout()`'s own first return value, given
+/// its own name and `extern "C"` linkage rather than computed a
+/// second, separate way - the single real layout computation this
+/// whole virtqueue implementation has, reused, not duplicated.
+#[no_mangle]
+pub extern "C" fn rust_virtqueue_avail_offset(queue_size: u16) -> u32 {
+    let (avail_offset, _, _) = virtqueue_layout(queue_size);
+    avail_offset as u32
+}
+
+/// The used ring's own byte offset - see rust_virtqueue_avail_offset()
+/// above for the full reasoning, identical here for the used ring.
+#[no_mangle]
+pub extern "C" fn rust_virtqueue_used_offset(queue_size: u16) -> u32 {
+    let (_, used_offset, _) = virtqueue_layout(queue_size);
+    used_offset as u32
 }
 
 /// Zeroes the whole virtqueue memory region - a clean, all-zero
