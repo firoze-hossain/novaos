@@ -265,6 +265,34 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: GFXTEST.ELF gpu - the framebuffer "
                     "API conformance suite did not pass.\n");
 
+    /* Phase 83: shared-memory IPC. SHMTEST.ELF forks real peers and checks
+     * the whole SYS_SHM_* contract from ring 3 (genuine sharing vs. a
+     * private-page control, the ACL, read-only honoured by the kernel, owner
+     * exit, leak-freedom, and a producer process feeding a compositor
+     * process whose output is read back from the display). Like GFXTEST it
+     * needs no delegated capability: what a process may map is decided by
+     * the per-object ACL, so plain sys_exec() - not sys_exec_trusted() - is
+     * the right call. The default run covers every group; the "gpu" run
+     * repeats only the pixel handoff on the virtio-gpu backend. */
+    static const char* const shm_all[] = {"SHMTEST.ELF"};
+    static const char* const shm_gpu[] = {"SHMTEST.ELF", "gpu"};
+
+    int pid_sa = sys_exec("SHMTEST.ELF", (const char**)shm_all, 1);
+    int code_sa = (pid_sa >= 0) ? sys_wait(pid_sa) : -1;
+    sys_write(pid_sa >= 0 && code_sa == 0
+                  ? "[sandbox] PASS: SHMTEST.ELF (shared-memory IPC "
+                    "conformance, default display backend).\n"
+                  : "[sandbox] FAIL: SHMTEST.ELF - the shared-memory IPC "
+                    "conformance suite did not pass.\n");
+
+    int pid_sg = sys_exec("SHMTEST.ELF", (const char**)shm_gpu, 2);
+    int code_sg = (pid_sg >= 0) ? sys_wait(pid_sg) : -1;
+    sys_write(pid_sg >= 0 && code_sg == 0
+                  ? "[sandbox] PASS: SHMTEST.ELF gpu (pixel handoff "
+                    "through shared memory, virtio-gpu backend).\n"
+                  : "[sandbox] FAIL: SHMTEST.ELF gpu - the shared-memory "
+                    "pixel handoff did not pass on the virtio-gpu backend.\n");
+
     sys_exit(0);
 
     for (;;) { }

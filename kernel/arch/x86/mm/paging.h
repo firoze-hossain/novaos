@@ -14,6 +14,18 @@
  * bookkeeping. */
 #define PAGE_COW     0x200
 
+/* Phase 83: a page of SHARED MEMORY (kernel/rust/shm.rs): the same
+ * physical frame is mapped, writable, into several processes at once.
+ * Every piece of code that assumed user pages are private must treat it
+ * differently, which is what this bit is for:
+ *   - fork() copies the entry verbatim into the child instead of turning
+ *     both sides copy-on-write (they must keep seeing each other's writes);
+ *   - process teardown must NOT free the frame - it belongs to the shared
+ *     object, whose reference counts decide when it goes.
+ * Bit 10 is one of the three the CPU ignores and leaves to the OS (see
+ * PAGE_COW above). Never set together with PAGE_COW. */
+#define PAGE_SHM     0x400
+
 /* Identity-maps physical (== virtual) addresses 0-64MB with static,
  * boot-time page tables and enables paging (CR0.PG). Also registers
  * the page-fault handler (vector 14) so a bad access gets a clean,

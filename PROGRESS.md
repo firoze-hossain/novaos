@@ -9754,7 +9754,229 @@ committed source with `userland/gfxtest/build.sh`.
   test` does not need any of that and only records that 3D was not
   offered.
 
-## Phase 83 and beyond
+## Phase 83: the shared-memory IPC primitive (SYS_SHM_*), in Rust
+
+**Status: done and verified. Four levels: `make shm-test` (23 Rust host
+tests + 41 checks of the userland frame protocol, no QEMU, ~40 s),
+`make test` (139 assertions; the 10 new ones are this phase's),
+`make test-3d` (148, on a real virglrenderer), and the in-OS conformance
+program `SHMTEST.ELF` (151 + 29 checks). It is the roadmap's "shared-
+memory IPC primitive for fast pixel handoff between the compositor and
+apps": the kernel half that lets two processes see the SAME physical
+frames, so an app can draw straight into memory the compositor reads,
+with no copy through the kernel and no system call per frame.**
+
+### What it does
+
+Six syscalls (54-59; the ABI is `userland/libc/include/nova_shm_abi.h`,
+shared verbatim by kernel and userland, with compile-time size and errno
+checks and a host test that fails if any limit disagrees with the Rust
+constant):
+
+| call | what |
+|---|---|
+| `SHM_CREATE(size)` | a new zero-filled object, rounded to whole pages; returns a handle. The creator is its OWNER. |
+| `SHM_GRANT(handle, pid, rights)` | owner only: let one specific process map it read-only or read-write; rights 0 revokes. |
+| `SHM_MAP(handle, rights)` | the kernel picks the address (region `0x68000000-0x7C000000`, an unmapped guard page after every mapping). |
+| `SHM_UNMAP(addr)` | remove one mapping. |
+| `SHM_DESTROY(handle)` | owner only: no new mappings; the memory is freed when the last mapping goes. |
+| `SHM_INFO(handle)` | size, owner, live mappings, my rights. |
+
+**A handle is not authority.** Handles are small integers and guessable;
+`MAP` checks the object's access list, so a process that learned a handle
+but was never granted it gets `-EACCES`. A read-only mapping is read-only
+to the CPU and to the kernel (below). Handles carry a generation, so a
+stale handle never reaches a different object that reused the slot.
+
+**Lifetime.** The memory lives while anything can reach it. An exiting
+process releases its mappings and the objects it OWNED become dying
+(existing mappers keep theirs; nobody new can map), so a crashed app never
+strands memory. A `fork()` child inherits its parent's mappings and they
+stay genuinely shared, not copy-on-write.
+
+**Limits** (all in the ABI header): 32 objects system-wide, 16MB each,
+24MB in total (the allocator only serves the first 64MB and the rest of
+the system needs it), 8 live objects and 8 mappings per process, 8 grants
+per object.
+
+**Synchronisation is deliberately not a syscall.** Both sides see the same
+bytes and coordinate through them. `novashm_chan.h` is the standard answer
+for frames: a lock-free TRIPLE BUFFER. Producer, consumer and "latest" each
+own one of three buffers, and each hand-over is one atomic exchange, so
+the producer never waits for the consumer, the consumer always gets a
+complete most-recent frame, frames arrive in order (slow consumers skip,
+never tear), and no buffer is ever owned by both. A plain double buffer
+cannot do this. `novashm.h` wraps the syscalls and the channel.
+
+Files: `kernel/rust/shm.rs` (the subsystem, ~1,800 lines with its tests),
+`kernel/ipc/shm.{c,h}` (syscall entry: user-pointer validation, struct
+copy in/out, and the six `shm_hal_*` functions Rust calls), the
+`SYS_SHM_*` wiring in `syscall.{c,h}`, `userland/libc/include/
+{nova_shm_abi,novashm,novashm_chan}.h` + wrappers in `libc/syscall.c`,
+`userland/shmtest/` (the conformance program), `tools/tests/
+{run_shm_tests.sh,novashm_test.c}`.
+
+### The three places that assumed every user page is private
+
+The state machine in `shm.rs` is the easy part. What makes shared memory
+CORRECT is that three pieces of pre-existing code each quietly assumed
+user memory belongs to exactly one process, and each would have broken it
+silently:
+
+1. **fork() made every page of both processes copy-on-write.** A forked
+   compositor/app pair's shared buffer would have become two private
+   copies the first time either wrote to it. Shared pages now carry a spare
+   page-table bit (`PAGE_SHM`, bit 10, next to `PAGE_COW`) and
+   `cow_share_address_space()` copies those entries verbatim.
+2. **Process teardown freed every leaf frame not marked COW.** Shared
+   frames belong to the object, not to a process: freeing them on exit
+   would hand memory to the allocator that other processes still map.
+   `free_user_address_space()` skips `PAGE_SHM`; the object's reference
+   counts decide when frames really go.
+3. **Nothing counted mappings per process.** `rust_shm_fork()` records a
+   child's inherited mappings (all or nothing: if it cannot, the fork
+   fails through the existing cleanup path), and `rust_shm_process_exit()`
+   releases an exiting process's, placed before the state flips to
+   TERMINATED for the same reason as the framebuffer's exit hook.
+
+Read-only needed no change: `paging_user_range_ok()` already refuses a
+kernel WRITE through a page that is neither writable nor copy-on-write.
+That matters because the kernel runs with CR0.WP clear and would otherwise
+happily write straight through a read-only mapping.
+
+### Verification, and how far each piece can be trusted
+
+* **The Rust state machine** runs on the host against a mock MMU that
+  PANICS on a double free, a free of a never-allocated frame, mapping a
+  frame that was not zeroed, or mapping over an existing page-table entry.
+  The properties are checked directly, not inferred from return codes:
+  every frame freed exactly once, none leaked, none in two objects, every
+  mapping record backed by real page-table entries and vice versa. A
+  30,000-operation randomized run is checked against an INDEPENDENT model
+  of the permission rules, and failure is injected at every frame
+  allocation and every page mapping (the state must be unchanged).
+  **Shown able to fail:** 21 deliberate bugs injected one at a time (stale
+  handles accepted, frames not zeroed, rollbacks leaking, ACL ignored, a
+  read-only grant yielding a writable mapping, owner exit not orphaning,
+  counts not following fork or exit, destroy freeing while mapped, no guard
+  page, a cap off by one...); all 21 caught.
+* **The userland frame protocol** is model-checked over ALL 317 reachable
+  states (not a sample of interleavings), and the checker is then pointed
+  at two deliberately broken protocols - a plain double buffer and a
+  triple buffer whose commit is a load followed by a store - and must (and
+  does) flag each for the right reason. The real header code is then run
+  between two real threads (forced to yield mid-frame on both sides, since
+  on a single host core they otherwise barely overlap): ~94,000 of 300,000
+  frames reach the consumer, none torn, none out of order. Also built under
+  UBSan/ASan and ThreadSanitizer.
+* **In the real OS**, `SHMTEST.ELF` forks real peers and checks: zero-filled
+  memory, including RECYCLED frames (a freshly booted machine's mostly-zero
+  RAM would otherwise hide a missing clear); the guard page (probed through
+  the kernel, not by faulting); destroy-while-mapped; every argument error;
+  hostile pointers to all four struct-taking calls; fork sharing in both
+  directions with a private-page CONTROL that must not share; the ACL
+  across processes (no grant / read-only / read-write / revoked); the
+  kernel refusing to write through a read-only mapping (a syscall whose
+  output buffer lies inside one must return a bad-address error - done this
+  way because a deliberate fault would trip the project's own fault
+  detector); owner exit; leak-freedom (80 x 1MB create/destroy cycles and
+  40 owner processes that exit without cleanup - together more than the
+  machine has, so any leak exhausts the allocator); and finally the point
+  of it all: a producer PROCESS draws frames into shared memory, a
+  compositor process takes them with the triple buffer, checks EVERY pixel
+  of EVERY frame against the pattern for its sequence number (a frame torn
+  between two sequences cannot pass for either), copies it into a
+  framebuffer surface, presents it, and reads the DISPLAY back and
+  compares - on the VBE backend and on virtio-gpu.
+  **Shown able to fail:** six faults injected into the KERNEL integration,
+  one at a time, each caught by SHMTEST alone: fork making shared pages
+  copy-on-write (even the test's own mailbox stops being shared); teardown
+  freeing shared frames (a stall in the process-churn group - NOT a clean
+  failure message, see below); the exit hook removed (the owner-exit loop
+  exhausts memory); the fork hook removed (`mappings` reads 1 while the
+  child lives, 2 expected); read-only mappings secretly writable (the
+  kernel-write probe succeeds); frames not zeroed.
+* `make test`: 139/139, twice (every expected line after 106 s and 119 s).
+  `make test-3d`: 148/148 on a real virglrenderer, no panics.
+
+### Things learned that are not obvious
+
+* **A bug in the teardown carve-out does not look like a bug.** With
+  teardown freeing shared frames, SHMTEST does not fail with a message and
+  the kernel does not panic: the process-churn group simply stops making
+  progress (frames freed twice, then handed to two owners). The harness
+  catches it - the PASS line never appears - but a future regression here
+  will look like a hang, not like an error.
+* **There is no getpid syscall.** A process learns its own pid from
+  `SHM_INFO`'s `owner_pid` on an object it created; the helpers use that.
+* **Placement order matters for error codes.** `MAP` checks rights before
+  "already mapped", so a process holding a read-only mapping that asks for
+  a writable one is told `-EACCES`, not `-EEXIST`.
+* **`-I userland/libc/include` makes the HOST's `<stdlib.h>` resolve to
+  NovaOS's.** The host test builds use `-idirafter` (the same trap bit
+  Phase 81's tests).
+* `SHMTEST.ELF` is tracked despite `.gitignore`'s `*.elf` (which matches
+  `*.ELF` on case-insensitive filesystems) because of the
+  `!tools/fixtures/*.ELF` rule added after Phase 82's GFXTEST.ELF problem.
+
+### Mistakes of mine worth recording
+
+* **A test that hung instead of failing.** The fork-pool test looped until
+  `fork` reported an error. With the pool check removed, no error ever
+  came, so the test spun forever instead of failing - found only because
+  mutation testing printed "caught by 0 tests" for a non-zero exit. The
+  loop is now bounded and asserts the error happened. A test that can only
+  fail by hanging is a CI outage waiting to happen.
+* **Two kernel-side checks that could not have caught what they claimed
+  to.** "New memory is zero" passes on a freshly booted machine even if
+  the kernel never clears anything (RAM is already zero); and
+  `mappings == 1` after the child exits is true whether or not fork ever
+  recorded the child's mapping. Both were found by asking "could this
+  check fail?" BEFORE mutating the kernel, and strengthened (recycle a
+  dirtied frame; read `mappings` while the child is alive).
+* **Miscounted a limit in my own test.** The test program already owns one
+  object (its mailbox), so a process can create 7 more, not 8.
+* **Raised the harness time ceiling to 300 s without checking what it
+  costs.** The runner stops early only when every expected line appears,
+  so a line that never comes (the known-flaky USB enumeration) waits out
+  the whole ceiling: 300 s made every flaky run twice as expensive as 150
+  s did. A full run needs ~105-160 s of guest time; the ceiling is 240 s.
+* **My mutation script left a mutant in the tree** when a tool call was
+  killed mid-run (the restore was not in a `finally`). Caught because the
+  next check compared the file against the saved good copy; the lesson is
+  to compare, not assume.
+
+### Known limits
+
+* Revoking a grant stops NEW mappings; it does not pull one the grantee
+  already holds. (Pulling it needs the other process's page tables and a
+  TLB shootdown the kernel does not otherwise need.)
+* `create` zeroes a large object's frames while holding the one subsystem
+  lock with interrupts off: milliseconds for 16MB, on a path that runs a
+  few times per window, not per frame.
+* Syscalls written before this phase that do not validate their output
+  pointers can still write through a read-only mapping (CR0.WP is clear).
+  The same is already true of ELF text pages; the new syscalls all
+  validate.
+* One producer and one consumer per frame channel. A compositor with many
+  windows uses one channel per window (one object each).
+* The compositor still copies each frame into its own surface before
+  presenting: composition needs that (windows overlap). Presenting
+  directly from a shared buffer would need `SYS_FB_CREATE` to accept an
+  existing region - a follow-up, not part of this primitive.
+* Not zero-copy to the display, no cross-process notification primitive
+  (consumers poll; a blocking wait would be a futex-style syscall), and a
+  mapping's address is kernel-chosen (no fixed-address request).
+* Verified on QEMU/TCG with two vCPUs. The frame protocol relies only on
+  C11 acquire/release atomics, and ThreadSanitizer accepts it, but it has
+  not run on real SMP hardware.
+* "Grant to pid N" is safe because pids come from a monotonically
+  increasing counter (`p->pid = next_pid++` in `process.c`): a pid is never
+  reissued to a different process (process SLOTS are reused, pids are not).
+  `process_exit` also clears every grant to the exiting pid, so the
+  property would survive a future wrap or reuse scheme.
+
+## Phase 84 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

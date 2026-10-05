@@ -534,6 +534,10 @@ bool process_selftest_shared_pde_accessed_bit(void);
  * allowed. */
 bool process_is_reapable(const process_t* p);
 
+/* Phase 83: true if `pid` names a process that exists and has not yet
+ * exited. */
+bool process_is_live(int pid);
+
 /* Phase 82: deterministic test of that rule. */
 bool process_selftest_reap_waits_for_the_exiting_cpu(void);
 

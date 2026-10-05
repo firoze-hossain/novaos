@@ -11,6 +11,7 @@
  * after the fake return address.
  */
 #include "../drivers/video/fb.h"
+#include "../ipc/shm.h"
 #include "process.h"
 #include "scheduler.h"
 #include "elf.h"
@@ -530,8 +531,12 @@ static void free_user_address_space(uint32_t page_directory_phys) {
              * notes), not a correctness bug - which is the safe,
              * conservative fallback until real reference counting on
              * shared frames exists (tracked as its own follow-up). */
-            if (pt[j] & PAGE_COW) {
-                continue;
+            if (pt[j] & (PAGE_COW | PAGE_SHM)) {
+                continue; /* COW: another process may still map it.
+                             SHM: the frame belongs to a shared-memory
+                             object (kernel/rust/shm.rs), not to this
+                             process - that object's reference counts, not
+                             this teardown, decide when it is freed. */
             }
             pmm_free_frame(pt[j] & 0xFFFFF000u);
         }
@@ -588,6 +593,17 @@ static bool cow_share_address_space(uint32_t parent_pd_phys,
             }
 
             uint32_t frame = parent_pt[j] & 0xFFFFF000u;
+            if (parent_pt[j] & PAGE_SHM) {
+                /* Shared memory stays shared: the child gets the SAME
+                 * frame with the SAME flags (writable if the parent's
+                 * mapping is), and the parent's entry is left alone. Making
+                 * it copy-on-write would silently turn a forked
+                 * compositor/app pair's shared buffer into two private
+                 * copies. The child's mapping RECORDS are created by
+                 * rust_shm_fork() in process_fork(). */
+                child_pt[j] = parent_pt[j];
+                continue;
+            }
             uint32_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_COW;
 
             parent_pt[j] = frame | cow_flags; /* the parent's own
@@ -772,6 +788,22 @@ bool process_selftest_reap_waits_for_the_exiting_cpu(void) {
     return ok;
 }
 
+/* Phase 83: is `pid` a process that exists and has not exited? A
+ * read-only look at the table (process_wait_nonblock() answers a similar
+ * question but reaps as a side effect). Used by shared memory to refuse a
+ * grant to a process that does not exist. */
+bool process_is_live(int pid) {
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = pt_slot(i);
+        if (p->pid == pid && p->state != PROCESS_UNUSED &&
+            p->state != PROCESS_TERMINATED) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void process_exit_current(int exit_code) {
     process_t* p = scheduler_current();
     if (p != NULL) {
@@ -800,6 +832,15 @@ void process_exit_current(int exit_code) {
          * free_user_address_space() at reap time, like every other page
          * it owns (freeing it here too would be a double free). */
         fb_process_exit(p->pid);
+
+        /* Phase 83: release this process's shared-memory mappings and
+         * make everything it owned dying, so a crashed or careless app
+         * never strands memory. Same placement and same reason as the
+         * framebuffer hook above: BEFORE the state flips to TERMINATED, so
+         * a waiter that sees the process gone can rely on its resources
+         * already being released. No page-table work is needed here - the
+         * address space is freed at reap time and skips PAGE_SHM frames. */
+        rust_shm_process_exit(p->pid);
 
         p->exit_code = exit_code;
         p->state = PROCESS_TERMINATED;
@@ -2067,6 +2108,16 @@ int process_fork(registers_t* parent_regs) {
     kernel_log("[ OK ] process_fork: pid %d forked -> new pid %d\n",
                parent->pid, child->pid);
 
+    /* Phase 83: the child inherited its parent's shared-memory mappings
+     * (cow_share_address_space() copied those page-table entries verbatim);
+     * this records them, so the reference counts and the exit hook see the
+     * child's mappings too. All or nothing: failing here fails the fork,
+     * through the same cleanup as a copy-on-write failure above. */
+    if (rust_shm_fork(parent->pid, child->pid) != 0) {
+        kfree(child_kstack);
+        free_user_address_space(child_pd_phys);
+        return -1;
+    }
     process_publish(child);
     return child->pid;
 }

@@ -55,7 +55,15 @@ DEFAULT_DISK = REPO_ROOT / "disk.img"
 # or 60s window is simply wrong for at least one of those machines; a
 # generous ceiling with early exit is right for both.
 EARLY_EXIT_GRACE_SECONDS = 5
-DEFAULT_TIMEOUT_SECONDS = 150
+# The boot-time demos have grown with every phase (Phase 81's framebuffer
+# conformance runs and Phase 83's shared-memory ones each fork dozens of
+# processes), and a full run now needs ~105-160 s of guest time depending on
+# the host. The runner stops as soon as every expected line has appeared, so
+# the ceiling costs nothing on a run that finishes - it only matters on a
+# slow run (which is not a failure) and on a run with a line that never
+# comes (the known-flaky USB enumeration), which waits out the whole
+# ceiling, so it is set with real margin but not generously.
+DEFAULT_TIMEOUT_SECONDS = 240
 
 # Mirrors the Makefile's own QEMU_FLAGS/DISK_FLAGS/NET_FLAGS/
 # AUDIO_FLAGS/USB_FLAGS exactly (kept here as one definition this
@@ -566,6 +574,26 @@ ASSERTIONS: list[Assertion] = [
               "Phase 82: the virtio-gpu driver now reads the device's feature word and accepts exactly one optional feature - VIRGL, if offered - instead of accepting none unconditionally. A plain virtio-gpu-pci offers no VIRGL (this run's case) and stays a 2D device; a virtio-gpu-gl-pci offers it. FEATURES_OK is still read back and checked either way"),
     Assertion("virtiogpu_3d_reported_when_not_offered", r"\[ OK \] virtio-gpu 3D: not offered by this device \(plain virtio-gpu-pci, 2D only\) - skipped",
               "Phase 82: on this run's plain virtio-gpu-pci the 3D self-test is correctly skipped and says so once, rather than failing or silently doing nothing. The 3D path is exercised by `make test-3d` (a real virglrenderer behind QEMU's gtk,gl display, which needs a GL stack `make test` deliberately does not require); kernel/rust/virgl.rs's protocol logic is covered here regardless by `make virgl-test`, which runs the whole 3D orchestrator against a mock GPU"),
+    Assertion("shm_subsystem_ready", r"\[ OK \] Shared-memory IPC: 32 objects / 16MB per object / 24MB total, 8 mappings per process, region 0x68000000-0x7C000000 \(state 0/0/0\)",
+              "Phase 83: the shared-memory IPC subsystem (kernel/rust/shm.rs) initialised at boot with its documented limits, and its books balanced on the empty state (no objects, no frames, no mapping records) - the kernel-side Rust state machine behind the SYS_SHM_* syscalls. Its logic is covered without QEMU by `make shm-test` (23 host tests against a mock MMU that panics on a double free or on exposing a non-zeroed frame, a 30,000-operation randomized run checked against an independent model, and failure injected at every allocation and mapping)"),
+    Assertion("shmtest_default_conformance", r"\[shmtest\] PASS: backend=auto - the full SYS_SHM_\* contract holds",
+              "Phase 83: userland/shmtest/shmtest.c, a genuine ring-3 program that forks real peer processes, ran the whole SYS_SHM_* contract against the real kernel: object creation, rounding, zero-filled memory (including recycled frames, which a freshly booted machine's mostly-zero RAM would otherwise hide), the guard page, destroy-while-mapped, argument validation, hostile pointers to all four struct-taking calls, the per-process object limit, the access list across processes, owner exit, fork inheritance, leak-freedom, and a producer process feeding a compositor process whose output is read back from the display"),
+    Assertion("shmtest_fork_shares_memory", r"\[shmtest\] ok: fork shares memory in both directions \(and a private page, as the control, does not\)",
+              "Phase 83: after fork(), a child's write to shared memory is visible to its parent AND the parent's later write is visible to the child, while - the control - a write to an ordinary private page is NOT visible across the fork. Three pieces of pre-existing kernel code assumed every user page is private (fork turned all pages copy-on-write, teardown freed every frame, nothing counted a mapping per process); this is what proves the PAGE_SHM carve-outs work. Verified able to fail: making fork copy-on-write the shared pages breaks it (even the test's own mailbox stops being shared)"),
+    Assertion("shmtest_access_control", r"\[shmtest\] ok: access control between processes \(no grant / read-only / read-write / revoked; the kernel honours read-only\)",
+              "Phase 83: a process holding a perfectly valid handle but no grant is refused (the handle is not the authority), a read-only grant yields only a read-only mapping, and - the part that needs the kernel's cooperation - a syscall whose OUTPUT buffer lies inside a read-only shared mapping fails with a bad-address error instead of writing through it (the kernel runs with CR0.WP clear and would otherwise write straight through). Verified able to fail: mapping read-only requests as writable makes the kernel-write probe succeed"),
+    Assertion("shmtest_no_leaks", r"\[shmtest\] ok: limits, and no leaks across 80 create/destroy cycles \+ 40 exiting owners",
+              "Phase 83: far more shared memory than the machine has (80 x 1MB create/map/unmap/destroy cycles, then 40 short-lived owner processes that exit without cleaning up) cycles through the allocator; a leak on any path would exhaust it long before the loop ends. Verified able to fail: removing the process-exit hook makes the owner-exit loop run out of memory"),
+    Assertion("shmtest_owner_exit", r"\[shmtest\] ok: owner exit - existing mappings survive, new ones are refused, memory is freed with the last mapping",
+              "Phase 83: when an owner exits, mappings others already hold keep working but no new mapping is possible, and the memory is freed when the last mapping goes"),
+    Assertion("shmtest_pixel_handoff_default", r"\[shmtest\] ok: pixel handoff end to end on the auto display backend",
+              "Phase 83: the point of the whole primitive. A producer PROCESS draws frames into shared memory; a compositor process takes them with a lock-free triple buffer, checks every pixel of every frame against the pattern for its sequence number (a frame torn between two sequences cannot pass), copies it into a framebuffer surface, presents it, and reads the DISPLAY back and compares - no per-frame syscall or kernel copy between the two processes"),
+    Assertion("shmtest_pixel_handoff_gpu", r"\[shmtest\] PASS: backend=virtio-gpu - the full SYS_SHM_\* contract holds",
+              "Phase 83: the same producer-process -> shared memory -> compositor -> present -> display readback pipeline on the virtio-gpu backend (the damage-rectangle TRANSFER_TO_HOST_2D + RESOURCE_FLUSH path) instead of the VBE framebuffer"),
+    Assertion("shmtest_default_exit_ok", r"\[sandbox\] PASS: SHMTEST\.ELF \(shared-memory IPC conformance, default display backend\)",
+              "Phase 83: SHMTEST.ELF also exited 0 as seen by its parent - the program's own verdict and the process-level verdict agree"),
+    Assertion("shmtest_gpu_exit_ok", r"\[sandbox\] PASS: SHMTEST\.ELF gpu \(pixel handoff through shared memory, virtio-gpu backend\)",
+              "Phase 83: SHMTEST.ELF gpu exited 0 as seen by its parent"),
     Assertion("reaper_waits_for_exiting_cpu", r"\[ OK \] Reaper waits for an exiting process's CPU to leave its kernel stack before freeing it \(off_cpu handshake\)",
               "Phase 82: a LATENT USE-AFTER-FREE, older than anything in this phase (process_exit_current()'s exit sequence is byte-identical back to Phase 78), found as an intermittent kernel panic - eip equal to the faulting address, in the pid forked right after one that had just exited - in a fresh-clone run of the 3D test under a software-GL display on a single host core. The reaper freed an exiting process's kernel stack as soon as its state read TERMINATED, but the exiting CPU still runs a kernel_log() and the context switch itself on that stack after publishing it; the waiting parent's very next fork() then reallocates the same block. Measured directly (not inferred): with the old rule the reaper ran against a process whose CPU had not left its stack 2 times in 709 ordinary exits on an UNLOADED plain device. The fix is the handshake the scheduler already used for itself - process_t.off_cpu, published by switch_context() only after ESP has left the old stack - now also required by the reaper (process_is_reapable()). The rule is tested here deterministically (four state/off_cpu combinations); the race itself cannot be, and is covered probabilistically by GFXTEST's 200-round fork/exit/wait stress loop"),
     Assertion("vbe_text_font_survives_graphics", r"\[ OK \] VBE text-mode font survives a graphics session",

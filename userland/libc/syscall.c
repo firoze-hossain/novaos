@@ -419,3 +419,30 @@ int sys_fb_present(const nova_fb_present_t* req) {
 int sys_fb_readback(const nova_fb_readback_t* req) {
     return fb_call1(SYS_FB_READBACK, (unsigned int)req);
 }
+
+/* Phase 83: shared-memory wrappers. Same one-argument int 0x80 shape as
+ * the framebuffer calls above: the kernel reads and/or writes the struct
+ * the argument points at, hence the "memory" clobber. */
+int sys_shm_create(nova_shm_create_t* req) {
+    return fb_call1(NOVA_SYS_SHM_CREATE, (unsigned int)req);
+}
+
+int sys_shm_grant(const nova_shm_grant_t* req) {
+    return fb_call1(NOVA_SYS_SHM_GRANT, (unsigned int)req);
+}
+
+int sys_shm_map(nova_shm_map_t* req) {
+    return fb_call1(NOVA_SYS_SHM_MAP, (unsigned int)req);
+}
+
+int sys_shm_unmap(unsigned int addr) {
+    return fb_call1(NOVA_SYS_SHM_UNMAP, addr);
+}
+
+int sys_shm_destroy(unsigned int handle) {
+    return fb_call1(NOVA_SYS_SHM_DESTROY, handle);
+}
+
+int sys_shm_info(nova_shm_info_t* req) {
+    return fb_call1(NOVA_SYS_SHM_INFO, (unsigned int)req);
+}

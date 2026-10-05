@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "nova_fb_abi.h"
+#include "nova_shm_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -128,6 +129,16 @@ int sys_lspci(char* buf, int buf_size);
 int sys_beep(void);
 int sys_write_file(const char* filename, const void* data, unsigned int size);
 int sys_delete_file(const char* filename);
+/* Phase 83: shared-memory IPC. Model, structs and limits are in
+ * nova_shm_abi.h; novashm.h wraps these in a friendlier API plus the
+ * frame-handoff protocol. Every call returns 0 / a non-negative result, or
+ * a NEGATIVE errno (not -1 plus errno). */
+int sys_shm_create(nova_shm_create_t* req);
+int sys_shm_grant(const nova_shm_grant_t* req);
+int sys_shm_map(nova_shm_map_t* req);
+int sys_shm_unmap(unsigned int addr);
+int sys_shm_destroy(unsigned int handle);
+int sys_shm_info(nova_shm_info_t* req);
 int sys_fb_info(nova_fb_info_t* out);
 int sys_fb_acquire(unsigned int backend);
 int sys_fb_release(void);
