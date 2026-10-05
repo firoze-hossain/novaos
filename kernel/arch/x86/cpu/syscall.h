@@ -579,6 +579,19 @@
 #define SYS_FB_PRESENT  52
 #define SYS_FB_READBACK 53
 
+/* Phase 83: shared-memory IPC - a compositor and an app map the SAME
+ * physical frames and exchange pixels with no per-frame syscall and no
+ * copy through the kernel. The model, the structs and the limits are in
+ * userland/libc/include/nova_shm_abi.h; the subsystem is
+ * kernel/rust/shm.rs. kernel/ipc/shm.c asserts at compile time that these
+ * numbers match the ABI header's. */
+#define SYS_SHM_CREATE  54
+#define SYS_SHM_GRANT   55
+#define SYS_SHM_MAP     56
+#define SYS_SHM_UNMAP   57
+#define SYS_SHM_DESTROY 58
+#define SYS_SHM_INFO    59
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

@@ -282,7 +282,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 	@mkdir -p $(dir $@)
 	$(ASM) -f bin $< -o $@
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -357,7 +357,7 @@ debug: $(ISO_FILE) $(DISK_IMG)
 # an UPPER BOUND: the runner now stops as soon as every expected line has
 # appeared plus a short grace period, so a healthy run ends in about
 # 45-50s. See the comment there for why a fixed window could not work.
-TEST_TIMEOUT ?= 150
+TEST_TIMEOUT ?= 240
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)
@@ -387,6 +387,14 @@ fb-test:
 # a plain virtio-gpu-pci and only records that 3D was not offered.
 virgl-test:
 	@sh tools/tests/run_virgl_host_tests.sh
+
+# Phase 83: shared-memory IPC. `shm-test` runs the host suites for the Rust
+# subsystem (kernel/rust/shm.rs, against a mock MMU and an independent model)
+# and for the userland frame-handoff protocol (tools/tests/novashm_test.c).
+# No QEMU; a few seconds. The in-OS conformance test is SHMTEST.ELF, part of
+# `make test`.
+shm-test:
+	@sh tools/tests/run_shm_tests.sh
 
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
@@ -488,4 +496,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test clean setup check-prereqs help install-image test-custom-boot

@@ -35,6 +35,7 @@
 #include "../../include/kernel.h"
 #include "../../drivers/video/vga_graphics.h"
 #include "../../drivers/video/fb.h"
+#include "../../ipc/shm.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
@@ -867,6 +868,28 @@ static void handle_fb_present(registers_t* regs) {
                             : (uint32_t)fb_sys_present(p->pid, regs->ebx);
 }
 
+/* Phase 83: shared memory. Same shape as the SYS_FB_* handlers: the
+ * calling process's pid and the raw argument go to kernel/ipc/shm.c, which
+ * validates every user pointer; a kernel-mode task (no page-table-backed
+ * user memory to share) gets -EPERM. No capability gate: what a process may
+ * map is decided by the per-object ACL the owner sets (SYS_SHM_GRANT), not
+ * by a per-process permission, and the quotas bound what one process can
+ * hold. */
+#define SHM_HANDLER(NAME, CALL)                                              \
+    static void NAME(registers_t* regs) {                                    \
+        process_t* p = process_current();                                    \
+        regs->eax = (p == NULL || !p->is_user)                               \
+                        ? (uint32_t)-NOVA_SHM_ERR_PERM                       \
+                        : (uint32_t)CALL(p->pid, regs->ebx);                 \
+    }
+
+SHM_HANDLER(handle_shm_create, shm_sys_create)
+SHM_HANDLER(handle_shm_grant, shm_sys_grant)
+SHM_HANDLER(handle_shm_map, shm_sys_map)
+SHM_HANDLER(handle_shm_unmap, shm_sys_unmap)
+SHM_HANDLER(handle_shm_destroy, shm_sys_destroy)
+SHM_HANDLER(handle_shm_info, shm_sys_info)
+
 static void handle_fb_readback(registers_t* regs) {
     process_t* p = process_current();
     regs->eax = (p == NULL) ? (uint32_t)-NOVA_FB_ERR_PERM
@@ -1697,6 +1720,30 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_RECVFROM:
             handle_recvfrom(regs);
+            break;
+
+        case SYS_SHM_CREATE:
+            handle_shm_create(regs);
+            break;
+
+        case SYS_SHM_GRANT:
+            handle_shm_grant(regs);
+            break;
+
+        case SYS_SHM_MAP:
+            handle_shm_map(regs);
+            break;
+
+        case SYS_SHM_UNMAP:
+            handle_shm_unmap(regs);
+            break;
+
+        case SYS_SHM_DESTROY:
+            handle_shm_destroy(regs);
+            break;
+
+        case SYS_SHM_INFO:
+            handle_shm_info(regs);
             break;
 
         case SYS_FB_INFO:
