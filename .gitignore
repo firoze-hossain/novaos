@@ -102,3 +102,7 @@ tools/pkgsign/target/
 # ---- Debug/session artifacts ----
 .gdb_history
 *.gdbinit.local
+
+# Committed test fixtures. *.elf above also matches *.ELF on case-insensitive
+# filesystems (Windows/macOS), which silently hid GFXTEST.ELF from git.
+!tools/fixtures/*.ELF
