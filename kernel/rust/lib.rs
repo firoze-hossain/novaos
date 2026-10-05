@@ -42,6 +42,7 @@ mod udp;
 mod virtiogpu;
 mod virgl;
 mod shm;
+mod msg;
 mod http;
 mod pkgsign_core;
 mod pkgsign;

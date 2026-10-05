@@ -592,6 +592,20 @@
 #define SYS_SHM_DESTROY 58
 #define SYS_SHM_INFO    59
 
+/* Phase 84: app-to-app messaging - framed, addressed, identity-stamped
+ * messages between processes, which pipes (byte streams, no identity, no
+ * address) cannot provide. The model, the structs and the limits are in
+ * userland/libc/include/nova_msg_abi.h; the subsystem is
+ * kernel/rust/msg.rs. kernel/ipc/msg.c asserts at compile time that these
+ * numbers match the ABI header's. Nothing blocks inside the kernel (see
+ * the ABI header): a call that cannot complete returns -EAGAIN. */
+#define SYS_MSG_OPEN    60
+#define SYS_MSG_CLOSE   61
+#define SYS_MSG_SEND    62
+#define SYS_MSG_RECV    63
+#define SYS_MSG_SERVICE 64
+#define SYS_MSG_CTL     65
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

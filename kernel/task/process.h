@@ -538,6 +538,9 @@ bool process_is_reapable(const process_t* p);
  * exited. */
 bool process_is_live(int pid);
 
+/* Phase 84: the uid of a live process; false if no such live process. */
+bool process_uid_of(int pid, uint32_t* out_uid);
+
 /* Phase 82: deterministic test of that rule. */
 bool process_selftest_reap_waits_for_the_exiting_cpu(void);
 
