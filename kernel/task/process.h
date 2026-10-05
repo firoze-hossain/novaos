@@ -527,4 +527,14 @@ void process_pin_to_bsp(int pid);
  * the kernel's shared page tables alone. */
 bool process_selftest_shared_pde_accessed_bit(void);
 
+/* Phase 82: may `p`'s kernel stack and page directory be freed? True only
+ * for a TERMINATED process whose CPU has finished switching off its kernel
+ * stack (off_cpu). See the comment on the definition in process.c for the
+ * intermittent use-after-free that the old "state == TERMINATED" test
+ * allowed. */
+bool process_is_reapable(const process_t* p);
+
+/* Phase 82: deterministic test of that rule. */
+bool process_selftest_reap_waits_for_the_exiting_cpu(void);
+
 #endif

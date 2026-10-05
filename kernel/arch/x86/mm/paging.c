@@ -171,6 +171,30 @@ static void page_fault_handler(registers_t* regs) {
         }
     }
 
+    /* Phase 82: for a fault taken in KERNEL mode, show the stack the
+     * faulting code was running on. When eip is garbage (it equals the
+     * faulting address: a `ret` or an indirect call into the weeds) the
+     * registers say nothing about HOW it got there; the words above the
+     * stack pointer are the return addresses of the call chain that did.
+     * Without this a panic like that was nearly undebuggable - it showed
+     * up once in several runs, under timing only a loaded host produces,
+     * with nothing but a register dump to go on.
+     *
+     * No privilege change happened, so the CPU did not push ss/esp: the
+     * faulting stack pointer is where those two slots would have been. */
+    if ((regs->cs & 3) == 0) {
+        uint32_t* sp = (uint32_t*)&regs->useresp;
+        kernel_log("[DIAG] kernel-mode fault: cr2=0x%x err=0x%x esp~0x%x\n",
+                   (int)faulting_address, (int)regs->err_code, (int)(uint32_t)sp);
+        for (int row = 0; row < 4; row++) {
+            kernel_log("[DIAG] stack+%d: 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x\n",
+                       row * 32, (int)sp[row * 8 + 0], (int)sp[row * 8 + 1],
+                       (int)sp[row * 8 + 2], (int)sp[row * 8 + 3],
+                       (int)sp[row * 8 + 4], (int)sp[row * 8 + 5],
+                       (int)sp[row * 8 + 6], (int)sp[row * 8 + 7]);
+        }
+    }
+
     /* Phase 54: unlike the generic isr_handler() path, this handler
      * has a genuinely meaningful faulting address (CR2) to offer -
      * kernel/rust/crashdump.rs's own crash record includes it whenever

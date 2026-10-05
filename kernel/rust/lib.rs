@@ -40,6 +40,7 @@ mod apic;
 mod tcp;
 mod udp;
 mod virtiogpu;
+mod virgl;
 mod http;
 mod pkgsign_core;
 mod pkgsign;

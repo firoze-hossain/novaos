@@ -125,13 +125,30 @@ static spinlock_t g_gpu_lock;
 static __attribute__((aligned(4096))) uint8_t g_request[4096];
 static __attribute__((aligned(4096))) uint8_t g_response[4096];
 
-static bool poll_for_completion(void) {
+/* Phase 82: virgl 3D. A separate, larger buffer pair: a SUBMIT_3D
+ * carries a whole command stream (shaders as text, pipeline state, the
+ * draw) and GET_CAPSET returns a few hundred bytes of capabilities -
+ * neither fits the 4KB 2D pair, and keeping them apart means 3D work
+ * never aliases a 2D command's buffers. Sizes must match kernel/rust/
+ * virgl.rs's REQ_CAP/RESP_CAP (the Rust side indexes them by those
+ * constants). Both are page-aligned: the Rust command-stream writer
+ * views the request body as 32-bit words. */
+#define VIRGL_REQ_CAP  (16 * 1024)
+#define VIRGL_RESP_CAP (8 * 1024)
+static __attribute__((aligned(4096))) uint8_t g_req3d[VIRGL_REQ_CAP];
+static __attribute__((aligned(4096))) uint8_t g_resp3d[VIRGL_RESP_CAP];
+
+/* Feature bit 0 of word 0: VIRTIO_GPU_F_VIRGL. */
+#define VIRTIO_GPU_F_VIRGL_BIT 0x1u
+static bool virgl_negotiated = false;
+
+static bool poll_for_completion_limit(uint32_t limit) {
     /* Matches kernel/drivers/virtio/virtio_blk.c's own poll_for_
      * completion() exactly - bounded, not unbounded, for the same
      * reason: a device that never completes a command (real hardware/
      * emulation bug, or this driver itself being wrong) fails the
      * command instead of hanging the kernel forever. */
-    for (uint32_t i = 0; i < 10000000u; i++) {
+    for (uint32_t i = 0; i < limit; i++) {
         int32_t id = rust_virtqueue_poll_used((uint8_t*)queue_mem_phys,
                                                queue_size, &last_used_idx);
         if (id >= 0) {
@@ -139,6 +156,30 @@ static bool poll_for_completion(void) {
         }
     }
     return false;
+}
+
+static bool poll_for_completion(void) {
+    return poll_for_completion_limit(10000000u);
+}
+
+/* Submits a command already built in the buffer at `req` (exactly
+ * `request_len` bytes of it), with the device writing its answer into
+ * `resp`; notifies the device and polls for completion. Returns false
+ * only if the device never answered within `poll_limit` polls. The 2D
+ * path (send_command, below) and the 3D path (virtiogpu_3d_exec) both
+ * go through here - they differ only in which buffers and how long a
+ * wait is reasonable. Caller holds g_gpu_lock. */
+static bool submit_and_wait(const uint8_t* req, uint32_t request_len,
+                             uint8_t* resp, uint32_t response_len,
+                             uint32_t poll_limit) {
+    gpu_submit_command((uint8_t*)queue_mem_phys, queue_size,
+                        (uint32_t)req, request_len,
+                        (uint32_t)resp, response_len);
+    *notify_addr = 0; /* queue index 0 (the control queue) - the
+        modern transport's own notify value, a 16-bit queue index
+        written to this virtqueue's own notify address (computed once
+        by virtio_pci_modern_setup_queue(), not recomputed here). */
+    return poll_for_completion_limit(poll_limit);
 }
 
 /* Submits whatever command is already built into g_request (exactly
@@ -153,15 +194,8 @@ static bool poll_for_completion(void) {
 static bool send_command(uint32_t request_len, uint32_t response_len,
                           uint32_t expected_response_type,
                           const char* command_name) {
-    gpu_submit_command((uint8_t*)queue_mem_phys, queue_size,
-                        (uint32_t)g_request, request_len,
-                        (uint32_t)g_response, response_len);
-    *notify_addr = 0; /* queue index 0 (the control queue) - the
-        modern transport's own notify value, a 16-bit queue index
-        written to this virtqueue's own notify address (computed once
-        by virtio_pci_modern_setup_queue(), not recomputed here). */
-
-    if (!poll_for_completion()) {
+    if (!submit_and_wait(g_request, request_len, g_response, response_len,
+                          10000000u)) {
         kernel_log("[FAULT] virtio-gpu: %s timed out waiting for "
                    "completion\n", command_name);
         return false;
@@ -200,8 +234,21 @@ void virtiogpu_init(void) {
     virtio_pci_modern_write_status(&g_dev, VIRTIO_STATUS_ACKNOWLEDGE |
                                                 VIRTIO_STATUS_DRIVER);
 
-    (void)virtio_pci_modern_read_device_features(&g_dev);
-    virtio_pci_modern_write_guest_features(&g_dev, 0);
+    /* Phase 82: accept exactly one optional feature - VIRGL, if the
+     * device offers it - and nothing else (the same "negotiate the
+     * minimum" stance as before; every other feature bit this device
+     * can offer, EDID, resource UUIDs, blobs, context init, is
+     * something this driver has no use for). A plain virtio-gpu-pci
+     * does not offer VIRGL, so on that device this is still an empty
+     * negotiation and 3D is simply reported unavailable; a virtio-gpu-
+     * gl-pci device offers it. */
+    uint32_t offered = virtio_pci_modern_read_device_features(&g_dev);
+    virgl_negotiated = (offered & VIRTIO_GPU_F_VIRGL_BIT) != 0;
+    virtio_pci_modern_write_guest_features(
+        &g_dev, virgl_negotiated ? VIRTIO_GPU_F_VIRGL_BIT : 0);
+    kernel_log("[ OK ] virtio-gpu: device offers feature word 0x%x - %s\n",
+               (int)offered,
+               virgl_negotiated ? "accepting VIRGL (3D)" : "no VIRGL, 2D only");
 
     virtio_pci_modern_write_status(&g_dev, VIRTIO_STATUS_ACKNOWLEDGE |
                                                 VIRTIO_STATUS_DRIVER |
@@ -422,6 +469,91 @@ bool virtiogpu_selftest(void) {
     }
 
     return true;
+}
+
+/* ------------------------------------------------------------------
+ * Phase 82: the 3D transport. Everything below is plumbing for
+ * kernel/rust/virgl.rs, which owns the protocol - the command streams,
+ * the control structs, the orchestration and the checking. The six
+ * functions are exactly what that module's kernel_glue calls.
+ * ------------------------------------------------------------------ */
+
+extern uint32_t rust_virgl_selftest(uint32_t restore_res, uint32_t restore_w,
+                                     uint32_t restore_h);
+
+bool virtiogpu_virgl_available(void) {
+    return present && virgl_negotiated;
+}
+
+uint8_t* virtiogpu_3d_request_buf(void) {
+    return g_req3d;
+}
+
+const uint8_t* virtiogpu_3d_response_buf(void) {
+    return g_resp3d;
+}
+
+/* Returns the response's ctrl-header type, or 0xFFFFFFFF if the device
+ * never answered. Serialized against every 2D command by g_gpu_lock:
+ * they share the one control virtqueue. The response header is cleared
+ * first so a stale type from the previous command can never be mistaken
+ * for this one's. The wait is far longer than a 2D command's: the host
+ * may be JIT-compiling shaders on a software rasterizer. */
+uint32_t virtiogpu_3d_exec(uint32_t req_len, uint32_t resp_len) {
+    if (!virtiogpu_virgl_available() || req_len == 0 ||
+        req_len > VIRGL_REQ_CAP || resp_len < 24 || resp_len > VIRGL_RESP_CAP) {
+        return 0xFFFFFFFFu;
+    }
+    memset(g_resp3d, 0, 24);
+    uint32_t lock_flags = spinlock_acquire(&g_gpu_lock);
+    bool done = submit_and_wait(g_req3d, req_len, g_resp3d, resp_len,
+                                 400000000u);
+    spinlock_release(&g_gpu_lock, lock_flags);
+    if (!done) {
+        return 0xFFFFFFFFu;
+    }
+    return gpu_response_type(g_resp3d);
+}
+
+/* Zeroed, page-aligned, physically contiguous memory for resource
+ * backing stores. The kernel is identity-mapped, so the pointer IS the
+ * physical address the device needs. */
+uint8_t* virtiogpu_3d_alloc(uint32_t bytes) {
+    uint32_t pages = (bytes + 4095u) / 4096u;
+    uint32_t phys = pmm_alloc_contiguous(pages);
+    if (phys == 0) {
+        return 0;
+    }
+    memset((void*)phys, 0, pages * 4096u);
+    return (uint8_t*)phys;
+}
+
+void virtiogpu_3d_free(uint8_t* ptr, uint32_t bytes) {
+    uint32_t pages = (bytes + 4095u) / 4096u;
+    for (uint32_t i = 0; i < pages; i++) {
+        pmm_free_frame((uint32_t)ptr + i * 4096u);
+    }
+}
+
+void virtiogpu_3d_log(const uint8_t* msg, uint32_t len) {
+    char line[200];
+    if (len > sizeof(line) - 1) {
+        len = sizeof(line) - 1;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        line[i] = (char)msg[i];
+    }
+    line[len] = '\0';
+    kernel_log("%s\n", line);
+}
+
+bool virtiogpu_3d_selftest(void) {
+    if (!virtiogpu_virgl_available()) {
+        return false;
+    }
+    uint32_t failed_step = rust_virgl_selftest(RESOURCE_ID, GPU_WIDTH,
+                                                GPU_HEIGHT);
+    return failed_step == 0;
 }
 
 DRIVER_REGISTER("virtio-gpu", virtiogpu_init, DRIVER_PHASE_AFTER_PCI);

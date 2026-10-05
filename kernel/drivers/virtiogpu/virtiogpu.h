@@ -96,6 +96,20 @@ bool virtiogpu_get_surface(uint8_t** out_backing, uint32_t* out_width,
  * protocol promises. */
 bool virtiogpu_flush_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
+/* Phase 82: true if the device offered, and this driver accepted, the
+ * VIRGL feature - i.e. 3D is available. False on a plain virtio-gpu-
+ * pci (2D only). */
+bool virtiogpu_virgl_available(void);
+
+/* Phase 82: runs the 3D self-test (kernel/rust/virgl.rs's run_
+ * selftest): reads the device's capability sets, creates a context and
+ * render target, clears and draws a shaded triangle, reads the pixels
+ * back through the host renderer and verifies them, shows the result on
+ * the scanout, and tears everything down. Returns true only if every
+ * step verified; logs exactly what failed otherwise. Returns false
+ * immediately if virtiogpu_virgl_available() is false. */
+bool virtiogpu_3d_selftest(void);
+
 /* Real, checkable proof the whole pipeline actually works - see this
  * file's own top comment's "Verification note" for exactly what this
  * checks and why. Returns false immediately (nothing to verify yet)
