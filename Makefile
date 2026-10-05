@@ -282,7 +282,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 	@mkdir -p $(dir $@)
 	$(ASM) -f bin $< -o $@
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -379,6 +379,29 @@ libc-test:
 fb-test:
 	@sh tools/tests/run_fb_tests.sh
 
+# Phase 82: virgl (virtio-gpu 3D). `virgl-test` is the host-side suite for
+# kernel/rust/virgl.rs - no QEMU, no GL, a few seconds. `test-3d` boots the
+# kernel against a REAL virglrenderer (QEMU gtk,gl=on under Xvfb with Mesa's
+# software GL) and checks the rendered pixels; it skips with a message if
+# that stack is not installed. Neither is part of `make test`, which runs on
+# a plain virtio-gpu-pci and only records that 3D was not offered.
+virgl-test:
+	@sh tools/tests/run_virgl_host_tests.sh
+
+# The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
+# on a loaded single host core next to Mesa's software rasterizer, and a full
+# run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
+# 150 s default meant a run that was making steady progress (about 190 of 200
+# rounds into the third suite's stress loop, no errors) could be cut off and
+# reported as four failed assertions. The runner still stops early the moment
+# every expected line has appeared, so the larger ceiling only matters on a
+# slow run, and a slow run is not a failure.
+TEST_3D_TIMEOUT ?= 400
+
+test-3d: $(ISO_FILE) $(DISK_IMG)
+	@sh tools/tests/run_virgl_live.sh --timeout $(TEST_3D_TIMEOUT) \
+	    --iso $(ISO_FILE) --disk $(DISK_IMG)
+
 # Clean
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG)
@@ -465,4 +488,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d clean setup check-prereqs help install-image test-custom-boot

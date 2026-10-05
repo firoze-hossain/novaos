@@ -479,6 +479,21 @@ void kernel_late_init(void) {
                    gpu_ok ? "OK" : "FAIL");
     }
 
+    /* Phase 82: 3D. Only meaningful (and only attempted) on a virgl-
+     * capable device (virtio-gpu-gl-pci); on a plain virtio-gpu-pci it
+     * just says so, once. */
+    if (virtiogpu_is_present()) {
+        if (virtiogpu_virgl_available()) {
+            bool gpu3d_ok = virtiogpu_3d_selftest();
+            kernel_log("[ %s ] virtio-gpu 3D self-test (virgl: capsets, "
+                       "context, render target, clear, shaded triangle, "
+                       "readback, scanout)\n", gpu3d_ok ? "OK" : "FAIL");
+        } else {
+            kernel_log("[ OK ] virtio-gpu 3D: not offered by this device "
+                       "(plain virtio-gpu-pci, 2D only) - skipped\n");
+        }
+    }
+
     /* Phase 81: the framebuffer graphics API (SYS_FB_*) sits on top of
      * whichever of the two display drivers above came up - VBE
      * (Phase 79, initialized right after paging) and virtio-gpu
@@ -491,6 +506,12 @@ void kernel_late_init(void) {
      * in how fork()/process teardown recognise the kernel's shared page
      * tables; this proves it stays fixed, deterministically - see
      * process_selftest_shared_pde_accessed_bit()'s own comment. */
+    {
+        bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();
+        kernel_log("[ %s ] Reaper waits for an exiting process's CPU to leave "
+                   "its kernel stack before freeing it (off_cpu handshake)\n",
+                   reap_ok ? "OK" : "FAIL");
+    }
     {
         bool pde_ok = process_selftest_shared_pde_accessed_bit();
         kernel_log("[ %s ] Shared page tables survive fork + teardown even "

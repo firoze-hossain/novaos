@@ -9518,7 +9518,243 @@ blunt `PANIC|FAULT|FAIL` assertion.
   GPU-side readback; on a future 3D backend it would be served from a
   CPU shadow.
 
-## Phase 82 and beyond
+## Phase 82: virtio-gpu 3D acceleration (virgl), in Rust
+
+**Status: done and verified against a real virglrenderer. Three test
+levels: `make virgl-test` (20 host tests, ~5 s, no QEMU), `make test`
+(129 assertions on a plain virtio-gpu-pci), and `make test-3d` (138
+assertions, the WHOLE suite on a virgl-capable device behind a real
+virglrenderer). Phase 80 split this out as its own task because virgl
+means a command encoder, not a few more 2D commands; this is that
+encoder. Building and testing it also found and fixed a latent
+use-after-free in process reaping that is much older than this phase
+(see "A latent bug", below).**
+
+### What it does
+
+virtio-gpu's 3D mode hands the host's GPU stack real work: the guest
+creates a 3D *context* and GPU-side *resources* and submits command
+*streams* that bind shaders and pipeline state and issue draws; the
+host executes them with OpenGL and the guest never rasterizes a pixel.
+`kernel/rust/virgl.rs` is everything the guest needs to speak that:
+
+* the virtio-gpu 3D control commands (`GET_CAPSET_INFO`, `GET_CAPSET`,
+  `CTX_CREATE/DESTROY/ATTACH/DETACH`, `RESOURCE_CREATE_3D`,
+  `TRANSFER_TO/FROM_HOST_3D`, `SUBMIT_3D`, scanout/flush/unref);
+* the virgl command-stream encoder that goes inside `SUBMIT_3D`:
+  blend / depth-stencil / rasterizer / vertex-elements / sampler-view /
+  sampler-state / surface / shader objects, bind commands, framebuffer,
+  viewport, vertex/index buffers, constant buffers, sampler views and
+  states, clear (colour + depth), indexed and non-indexed draws;
+* the capset parser, the shaders (TGSI **text** - virglrenderer does not
+  take binary tokens over the wire), a pixel verifier, and an
+  orchestrator generic over a small `Transport` trait.
+
+`kernel/drivers/virtiogpu/virtiogpu.c` stays the hardware layer, as in
+Phase 80: it now accepts the `VIRGL` feature when offered (and nothing
+else), owns separate 16KB/8KB 3D request/response buffers, and exposes
+six small functions Rust calls. All protocol logic is in Rust.
+
+What the boot self-test (`rust_virgl_selftest`) renders and checks, each
+by reading the pixels back through the host renderer: clear (all 16,384
+pixels exact); a Gouraud-shaded triangle from a vertex buffer uploaded
+with `TRANSFER_TO_HOST_3D` (4,512 interior pixels, 0 wrong, 0 background
+disturbed, the three vertex colours at the right corners) in **both**
+viewport Y conventions; a constant-buffer uniform alpha-blended over the
+background (hand-computed value); a depth test (near triangle wins an
+overlap despite being drawn first) **with a control run** where
+disabling depth flips the overlap; a 2x2 texture sampled onto an
+index-buffer quad (all four texels in the right quadrants); finally the
+triangle is shown on the real scanout and the 2D scanout handed back.
+
+### Where the protocol came from
+
+Nothing is recalled from memory alone. Command opcodes, object types,
+field offsets and size macros are transcribed from virglrenderer's own
+`virgl_protocol.h`; formats and bind flags from `virgl_hw.h` (two
+independent copies agreeing); the 3D control structs from the Linux
+uapi header. The header encoding `cmd | obj<<8 | len<<16` was
+cross-checked by decoding a real virglrenderer bug report (`394753 =
+0x60601 = CREATE_OBJECT, SAMPLER_VIEW, 6`). The Gallium enum values
+(blend factors, compare funcs, clear bits) are the only ones not read
+from a header here; they are exactly what the live host verifies - a
+wrong one gives a wrong picture (mutation-tested, below).
+
+### Verification, and how far each piece can be trusted
+
+* **A real host renderer.** virglrenderer behind QEMU 8.2 with Mesa's
+  software GL. Getting it to run headlessly took finding the one
+  configuration that works: `-display gtk,gl=on` on Xvfb.
+  (`egl-headless` needs a DRM render node containers do not have; SDL's
+  GL path aborts in epoxy. QEMU's `screendump` cannot read a GL scanout
+  at all - "no surface" - so the displayed picture was captured from
+  Xvfb's framebuffer instead.)
+* **Mutation testing against the live host.** Nine encoder fields were
+  broken one at a time. Eight were caught, each with a diagnosis that
+  names the effect (colour mask 0 -> nothing drawn; depth func GREATER ->
+  near region missing; swizzle X/Z swapped -> the red texel reads back
+  blue; uniform alpha 1.0 -> opaque white; index size 4 -> quad gone; an
+  FS reading an undeclared input -> the host's own stderr says `Illegal
+  shader`; DRAW_VBO length 11 and a never-flipped viewport -> triangle
+  fails). The ninth, `instance_count = 0`, **survived**: it is a genuine
+  no-op on this host (virglrenderer treats <=1 as an ordinary draw). That
+  falsified a comment I had written ("0 would draw nothing"), now
+  corrected.
+* **Host tests (20).** Golden values including the real 308-byte capset
+  captured from a live host (the parser's offsets are checked against
+  what an actual host sends); an independent stream decoder derived from
+  the protocol's size macros, shown able to fail on corrupted streams; a
+  no-uncreated-object-referenced invariant; every control builder checked
+  at every too-short buffer size; and a **mock GPU with a small software
+  rasterizer** that runs the whole orchestrator on the host: the success
+  path, **a failure injected at every single command** (error and
+  timeout; teardown must leave no context, resource or allocation behind
+  and the scanout restored), and **every submission silently dropped in
+  turn** (next section).
+* **Screenshot** of the final code's scanout: upright shaded triangle,
+  background exactly the clear colour.
+* **Provenance of the numbers above.** The mutation results, the reaper
+  measurement (2 of 709) and the screenshot were obtained on the first
+  version of `virgl.rs`. The working directory was then lost to a sandbox
+  reset and the file was re-created from the same source; the
+  re-created file is held to the same evidence (the 20 host tests and the
+  full live suite pass on it, on the working tree and on fresh clones),
+  but the mutation and measurement experiments were not re-run on it.
+* **`make test-3d` has its own time budget (`TEST_3D_TIMEOUT`, 400 s).**
+  A run needs ~140-155 s of guest time (the guest shares one host core
+  with Mesa's software rasterizer), against ~135 s for `make test`, and
+  the shared 150 s default sat one second from the edge: a fresh-clone
+  run that was making steady progress (about 190 of 200 rounds into the
+  third suite's stress loop, no errors) was cut off and reported as four
+  failed assertions, and another run needed 151 s and would have been cut
+  off too. The failure signature (assertions failing with no suite
+  verdict, no `gfxtest FAIL` line and no panic in the log) was then
+  reproduced on purpose by shortening the budget. The runner still stops
+  early once every expected line has appeared, so the larger ceiling only
+  matters on a slow run, and a slow run is not a failure.
+
+### Things learned that are not obvious
+
+1. **`SUBMIT_3D` answers OK even when the host rejects the stream.** An
+   illegal shader, a bad handle: the response is still `RESP_OK_NODATA`;
+   the error goes only to the host's log and the context silently stops
+   executing. The guest's only reliable signal is the picture, so the
+   readback checks are load-bearing. The silent-drop host test proves
+   every submission is covered by one - and found a gap in my own flow
+   (below).
+2. **The capset's depth/stencil and vertex-buffer format masks are empty
+   on a modern virglrenderer.** My first plausibility check required the
+   R32G32B32A32_FLOAT vertex bit and failed a perfectly working
+   renderer. A raw dump of the capset showed the sampler and render masks
+   populated, `glsl_level = 0x1c2 = 450` where expected, and those two
+   masks (almost) zero. The check now uses only what the host
+   demonstrably reports.
+3. **Viewport Y sign selects the image orientation.** Positive keeps GL's
+   native bottom-left origin (apex on the last row of the readback);
+   negative gives row 0 = top, the convention the rest of this OS uses.
+   The self-test requires both, each in its own orientation.
+4. **Failure-path cleanup was a real bug in my first draft.** It returned
+   from the middle of the flow on any error, leaving the context and
+   resources alive on the host so a retry would collide with them.
+   Teardown now tracks exactly what exists and undoes it on every path
+   (restoring the borrowed scanout *before* its resource goes away); the
+   host test sweeps a failure at every command to prove it.
+
+### A latent bug, much older than this phase: reaping an exiting process
+
+A fresh-clone run of `make test-3d` hit an intermittent kernel panic:
+`eip` equal to the faulting address (`0x497C9AB4`), in the pid forked
+right after one that had just exited. It did not reproduce on the next
+run, which made it easy to dismiss and important not to.
+
+The cause is a use-after-free of the exiting process's **kernel stack**.
+`process_exit_current()` publishes `PROCESS_TERMINATED` and then still
+runs a `kernel_log()` (a serial write: one VM exit per byte) and the
+context switch itself on that stack. The reaper, on the other CPU,
+freed the stack as soon as it read `TERMINATED` - its own comment
+asserted the process "has already reached its own `scheduler_yield()`",
+which was not true for the length of that log line. The waiting parent's
+next `fork()` allocates a fresh 16KB kernel stack, very likely the block
+just freed, and the exiting CPU then scribbles over or returns through
+the new process's initial frame.
+
+* **It is old.** The exit sequence is byte-identical back to Phase 78.
+  The Phase 81 conformance test (200 back-to-back fork/exit/wait/fork
+  rounds per suite) is what finally made it observable, and it needed a
+  starved host to bite: `nproc` is 1 here, and under the software-GL
+  display each vCPU can be descheduled mid-function for milliseconds.
+* **It was measured, not inferred.** With the old rule the reaper ran
+  against a process whose CPU had not left its stack **2 times in 709
+  ordinary exits on the plain, unloaded device**. Neither happened to
+  crash - whether it does depends on what the freed block is reused for.
+* **The fix reuses the scheduler's own handshake.** `switch_context()`
+  publishes `process_t.off_cpu = 1` only after `mov esp, ...` has moved
+  the CPU onto the next stack for good, and `pick_next_locked()` already
+  refuses to schedule a process until it is set. The reaper never used
+  the same fact. `process_is_reapable()` now requires `TERMINATED &&
+  off_cpu`. In live runs the deferral fires (a few times per boot), with
+  no panic and no hang.
+* **Tests.** The rule is tested deterministically at boot (four
+  state/`off_cpu` combinations, `reaper_waits_for_exiting_cpu`); the
+  race itself cannot be made deterministic and stays covered by
+  GFXTEST's stress loop.
+* **Honest limits of the evidence.** A widened-window mutant (a delay on
+  the exit path) did not crash, so no deterministic reproduction of the
+  *panic* exists; the diagnosis rests on the code analysis, the direct
+  measurement above, and the fix visibly deferring those reaps. The
+  original failure rate on `test-3d` was roughly 1 in 4, so a handful of
+  clean runs is evidence, not proof.
+* **Diagnostics added.** The page-fault handler now dumps the faulting
+  kernel stack (the call chain that returned into garbage). It has not
+  needed to fire since.
+* **A related race left alone:** `vga_row`/`vga_col` in the VGA text
+  driver are shared between CPUs with no lock. It cannot corrupt kernel
+  memory (out-of-range rows still land in the VGA/ROM address window) but
+  is a real data race.
+
+### Mistakes of mine worth recording
+
+(a) The wrong vertex-mask assumption above. (b) The `instance_count`
+comment. (c) A redundant clear in the first draw pass that no check could
+observe - found because the silent-drop test refused to pass until every
+submission was observable; the redundancy was removed rather than
+allow-listed. (d) The final "show the triangle" draw was unverified, so a
+rejected stream there would have displayed stale content; it is now read
+back and checked. (e) Three wrong expectations in my own host tests (a
+submit count, an off-by-one in a corruption walker, which capset queries
+may fail harmlessly) - each a test bug, but the last documents a design
+decision: capset enumeration ends at the first non-OK reply, so a refused
+query after VIRGL was found is tolerated by design. (f) A widened-window
+mutant that waited on the timer tick counter hung the kernel by itself:
+the exit path runs inside the `int 0x80` handler with interrupts masked,
+so the counter never advances there.
+
+### An upstream defect found on the way
+
+`tools/fixtures/GFXTEST.ELF` was never committed with Phase 81 (its
+source and build script were; every sibling fixture ELF is tracked). A
+fresh clone of upstream `HEAD` therefore failed 9 assertions of `make
+test` (`process_exec: couldn't read 'GFXTEST.ELF'`) independent of
+anything in this phase. This change adds the binary, rebuilt from the
+committed source with `userland/gfxtest/build.sh`.
+
+### Known limits
+
+* Kernel-internal only: there is no syscall or userland API for 3D yet
+  (the roadmap's compositor/shared-memory tasks are where that belongs).
+* One context; the encoder covers what the scenes exercise. Not
+  implemented: geometry/tessellation/compute shaders, queries, streamout,
+  blits, fences (everything completes inline), blob resources, and
+  virgl2/Venus contexts. The capset v2 is enumerated but not used.
+* Verified only against virglrenderer 1.0.0 / QEMU 8.2.2 / Mesa llvmpipe.
+  Another host may differ in the details (rasterization of edge pixels is
+  excluded from the checks for that reason; the capset masks vary).
+* `make test-3d` needs Xvfb, Mesa software GL, and QEMU's gtk display and
+  `virtio-gpu-gl-pci`; it skips with a message if they are absent. `make
+  test` does not need any of that and only records that 3D was not
+  offered.
+
+## Phase 83 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

@@ -26,6 +26,7 @@ directly as a CI/Makefile gate.
 """
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -561,6 +562,12 @@ ASSERTIONS: list[Assertion] = [
               "Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own virtiogpu_init() found a real virtio-gpu PCI device (modern-transport-only, confirmed against multiple independent sources - no legacy interface exists for this device at all, unlike virtio-blk/virtio-net), completed the full modern virtio status handshake (including the FEATURES_OK round-trip legacy devices have no equivalent of), created a real 1024x768 B8G8R8A8 2D resource, attached a real guest-owned backing buffer to it, and configured it as scanout 0 - the real command sequence needed to actually display something, not a partial or simulated one. Required building kernel/drivers/virtio/virtio_pci_modern.{c,h} as new, generic infrastructure (the modern virtio-over-PCI transport, needed because virtio-gpu has no legacy interface), including a real correction mid-phase: a 64-bit memory BAR this driver's own first attempt didn't expect, found and fixed via this exact boot test, not assumed away"),
     Assertion("virtiogpu_selftest_passed", r"\[ OK \] virtio-gpu self-test \(struct layout checks, write real pixels, transfer\+flush to the device, read back through guest memory\)",
               "Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own virtiogpu_selftest() - called automatically right after a successful virtiogpu_init() - checked every command struct's own byte layout (kernel/rust/virtiogpu.rs's own rust_virtiogpu_selftest(), verified against the Linux kernel's own authoritative uapi header, not reconstructed from memory), then wrote real, specific, non-trivial pixel data into the real backing buffer, sent TRANSFER_TO_HOST_2D and RESOURCE_FLUSH and checked each got the real VIRTIO_GPU_RESP_OK_NODATA back (not merely 'some response'), then read the same buffer back through ordinary guest memory access and confirmed the bytes are exactly what was written - a real, specific, hard-checkable proof this driver's own B8G8R8A8 pixel-packing logic is correct and the device genuinely accepted and processed this exact buffer's contents, not merely that SET_SCANOUT once succeeded during init. See virtiogpu.h's own top comment for why this is the right kind of verification for a GPU resource specifically (not memory-mapped the way a real linear framebuffer is, so not directly readable the way kernel/drivers/video/vbe.c's own vbe_selftest() reads VBE's)"),
+    Assertion("virtiogpu_feature_negotiation_logged", r"\[ OK \] virtio-gpu: device offers feature word 0x[0-9a-f]+ - (accepting VIRGL \(3D\)|no VIRGL, 2D only)",
+              "Phase 82: the virtio-gpu driver now reads the device's feature word and accepts exactly one optional feature - VIRGL, if offered - instead of accepting none unconditionally. A plain virtio-gpu-pci offers no VIRGL (this run's case) and stays a 2D device; a virtio-gpu-gl-pci offers it. FEATURES_OK is still read back and checked either way"),
+    Assertion("virtiogpu_3d_reported_when_not_offered", r"\[ OK \] virtio-gpu 3D: not offered by this device \(plain virtio-gpu-pci, 2D only\) - skipped",
+              "Phase 82: on this run's plain virtio-gpu-pci the 3D self-test is correctly skipped and says so once, rather than failing or silently doing nothing. The 3D path is exercised by `make test-3d` (a real virglrenderer behind QEMU's gtk,gl display, which needs a GL stack `make test` deliberately does not require); kernel/rust/virgl.rs's protocol logic is covered here regardless by `make virgl-test`, which runs the whole 3D orchestrator against a mock GPU"),
+    Assertion("reaper_waits_for_exiting_cpu", r"\[ OK \] Reaper waits for an exiting process's CPU to leave its kernel stack before freeing it \(off_cpu handshake\)",
+              "Phase 82: a LATENT USE-AFTER-FREE, older than anything in this phase (process_exit_current()'s exit sequence is byte-identical back to Phase 78), found as an intermittent kernel panic - eip equal to the faulting address, in the pid forked right after one that had just exited - in a fresh-clone run of the 3D test under a software-GL display on a single host core. The reaper freed an exiting process's kernel stack as soon as its state read TERMINATED, but the exiting CPU still runs a kernel_log() and the context switch itself on that stack after publishing it; the waiting parent's very next fork() then reallocates the same block. Measured directly (not inferred): with the old rule the reaper ran against a process whose CPU had not left its stack 2 times in 709 ordinary exits on an UNLOADED plain device. The fix is the handshake the scheduler already used for itself - process_t.off_cpu, published by switch_context() only after ESP has left the old stack - now also required by the reaper (process_is_reapable()). The rule is tested here deterministically (four state/off_cpu combinations); the race itself cannot be, and is covered probabilistically by GFXTEST's 200-round fork/exit/wait stress loop"),
     Assertion("vbe_text_font_survives_graphics", r"\[ OK \] VBE text-mode font survives a graphics session",
               "Phase 81: the VGA text-mode console must come back from a VBE graphics session. It had NOT been coming back since the VBE driver (Phase 79) first appeared: on the Bochs/QEMU std-VGA device the VGA text font lives in video RAM that (1) the linear framebuffer aliases and (2) the device CLEARS every time the VBE mode is enabled, so the first vbe_init() wiped the font and the console rendered nothing (blank glyphs; only the CRTC-drawn cursor survived) - invisible to every serial-log-based test, found only by taking a screenshot. This self-test runs a real enter/scribble/exit session and requires the font byte-identical afterwards, and - the check whose absence let the bug ship - first requires that the SAVED copy is a plausible font and not blank (an earlier fix saved the font after the device had already wiped it, so it restored zeros, and a test comparing the font to that copy passed). Verified able to catch the original bug: removing the early save makes it report 'the saved text font is blank - it was saved after something had already wiped it'"),
     Assertion("pmm_allocator_ceiling", r"\[ OK \] PMM allocator ceiling: first 64MB only",
@@ -587,6 +594,37 @@ ASSERTIONS: list[Assertion] = [
               "Phase 81: GFXTEST.ELF (gpu) exited 0 as seen by its parent"),
     Assertion("no_panic_fault_or_fail", r"PANIC|FAULT|FAIL", "",
               negative=True),
+]
+
+
+# Phase 82: assertions that only hold - and are only required - when the
+# kernel is booted against a virgl-capable device (`--virgl`, driven by
+# `make test-3d`). In that mode they REPLACE the "3D not offered"
+# assertion above; every other assertion still applies, which makes the
+# run double as a check that the whole 2D stack and the framebuffer API
+# keep working on a virgl-enabled device.
+VIRGL_REPLACES = {"virtiogpu_3d_reported_when_not_offered"}
+VIRGL_ASSERTIONS = [
+    Assertion("virgl_accepted", r"virtio-gpu: device offers feature word 0x[0-9a-f]+ - accepting VIRGL \(3D\)",
+              "Phase 82: the device offered VIRGL and the driver accepted it; FEATURES_OK stuck"),
+    Assertion("virgl_capsets_enumerated", r"\[virgl\] capset #0: id=1 max_version=\d+ max_size=\d+",
+              "Phase 82: GET_CAPSET_INFO enumerated the host's capability sets, finding the VIRGL one (id 1)"),
+    Assertion("virgl_caps_parsed", r"\[virgl\] caps: version=\d+ glsl_level=\d+ bset=0x[0-9a-f]+ B8G8R8A8: render\+sampler",
+              "Phase 82: GET_CAPSET returned virgl_caps_v1 and it parsed plausibly (a real GLSL level, B8G8R8A8 renderable and sampleable). The parser's offsets were checked against a real 308-byte capset dumped from a live host, which also showed this host leaves the depth/stencil and vertex-buffer format masks empty, so those are deliberately not required"),
+    Assertion("virgl_clear_exact", r"\[virgl\] clear: all 16384 pixels read back as the clear colour",
+              "Phase 82: create context, create a 3D render target, attach backing, attach to the context, create surface, set framebuffer, CLEAR, TRANSFER_FROM_HOST_3D - and every one of the 16,384 pixels came back the exact clear colour"),
+    Assertion("virgl_triangle_both_y", r"\[virgl\] triangle verified in both Y conventions: \d+ interior pixels",
+              "Phase 82: a vertex+fragment shader pair (TGSI text), pipeline state objects, vertex elements and a vertex buffer uploaded with TRANSFER_TO_HOST_3D drew a Gouraud-shaded triangle whose interior pixels, background and three vertex colours were all checked after readback - in BOTH viewport Y conventions, each in its own expected orientation"),
+    Assertion("virgl_blend", r"\[virgl\] blend: constant-buffer uniform at 50% alpha blended over the background exactly",
+              "Phase 82: a fragment-shader constant buffer and SRC_ALPHA/INV_SRC_ALPHA blending produced the hand-computed value"),
+    Assertion("virgl_depth", r"\[virgl\] depth: LESS test keeps the near triangle in the overlap; disabling it lets draw order win",
+              "Phase 82: a real depth buffer: with the LESS test the near triangle wins an overlap it was drawn before, and with the test disabled the later-drawn far triangle wins instead - the control run proving the first result is the depth test's doing"),
+    Assertion("virgl_texture", r"\[virgl\] texture: 2x2 texture sampled onto an index-buffer quad - all four texels land in the right quadrants",
+              "Phase 82: a 2D texture uploaded with TRANSFER_TO_HOST_3D, a sampler view and sampler state, and an index-buffer draw: all four texels land in the right quadrants"),
+    Assertion("virgl_selftest_message", r"\[virgl\] 3D self-test passed: \d+ capset\(s\)",
+              "Phase 82: kernel/rust/virgl.rs's orchestrator ran every step, tore everything down in strict mode (detach, unref, destroy), and restored the 2D scanout"),
+    Assertion("virgl_selftest_ok", r"\[ OK \] virtio-gpu 3D self-test \(virgl: capsets, context, render target, clear, shaded triangle, readback, scanout\)",
+              "Phase 82: virtiogpu_3d_selftest() reported success to the boot log"),
 ]
 
 
@@ -627,6 +665,7 @@ def boot_and_capture(
     log_path: Path,
     timeout_seconds: int,
     virtio_disk_path: Path,
+    virgl: bool = False,
 ) -> None:
     """Boots NovaOS headlessly under QEMU, capturing serial output to
     `log_path` - the same invocation shape as the Makefile's own
@@ -652,7 +691,10 @@ def boot_and_capture(
         # device at once; this doesn't replace or conflict with the
         # default device kernel/drivers/video/vbe.c's own Bochs DISPI
         # direct-negotiation path already finds and uses).
-        "-device", "virtio-gpu-pci",
+        # Phase 82: with --virgl the same device in its GL-capable form,
+        # which offers the VIRGL feature (the PCI ids are identical, so
+        # the driver finds it the same way and every 2D path still runs).
+        "-device", "virtio-gpu-gl-pci" if virgl else "virtio-gpu-pci",
     ]
 
     cmd = (
@@ -664,15 +706,28 @@ def boot_and_capture(
         + AUDIO_FLAGS
         + USB_FLAGS
         + virtio_flags
-        + ["-cdrom", str(iso_path), "-display", "none",
+        + ["-cdrom", str(iso_path),
+           # virgl executes OpenGL on the host, so it needs a GL-capable
+           # display: gtk,gl=on (needs $DISPLAY - tools/tests/
+           # run_virgl_live.sh provides an Xvfb) rather than `none`.
+           "-display", "gtk,gl=on" if virgl else "none",
            "-serial", f"file:{log_path}"]
     )
+    stderr_target = subprocess.DEVNULL
+    if virgl:
+        if not os.environ.get("DISPLAY"):
+            print("error: --virgl needs $DISPLAY (run via `make test-3d`, "
+                  "which starts an Xvfb)", file=sys.stderr)
+            sys.exit(2)
+        # The host's virglrenderer reports rejected command streams on
+        # ITS stderr only - the guest is told OK regardless - so keep it.
+        stderr_target = open(log_path.with_suffix(".qemu-stderr.log"), "w")
 
     print(f"Booting NovaOS headlessly for up to {timeout_seconds}s "
           f"(stops early once every expected line has appeared)...")
     proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+                            stderr=stderr_target)
     started = time.monotonic()
     deadline = started + timeout_seconds
     all_seen_at = None
@@ -820,11 +875,21 @@ def main() -> int:
                               "image (created fresh each run; default: "
                               "%(default)s)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--virgl", action="store_true",
+                         help="Phase 82: boot against a virgl-capable "
+                              "virtio-gpu-gl-pci with a GL display and also "
+                              "require the 3D assertions (see `make test-3d`)")
     args = parser.parse_args()
+
+    if args.virgl:
+        ASSERTIONS[:] = ([a for a in ASSERTIONS if a.name not in VIRGL_REPLACES]
+                         + VIRGL_ASSERTIONS)
+        # keep the negative "no panic/fault/fail" check last, as before
+        ASSERTIONS.sort(key=lambda a: a.negative)
 
     if args.boot:
         boot_and_capture(args.iso, args.disk, args.log, args.timeout,
-                          args.virtio_disk)
+                          args.virtio_disk, virgl=args.virgl)
 
     ok = run_checks(args.log)
     return 0 if ok else 1

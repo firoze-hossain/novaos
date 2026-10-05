@@ -731,6 +731,47 @@ bool process_selftest_shared_pde_accessed_bit(void) {
     return true;
 }
 
+
+/* Phase 82: deterministic test of the reaping RULE (the race that made it
+ * necessary cannot be made deterministic). Four combinations of state and
+ * off_cpu, and the only one that may be reaped is the one where the
+ * process is TERMINATED *and* its CPU has switched off its stack. */
+bool process_selftest_reap_waits_for_the_exiting_cpu(void) {
+    process_t p;
+    uint8_t* raw = (uint8_t*)&p;
+    for (unsigned i = 0; i < sizeof(p); i++) {
+        raw[i] = 0;
+    }
+    bool ok = true;
+
+    p.state = PROCESS_TERMINATED;
+    p.off_cpu = 0; /* exiting: still in kernel_log()/scheduler_yield() */
+    if (process_is_reapable(&p)) {
+        kernel_log("[FAULT] reap self-test: a TERMINATED process still on "
+                   "its CPU was declared reapable\n");
+        ok = false;
+    }
+    p.off_cpu = 1; /* switch_context() has published the switch */
+    if (!process_is_reapable(&p)) {
+        kernel_log("[FAULT] reap self-test: a TERMINATED process that has "
+                   "switched off its stack was NOT reapable\n");
+        ok = false;
+    }
+    p.state = PROCESS_READY;
+    p.off_cpu = 1;
+    if (process_is_reapable(&p)) {
+        kernel_log("[FAULT] reap self-test: a READY process was reapable\n");
+        ok = false;
+    }
+    p.state = PROCESS_RUNNING;
+    p.off_cpu = 0;
+    if (process_is_reapable(&p)) {
+        kernel_log("[FAULT] reap self-test: a RUNNING process was reapable\n");
+        ok = false;
+    }
+    return ok;
+}
+
 void process_exit_current(int exit_code) {
     process_t* p = scheduler_current();
     if (p != NULL) {
@@ -1699,6 +1740,43 @@ int process_exec_trusted(const char* path, const char** argv, int argc) {
     return process_exec_trusted_env(path, argv, argc, NULL, 0);
 }
 
+/* Phase 82: may this process's kernel stack and page directory be freed?
+ *
+ * Not merely "is it TERMINATED". process_exit_current() publishes
+ * PROCESS_TERMINATED and then still has work to do on that very stack -
+ * a kernel_log() (a serial write, one VM exit per byte: milliseconds when
+ * the host is busy) and scheduler_yield() down to the context switch
+ * itself - so a reaper on the other CPU that frees the stack the instant
+ * it sees TERMINATED frees memory the exiting CPU is still executing on.
+ * The very next fork() then allocates a kernel stack, very likely that
+ * same block, and the exiting CPU scribbles over (or returns through) the
+ * brand-new process's initial frame: a wild `eip` in the NEXT pid, once in
+ * many runs, only when timing lets the two CPUs interleave that way. Found
+ * as exactly that panic (eip == the faulting address 0x497C9AB4 in pid 176,
+ * the child after the one that had just exited) in a fresh-clone run of the
+ * 3D test under a software-GL display on a single host core, where each
+ * vCPU can be descheduled mid-function for milliseconds.
+ *
+ * The bug is far older than anything in that run (this exit sequence is
+ * byte-for-byte what Phase 78 had); the Phase 81 test that hammers
+ * fork->exit->wait->fork 200 times in a row is what finally made it
+ * observable. The hazard was MEASURED, not inferred: with the old rule the
+ * reaper ran against a process whose CPU had not yet left its stack 2 times
+ * in 709 ordinary exits on an unloaded plain device (neither happened to
+ * crash). The scheduler already knew about this hazard for ITS purposes:
+ * switch_context() publishes process_t.off_cpu = 1 only after `mov esp, ...`
+ * has moved the CPU onto the next stack for good, and pick_next_locked()
+ * will not schedule a READY process until it is set. The reaper simply never
+ * used the same fact. Requiring it here means "reapable" implies "no CPU is
+ * on this stack, and no CPU has this page directory loaded".
+ *
+ * Kept as its own function so the rule can be tested directly (see
+ * process_selftest_reap_waits_for_the_exiting_cpu()) - the race itself
+ * cannot be made deterministic, the rule can. */
+bool process_is_reapable(const process_t* p) {
+    return p->state == PROCESS_TERMINATED && p->off_cpu != 0;
+}
+
 /* Phase 71: the actual "check once, reap if terminated" logic shared
  * between process_wait() (below, unchanged in observable behavior -
  * loops calling this until it succeeds) and process_wait_nonblock()
@@ -1736,8 +1814,23 @@ static bool try_reap_process(int pid, int* out_exit_code) {
                           PROGRESS.md - but this check is the correct
                           behavior regardless) */
     }
-    if (target->state != PROCESS_TERMINATED) {
-        return false;
+    if (target->state == PROCESS_TERMINATED && target->off_cpu == 0) {
+        /* The case the old "state == TERMINATED" rule got wrong: observed
+         * at about 0.3% of exits (2 of 709) in a plain, unloaded run, far
+         * more often on a loaded host. Logged for the first few so a live
+         * run shows the handshake doing real work; not an error. */
+        static volatile uint32_t deferred = 0;
+        deferred++;
+        if (deferred <= 3) {
+            kernel_log("[ OK ] reaper: pid %d is TERMINATED but its CPU has "
+                       "not left its kernel stack yet - reap deferred "
+                       "(%d so far)\n", target->pid, (int)deferred);
+        }
+    }
+    if (!process_is_reapable(target)) {
+        return false; /* still running, or TERMINATED but its CPU has not
+                          yet finished switching off its kernel stack -
+                          see process_is_reapable(). Callers retry. */
     }
 
     /* The actual kernel-stack free lives here now, not in
@@ -1745,11 +1838,16 @@ static bool try_reap_process(int pid, int* out_exit_code) {
      * the full account of the real, confirmed use-after-free this
      * replaces. Safe specifically because: this code runs on this
      * function's own caller's stack, never on `target`'s; and by the
-     * time state is observed as PROCESS_TERMINATED, `target` has
-     * already reached its own scheduler_yield() call and - since a
-     * TERMINATED process is never returned by pick_next_locked() -
-     * can never be scheduled again, so nothing will ever execute on
-     * its kernel stack after this point. Guarded with the same
+     * time process_is_reapable() holds, `target` has switched off its
+     * kernel stack for good (off_cpu is published only after the CPU
+     * is on the next task's stack) and - since a TERMINATED process is
+     * never returned by pick_next_locked() - can never be scheduled
+     * again, so nothing will ever execute on its kernel stack after
+     * this point. (This comment used to say "by the time state is
+     * observed as PROCESS_TERMINATED, target has already reached its own
+     * scheduler_yield() call". That was not true - the exiting CPU still
+     * runs a kernel_log() between the two - and the gap was a real,
+     * intermittent use-after-free; see process_is_reapable().) Guarded with the same
      * null-check-then-null-out pattern the original, unsafe version
      * already used, since this function - and process_wait() itself,
      * before this refactor, and process_wait_nonblock() now too - can
