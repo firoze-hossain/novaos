@@ -36,6 +36,7 @@
 #include "../../drivers/video/vga_graphics.h"
 #include "../../drivers/video/fb.h"
 #include "../../ipc/shm.h"
+#include "../../ipc/msg.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
@@ -889,6 +890,27 @@ SHM_HANDLER(handle_shm_map, shm_sys_map)
 SHM_HANDLER(handle_shm_unmap, shm_sys_unmap)
 SHM_HANDLER(handle_shm_destroy, shm_sys_destroy)
 SHM_HANDLER(handle_shm_info, shm_sys_info)
+
+/* Phase 84: messaging. Same shape as the SHM handlers above. No capability
+ * gate: a process can only be messaged if it opened an inbox, and what the
+ * inbox accepts is the receiver's own policy (MSG_OPEN / MSG_CTL), so the
+ * per-process capability lists (files, hosts, spawn) - which guard system
+ * resources - have nothing to add. The sender's pid and uid come from the
+ * process table in msg_sys_send(), never from the request. */
+#define MSG_HANDLER(NAME, CALL)                                              \
+    static void NAME(registers_t* regs) {                                    \
+        process_t* p = process_current();                                    \
+        regs->eax = (p == NULL || !p->is_user)                               \
+                        ? (uint32_t)-NOVA_MSG_ERR_PERM                       \
+                        : (uint32_t)CALL(p->pid, regs->ebx);                 \
+    }
+
+MSG_HANDLER(handle_msg_open, msg_sys_open)
+MSG_HANDLER(handle_msg_close, msg_sys_close)
+MSG_HANDLER(handle_msg_send, msg_sys_send)
+MSG_HANDLER(handle_msg_recv, msg_sys_recv)
+MSG_HANDLER(handle_msg_service, msg_sys_service)
+MSG_HANDLER(handle_msg_ctl, msg_sys_ctl)
 
 static void handle_fb_readback(registers_t* regs) {
     process_t* p = process_current();
@@ -1744,6 +1766,30 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_SHM_INFO:
             handle_shm_info(regs);
+            break;
+
+        case SYS_MSG_OPEN:
+            handle_msg_open(regs);
+            break;
+
+        case SYS_MSG_CLOSE:
+            handle_msg_close(regs);
+            break;
+
+        case SYS_MSG_SEND:
+            handle_msg_send(regs);
+            break;
+
+        case SYS_MSG_RECV:
+            handle_msg_recv(regs);
+            break;
+
+        case SYS_MSG_SERVICE:
+            handle_msg_service(regs);
+            break;
+
+        case SYS_MSG_CTL:
+            handle_msg_ctl(regs);
             break;
 
         case SYS_FB_INFO:

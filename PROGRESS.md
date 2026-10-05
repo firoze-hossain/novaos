@@ -9976,7 +9976,184 @@ happily write straight through a read-only mapping.
   `process_exit` also clears every grant to the exiting pid, so the
   property would survive a future wrap or reuse scheme.
 
-## Phase 84 and beyond
+## Phase 84: app-to-app messaging, beyond pipes (SYS_MSG_*), in Rust
+
+**Status: done and verified. Four levels: `make msg-test` (20 Rust host
+tests, no QEMU, a few seconds), `make test` (149 assertions; the 10 new
+ones are this phase's), the in-OS conformance program `MSGTEST.ELF` (215
+checks across 7 groups, with forked peers), and fault injection against
+both the Rust core and the kernel integration. It is the roadmap's
+"App-to-app messaging primitive, beyond today's pipes": a structured way
+for one app to send another a message - the backbone of "the file manager
+tells the text editor to open a file".**
+
+### What pipes cannot do, and what this adds
+
+A pipe (Phase 36) is a 1KB byte stream. Two messages written back to back
+are indistinguishable from one, so every user invents framing; the reader
+cannot tell who wrote, and several writers' bytes interleave; you need the
+pipe's handle, which only `fork()` can give you, so unrelated apps cannot
+find each other; and a reader that wants one kind of message must read them
+all. Messaging adds exactly the missing structure (the contract, with every
+error code, is `userland/libc/include/nova_msg_abi.h`, shared verbatim by
+kernel and userland, with compile-time size and errno checks and a host
+test that fails if any limit disagrees with the Rust constant):
+
+| piece | what |
+|---|---|
+| **Inbox** | `MSG_OPEN`: a process opts in to receiving. The inbox is a bounded FIFO (16 messages) of WHOLE messages up to 1024 bytes - one send is one receive. A process with no inbox cannot be sent to, so nothing is committed on behalf of a process that never asked to listen. |
+| **Identity** | the kernel stamps every message with the sender's pid, uid and the send time (100Hz tick). A sender cannot forge them: `msg_sys_send` takes them from the process table, never from the request. |
+| **Address** | by pid, or by SERVICE NAME (`MSG_SERVICE`): register `"editor"`, and anyone can send to `"editor"` without knowing a pid. Names are `[A-Za-z0-9._-]`, 1-31 chars, at most 4 per process, released when the owner exits. |
+| **Selective receive** | oldest first, or the oldest from a given sender / of a given type / with a given tag - what request/response needs (take THE reply, leave the rest). `PEEK` looks without removing; a too-small buffer fails with `-E2BIG`, reports the size needed, and does NOT consume the message. |
+| **Receiver policy** | the receiver chooses who may send: anyone, the same uid (root exempt), or an explicit allowlist (8 pids). Refusals happen at send time and never occupy a slot. |
+| **Fairness** | one sender may hold at most 8 of an inbox's 16 slots, so a process flooding a service cannot lock everyone else out. |
+| **Nothing blocks** | see below. |
+
+Files: `kernel/rust/msg.rs` (the subsystem and its tests, ~1,750 lines),
+`kernel/ipc/msg.{c,h}` (syscall entry: user-pointer validation, struct and
+payload copy in/out, and the three `msg_hal_*` functions Rust calls), the
+`SYS_MSG_*` wiring (60-65) in `syscall.{c,h}`, the exit hook and
+`process_uid_of()` in `process.c`, `userland/libc/include/{nova_msg_abi,
+novamsg}.h` + wrappers in `libc/syscall.c`, `userland/msgtest/`, and
+`tools/tests/run_msg_tests.sh`.
+
+### Nothing blocks in the kernel - and why that is the honest design
+
+A syscall handler runs with interrupts disabled, and this kernel has NO
+blocked-process state at all (`process_state_t` is ALLOCATING, READY,
+RUNNING, TERMINATED; even `process_wait` is a yield loop). A "blocking
+receive" inside the kernel would risk hanging the whole machine, so every
+call that cannot complete returns `-EAGAIN`, exactly like pipes,
+`SYS_READ_KEY` and `SYS_WAIT`. What the kernel adds is the one thing a
+poller needs: the 100Hz tick counter, exposed through `MSG_CTL`/stat.
+`novamsg.h` builds the waiting on top - `recv_wait()` and the
+request/response `call()` poll with `SYS_YIELD` against it, so timeouts are
+real milliseconds (10ms granularity). **The roadmap said to build "on the
+existing pipe infrastructure"; this follows pipes' conventions (static Rust
+tables, non-blocking returns, the same exit-cleanup pattern) but does not
+reuse the byte ring, because framing, multiple senders and out-of-order
+removal need a different structure.**
+
+### Verification, and how far each piece can be trusted
+
+* **The Rust state machine** runs on the host against a mock process table
+  (liveness, uids, the clock). A 100,000-step randomized run is checked
+  FIELD BY FIELD against an INDEPENDENT oracle - a deliberately simple second
+  statement of the rules (queues as Vecs, services as a map) that predicts
+  every result code, every delivered byte, every sender/type/tag/tick and
+  every counter; about 4,400 deliveries are compared. The run includes
+  processes that DIE WITHOUT THEIR EXIT HOOK having run (their inbox and
+  names linger until a delayed cleanup), because every liveness check in
+  the module exists for that case.
+  **Shown able to fail:** 32 deliberate bugs injected one at a time (LIFO
+  instead of FIFO; each selective filter ignored; E2BIG or peek consuming;
+  no per-sender cap; each accept policy ignored or inverted; exit keeping
+  the inbox, the names or allowlist entries; registering without an inbox;
+  stealing a live name; anyone able to unregister; names containing a
+  slash; type 0 or oversize accepted; dead processes not detected; lookup
+  or send trusting a dead owner; uid or send time not stamped...); all 32
+  caught. One survived the first pass - see the mistakes below.
+* **In the real OS**, `MSGTEST.ELF` is organised around the roadmap's own
+  scenario: a "file manager" finds an "editor" process BY NAME and asks it
+  to open a file; replies are matched by tag and taken out of order; 300
+  round trips of every payload size come back intact, in order, from the
+  right sender; and an 8KB buffer - too big for a message - is handed over
+  as a Phase 83 shared-memory handle inside one. Also: framing; identity
+  checked against the truth; E2BIG/peek/never-truncated; hostile pointers;
+  a receive into NULL, the kernel, unmapped memory or a READ-ONLY shared-
+  memory mapping fails WITHOUT consuming the message; the service registry
+  across fork and exit; an allowlisted sink refusing a stranger; a flooding
+  sender unable to lock out another; sixty short-lived owners of an inbox
+  and a name (more than the 32-entry tables) all succeeding; and - with
+  real, distinct, non-zero identities from `sys_login` (uid 700, uid 800) -
+  the stamped uids and the same-user policy.
+  **Shown able to fail:** seven faults injected into the KERNEL integration,
+  one at a time, each caught by MSGTEST alone: the exit hook removed (the
+  inbox table fills and the next child cannot open one); the sender's uid
+  stamped as a constant 0 (the uid-800 sender gets through as if root); the
+  receiver's uid read as 0; process liveness always true (a nonexistent pid
+  reports "no inbox" instead of "no such process"); the payload truncated by
+  a byte; type and tag swapped on receive; and the receive buffer validated
+  AFTER the message is consumed.
+* `make test`: 149/149 on the working tree (every expected line after 126
+  s) and again on a FRESH CLONE of upstream with this patch applied (119
+  s). `make test-3d` (a real virglrenderer): 158/158 on the fresh clone, on
+  the second attempt - the first ran into the known-flaky USB enumeration
+  (`usb_device_enumerated`, which never appears and so makes the runner wait
+  out its whole ceiling): 157 of 158 passed, every messaging assertion
+  among them, and nothing else failed. Host suites on the fresh clone:
+  `msg-test` 20/20, `shm-test` 23 + 41 checks (also under ThreadSanitizer),
+  `libc-test` 1,010, `fb-test` 4/4, `virgl-test` 20/20.
+
+### Things learned that are not obvious
+
+* **Validating the receive buffer after consuming does not fault - it
+  corrupts.** With the check removed, a receive into NULL did not panic: the
+  kernel's identity map makes address 0 writable in kernel mode, so the
+  message was silently stored there and the call returned success. The
+  buffer is therefore validated (and copy-on-write pages resolved) BEFORE
+  Rust may consume anything; the read-only shared-memory case works for the
+  same reason `paging_user_range_ok(..., for_write)` rejects it.
+* **A lazily-purged name masks a missing exit hook; an inbox does not.**
+  Lookup and send purge a name whose owner is dead, so removing the exit
+  hook barely shows up in name tests. The inbox table has no such rescue,
+  which is why the churn test counts inboxes (60 owners > 32 slots).
+* **`MSGTEST` runs as root, so comparing a message's uid with
+  `sys_getuid()` proves nothing** (a constant 0 passes). The uid and the
+  same-user policy are therefore tested with children that `sys_login` as
+  uid 700 and 800 (accounts `persisted` and `admin` in `USERS.CFG`).
+* **There is no getpid syscall.** `MSGTEST` learns its own pid by
+  registering a name and looking it up (Phase 83's helpers use
+  `SHM_INFO`'s owner for the same purpose).
+* A fork child gets NOTHING: no inbox, no names, no copy of the parent's
+  queue (tested).
+
+### Mistakes of mine worth recording
+
+* **My edit helper truncated the Makefile.** `open(path,'w').write(fn(s))`
+  truncates the file BEFORE `fn(s)` runs, so when an assertion in `fn`
+  fired, the Makefile was left empty (the snapshot reported 499 deletions,
+  which is how it was noticed). Nothing was lost - git had the original -
+  but the helper now computes the new text first and writes only on
+  success. The assertion itself was right: `kernel/rust/shm.rs` appears in
+  the Makefile twice (a comment too).
+* **A mutation survivor that was a real hole in the tests.** My "owner
+  vanished" test sent to the name FIRST, which purges the dead owner as a
+  side effect, so `LOOKUP`'s own liveness check was never exercised. Fixed
+  with a dedicated test and, better, by making the random run kill
+  processes silently so every stale-name path is compared with the oracle.
+* **Two of my own test mistakes the suite correctly rejected.** The FIFO
+  test sent ten messages from ONE sender, which the per-sender cap
+  (correctly) refuses; and the random run's coverage guard fired because
+  only 303 deliveries were compared - too many random receives asked for a
+  specific sender or a tiny buffer. The fix was to make filters the minority
+  case and the run longer, not to lower the bar.
+* **64-bit division in a freestanding program.** The first `novamsg.h`
+  converted milliseconds to ticks with `unsigned long long`, which needs
+  libgcc's `__udivdi3`; NovaOS does not link it. The conversion is now 32-bit
+  with a saturating guard.
+
+### Known limits
+
+* Nothing blocks, so consumers poll; timeouts have 10ms granularity and a
+  zero timeout is a single attempt. A blocking wait would need a real
+  blocked-process state in the scheduler, which is a larger change.
+* Messages are not persistent: a process that exits loses its inbox, queue
+  and names. Messages it had ALREADY sent stay in other inboxes.
+* At most 1024 bytes per message, 16 queued per inbox, 32 inboxes, 32 names.
+  Bigger data goes by shared-memory handle (tested).
+* No capability gate: a process can be messaged only if it opened an inbox,
+  and its own policy decides who gets in. The capability lists (files,
+  hosts, spawn) guard system resources and have nothing to add here - but a
+  privileged service that acts on a message is still responsible for
+  checking the stamped sender before doing something on its behalf.
+* The same-user policy reads the receiver's uid when the message is SENT;
+  allowlists are by pid (safe because pids are never reused).
+* No broadcast or publish/subscribe, no priority, no delivery receipt (a
+  sender cannot tell that a receiver exited with its message still queued).
+* Verified on QEMU/TCG with two vCPUs only.
+
+## Phase 85 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

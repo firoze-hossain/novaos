@@ -12,6 +12,7 @@
  */
 #include "../drivers/video/fb.h"
 #include "../ipc/shm.h"
+#include "../ipc/msg.h"
 #include "process.h"
 #include "scheduler.h"
 #include "elf.h"
@@ -792,6 +793,22 @@ bool process_selftest_reap_waits_for_the_exiting_cpu(void) {
  * read-only look at the table (process_wait_nonblock() answers a similar
  * question but reaps as a side effect). Used by shared memory to refuse a
  * grant to a process that does not exist. */
+/* Phase 84: the uid of a live process, by pid. Messaging stamps every
+ * message with its sender's uid and consults the RECEIVER's uid for the
+ * same-user accept policy; both come from here, never from a caller. */
+bool process_uid_of(int pid, uint32_t* out_uid) {
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = pt_slot(i);
+        if (p->pid == pid && p->state != PROCESS_UNUSED &&
+            p->state != PROCESS_TERMINATED) {
+            *out_uid = p->uid;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool process_is_live(int pid) {
     int capacity = process_table_capacity();
     for (int i = 0; i < capacity; i++) {
@@ -841,6 +858,14 @@ void process_exit_current(int exit_code) {
          * already being released. No page-table work is needed here - the
          * address space is freed at reap time and skips PAGE_SHM frames. */
         rust_shm_process_exit(p->pid);
+
+        /* Phase 84: drop this process's inbox, its queued messages, its
+         * service names and its place in other inboxes' allowlists. Same
+         * placement and reason as the hooks above: BEFORE the state flips
+         * to TERMINATED, so anyone who sees the process gone can rely on
+         * its names already being released. (Messages it had ALREADY sent
+         * stay in other processes' inboxes: they were delivered.) */
+        rust_msg_process_exit(p->pid);
 
         p->exit_code = exit_code;
         p->state = PROCESS_TERMINATED;

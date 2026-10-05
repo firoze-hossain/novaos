@@ -293,6 +293,24 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: SHMTEST.ELF gpu - the shared-memory "
                     "pixel handoff did not pass on the virtio-gpu backend.\n");
 
+    /* Phase 84: app-to-app messaging. MSGTEST.ELF forks real peers - an
+     * "editor" service the "file manager" (itself) finds by name, an
+     * allowlisted sink, a second sender - and checks the whole SYS_MSG_*
+     * contract from ring 3: framing, kernel-stamped identity, selective
+     * receive, never-consumed-on-error, fairness between senders, names
+     * released at exit, and an 8KB payload handed over by shared-memory
+     * handle. Like GFXTEST and SHMTEST it needs no delegated capability
+     * (what a process receives is decided by its own inbox policy), so plain
+     * sys_exec() is the right call. */
+    static const char* const msg_all[] = {"MSGTEST.ELF"};
+    int pid_m = sys_exec("MSGTEST.ELF", (const char**)msg_all, 1);
+    int code_m = (pid_m >= 0) ? sys_wait(pid_m) : -1;
+    sys_write(pid_m >= 0 && code_m == 0
+                  ? "[sandbox] PASS: MSGTEST.ELF (app-to-app messaging "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: MSGTEST.ELF - the app-to-app messaging "
+                    "conformance suite did not pass.\n");
+
     sys_exit(0);
 
     for (;;) { }

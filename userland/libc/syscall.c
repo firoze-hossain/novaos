@@ -446,3 +446,29 @@ int sys_shm_destroy(unsigned int handle) {
 int sys_shm_info(nova_shm_info_t* req) {
     return fb_call1(NOVA_SYS_SHM_INFO, (unsigned int)req);
 }
+
+/* Phase 84: messaging wrappers. Same one-argument int 0x80 shape as the
+ * framebuffer and shared-memory calls above. */
+int sys_msg_open(nova_msg_open_t* req) {
+    return fb_call1(NOVA_SYS_MSG_OPEN, (unsigned int)req);
+}
+
+int sys_msg_close(void) {
+    return fb_call1(NOVA_SYS_MSG_CLOSE, 0);
+}
+
+int sys_msg_send(const nova_msg_send_t* req) {
+    return fb_call1(NOVA_SYS_MSG_SEND, (unsigned int)req);
+}
+
+int sys_msg_recv(nova_msg_recv_t* req) {
+    return fb_call1(NOVA_SYS_MSG_RECV, (unsigned int)req);
+}
+
+int sys_msg_service(nova_msg_service_t* req) {
+    return fb_call1(NOVA_SYS_MSG_SERVICE, (unsigned int)req);
+}
+
+int sys_msg_ctl(nova_msg_ctl_t* req) {
+    return fb_call1(NOVA_SYS_MSG_CTL, (unsigned int)req);
+}

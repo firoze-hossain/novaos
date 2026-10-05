@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include "nova_fb_abi.h"
 #include "nova_shm_abi.h"
+#include "nova_msg_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -133,6 +134,17 @@ int sys_delete_file(const char* filename);
  * nova_shm_abi.h; novashm.h wraps these in a friendlier API plus the
  * frame-handoff protocol. Every call returns 0 / a non-negative result, or
  * a NEGATIVE errno (not -1 plus errno). */
+/* Phase 84: app-to-app messaging. Model, structs and limits are in
+ * nova_msg_abi.h; novamsg.h wraps these and adds waiting (nothing blocks
+ * in the kernel). Every call returns 0 / a non-negative result, or a
+ * NEGATIVE errno. */
+int sys_msg_open(nova_msg_open_t* req);
+int sys_msg_close(void);
+int sys_msg_send(const nova_msg_send_t* req);
+int sys_msg_recv(nova_msg_recv_t* req);
+int sys_msg_service(nova_msg_service_t* req);
+int sys_msg_ctl(nova_msg_ctl_t* req);
+
 int sys_shm_create(nova_shm_create_t* req);
 int sys_shm_grant(const nova_shm_grant_t* req);
 int sys_shm_map(nova_shm_map_t* req);
