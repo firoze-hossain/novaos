@@ -7,6 +7,7 @@
 #include "../ipc/msg.h"
 #include "../drivers/sound/audio.h"
 #include "../task/rlimit.h"
+#include "../security/mac.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -514,6 +515,7 @@ void kernel_late_init(void) {
     msg_init();
     audio_init();
     rlimit_init();
+    mac_init();
 
     {
         bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();

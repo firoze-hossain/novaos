@@ -7,6 +7,7 @@
 #include "nova_msg_abi.h"
 #include "nova_audio_abi.h"
 #include "nova_rlimit_abi.h"
+#include "nova_mac_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -146,6 +147,13 @@ int sys_delete_file(const char* filename);
 /* Phase 86: per-process resource limits. Model, rules and the usage fields are
  * in nova_rlimit_abi.h. Returns 0, or a NEGATIVE errno. */
 int sys_rlimit(nova_rlimit_t* req);
+
+/* Phase 87: mandatory access control (see nova_mac_abi.h). sys_mac_info() says
+ * what confines the caller and what has been denied it; it is always allowed,
+ * even to a process whose profile allows nothing. sys_mac_ctl() is the
+ * administrator's call (an unconfined root only): returns 0, 1, or -1. */
+int sys_mac_info(nova_mac_info_t* out);
+int sys_mac_ctl(unsigned int op, unsigned int arg);
 
 int sys_audio_open(nova_audio_open_t* req);
 int sys_audio_write(nova_audio_write_t* req);

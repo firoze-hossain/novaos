@@ -43,6 +43,7 @@ mod virtiogpu;
 mod virgl;
 mod shm;
 mod msg;
+mod mac;
 mod mixer;
 mod http;
 mod pkgsign_core;

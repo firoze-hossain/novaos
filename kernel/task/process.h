@@ -1,6 +1,7 @@
 #ifndef TASK_PROCESS_H
 #define TASK_PROCESS_H
 
+#include "../security/mac.h"
 #include "rlimit.h"
 #include "../include/types.h"
 #include "../arch/x86/cpu/isr.h"
@@ -224,6 +225,26 @@ typedef struct process {
      * claimed (allocate_slot): slots are recycled, and a stale throttled flag
      * would silently starve whatever process got the slot next. */
     rlimit_state_t rl;
+
+    /* Phase 87: mandatory access control. The ids of the profiles this process
+     * is bound by (see kernel/security/mac.h); mac_n == 0 is an unconfined
+     * process, so an all-zero slot is unconfined. Reset when a slot is claimed
+     * (allocate_slot) - slots are recycled, and a stale stack would confine
+     * the next occupant by someone else's profile. */
+    uint16_t mac_stack[MAC_MAX_STACK];
+    uint32_t mac_n;
+    uint32_t mac_denied;     /* operations MAC denied this process */
+    uint32_t mac_complained; /* ... that a complain-mode profile would have */
+    uint32_t mac_last_kind;  /* what was denied last: NOVA_MAC_KIND_* */
+    uint32_t mac_last_arg;
+    /* A ring-3 task whose code and strings live INSIDE the kernel image (the
+     * built-in demo and test tasks, created by create_user_task_common). Their
+     * pointers are in the kernel's shared identity map, which a real program's
+     * never are, so the strict user-pointer validation (paging_user_range_ok
+     * rejects exactly that region) would refuse every name they pass. They are
+     * the kernel's own fixtures and are read raw, as the old handlers read
+     * them; every program loaded from a file is validated strictly. */
+    bool mac_embedded;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */

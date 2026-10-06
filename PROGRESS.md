@@ -10594,7 +10594,222 @@ run once; a clean 178/178 would be better evidence than this.
 * Each `sbrk` under a memory limit walks the page tables (about 16k entries).
 * Tested only on QEMU, 2 vCPUs, on a host with a single core.
 
-## Phase 87 and beyond
+## Phase 87: mandatory access control - a second, stricter layer beside the capability lists, in Rust
+
+**Status: done, with the gaps listed under "Known limits" - the largest being that
+one kernel-side fault injection SURVIVES the tests (a stale profile stack in a
+recycled slot - see "Verification"). Four levels: `make mac-test` (28 host tests of the Rust policy engine,
+no QEMU, a fraction of a second), `make test` (179 assertions; the 10 new ones
+are this phase's), the in-OS conformance programs `MACTEST.ELF` (41 checks, the
+unconfined-root administrator) driving `MACJAIL.ELF` (107 checks, the confined
+program), and fault injection into the engine (44 injected bugs, all caught).
+`make test-3d`: 188/188. It is the roadmap's "mandatory access control
+enforcement, extending the existing per-process capability model": an app can't
+do anything outside its own declared profile, even if a bug tries to.**
+
+### What was there, and what this adds
+
+The capability model decides three things: which file NAMES a process may open
+(`allowed_files[]` / `can_open_any_file`), which peer IPs it may talk to
+(`allowed_hosts[]`), and whether it may spawn. It says nothing about the other
+~60 of the 70 syscalls, and it is discretionary: whoever launches a program picks
+its capabilities, and a program running as root can do anything root can.
+
+A PROFILE is a small text file, `NAME.MAC`, next to `NAME.ELF`. It declares what
+the program may do and everything else is DENIED:
+
+    mode enforce|complain
+    allow syscall <name>... | *       (exit and mac_info are always allowed)
+    allow file <rwd> <pattern>...     r = open, w = write/create, d = delete
+    allow net <cbs> <ip|*>:<port|lo-hi|*>...    c = connect, b = bind, s = send
+    allow exec <pattern>...
+
+It is applied by the kernel when the program starts; the program cannot change it;
+it applies to root. An operation must be allowed by BOTH the capability model and
+the profile: MAC never grants what the capability model refuses, and the
+capability model never grants what MAC refuses.
+
+* A process carries a STACK of up to 4 profile ids; every one must allow.
+  `fork` copies the stack. Starting a program ADDS that program's own profile to
+  the parent's, so a confined program cannot shed confinement by starting a more
+  permissive one: the child is bound by both. Nothing ever removes an entry.
+* FAILS CLOSED: a profile that does not parse means the program does not start;
+  a stack entry that names nothing denies everything; a syscall number outside
+  the known range is denied; a full table or full stack refuses the exec.
+* `mode complain` logs what WOULD be denied and allows it, per profile, so one
+  complaining profile never weakens another on the same stack.
+* Only an unconfined root may write or delete a `*.MAC` file. `SYS_MAC_CTL(FREEZE)`
+  is one-way until reboot: afterwards no new or changed profile can load and no
+  policy file can be touched, even by root; profiles already loaded keep working.
+* Two syscalls: `SYS_MAC_INFO` (71; what confines me, and what was denied me)
+  and `SYS_MAC_CTL` (72; freeze, am-I-admin). ABI: `userland/libc/include/nova_mac_abi.h`.
+
+Rust is `kernel/rust/mac.rs`: a pure core (parser, matcher, evaluation, the
+profile table) tested on the host, behind a thin FFI layer that receives only
+kernel pointers. The C side is `kernel/security/mac.c`.
+
+### The parts with no margin for error
+
+* **Two kinds of check, because they have different hazards.** The SYSCALL gate
+  sees only a number, so it sits at the top of `syscall_handler()` (one load and
+  one compare for an unconfined process). Anything that depends on an ARGUMENT
+  (a file name, a peer, a program) is decided on a validated KERNEL COPY of that
+  argument, and the handler then USES that copy.
+* **The existing capability check had a time-of-check/time-of-use hole.**
+  `handle_open` read the user's filename to check it and read it AGAIN to store
+  it; with shared memory (Phase 83) another process could change the bytes in
+  between and pass the check with one name while opening another. Open, write,
+  delete, tftp and the whole exec path now copy the name once, validated byte by
+  byte, and use only the copy. That is a fix to the old model, not just new code.
+* **Exec decisions are made BEFORE a slot is claimed** (`mac_prepare_exec`),
+  because every failure after `allocate_slot()` leaks the slot (learned in
+  Phase 86). Because it runs first, `path` is shadowed with the kernel copy for
+  the rest of `process_exec_internal`, which uses it in seven places.
+* **A combined permission needs EVERY bit.** The first matcher treated a
+  read-and-write request as allowed if ANY requested bit was granted; found by
+  mutation testing (below), fixed so the requested bits must all be granted by
+  the union of the rules that match the name.
+* **Matching cannot be driven into exponential time**: an iterative glob with one
+  backtrack point, tested against a pattern built to blow up a naive matcher.
+* **Hostile arguments fail cleanly instead of faulting the kernel**: an over-long
+  name, NULL, a kernel address and a wild pointer to `open`/`write_file`/
+  `delete_file` return -1 (the old handlers dereferenced them raw, so a bad
+  pointer was a kernel fault).
+
+### Verification, and how far each piece can be trusted
+
+**Host (`make mac-test`): 28 tests.** The syscall-name table is checked against
+`kernel/arch/x86/cpu/syscall.h` by parsing the header, so adding a syscall
+without teaching the profiles fails the build. The glob matcher is compared with
+a naive recursive reference on 40,000 random cases. The parser takes 30,000
+random and mutated inputs and must never panic; anything it accepts must be
+well-formed. The strongest test is MODEL-BASED: 400 random profile sets (up to
+3 stacked) are RENDERED TO TEXT, loaded through the real parser, and 80,000
+random decisions are compared with an independent reference evaluator.
+
+**Fault injection, Rust engine: 44 injected bugs, all caught.** The first run of
+42 left 3 survivors, each informative: the combined-permission flaw above; a test
+that could not tell the denier's id from the trivial `-1` (profile ids were all 1);
+and the unconfined fast path, which should leave every counter untouched and had
+no assertion saying so. All three became tests and 3 further mutants of the fixed
+code are caught.
+
+**In-OS: `MACTEST.ELF` drives `MACJAIL.ELF`**, one binary installed under 12 names
+by `tools/build-disk-image.sh` (a profile binds to the program NAME). The jail
+runs as ROOT with its capability lists wide open (it is started with
+`sys_exec_trusted` from a process holding every capability), so everything it is
+refused is refused by its profile and nothing else. It sweeps every syscall number
+the profile does not list (48) plus 7 unknown numbers, files, peers and programs
+off its list, forked children and hostile pointers: exactly 72 refusals, each
+checked against the kernel's own counters (kind AND argument), not just `-1`.
+Also: a permissive child started BY the jail is still bound by the jail; the same
+program alone can open `SECRET.TXT`; a confined root is never the administrator;
+a permissive profile gives nothing to a program with no capabilities, and MAC
+counts no denial for the capability model's refusal; complain mode allows and
+counts complaints (an open counts twice: the syscall and the file); an
+unparseable profile never starts and loads nothing; a chain of programs is
+stopped at the 4th profile (the 5th refused with `E2BIG`); and after the freeze
+policy files are untouchable even by root, a never-loaded profile is refused, and
+the whole jail battery still passes.
+
+`make test`: 179/179 on the working tree and on a fresh clone of upstream with
+the patch applied. `make test-3d` (a real virglrenderer, on the fresh clone): 188/188 on the first
+attempt, including all 10 of this phase's assertions and the global no-panic
+scan. It was run once.
+
+**Fault injection, kernel side: 13 injected bugs, one real boot each: 12 caught, 1 survived.**
+
+| Injected bug | What the in-OS test saw |
+|---|---|
+| the syscall gate counts a denial but does not deny | the sweep's raw calls RAN: `spawn` returned a real pid, `beep` succeeded |
+| a started program's profile stack is not applied | the jail found itself under 0 profiles |
+| the exec stack forgets the PARENT's profile | the jail's child ESCAPED: under only `MACKID`, `beep` succeeded |
+| a forked child is not confined | the forked child beeped freely |
+| anyone may write policy files | a non-root user wrote and deleted them |
+| the freeze is ignored for policy files | root wrote one after the freeze |
+| a confined root is treated as the administrator | it really wrote and deleted a policy file |
+| the spawner's own exec rules are ignored | the jail started `HELLO.ELF` |
+| `sendto` is not checked | two refused sends went uncounted (70 of 72) |
+| `bind` is not checked | a refused bind went uncounted (71 of 72) |
+| `open` is not checked against the profile | the confined root opened `SECRET.TXT` and even its OWN policy file |
+| names are not validated before use | a kernel address passed as a filename faulted the KERNEL (page fault at 0xC0000000, panic) |
+| a recycled slot keeps a stale stack | **SURVIVED** - see below |
+
+The stacking and fork cases are the important ones: with those bugs the
+confinement the design promises genuinely does not hold, and the tests see it.
+
+**SURVIVED: a stale profile stack in a recycled process slot.** Removing the
+`mac_reset()` from `allocate_slot()` changes nothing any test can see, because
+every creation path the tests can reach (`fork`, exec) resets the stack
+explicitly. It is the safety net for the paths the tests cannot reach or
+inspect: a kernel-created task that reuses the slot of a confined process that
+has exited would start confined by a profile that is not its own (the same class
+of bug as Phase 86's stale throttle flag). It is a real, unclosed test gap.
+
+NOT RUN: the connect and tftp checks have no mutant, and the mutant drafted for
+"an unparseable profile starts unconfined" did not compile as written and was
+never run.
+
+### Things learned that are not obvious
+
+* `sys_exec()` in this libc does NOT call `SYS_EXEC` (9): it calls `SYS_EXEC_ENV`
+  (42), and `sys_exec_trusted()` calls `SYS_EXEC_TRUSTED_ENV` (43) (Phase 73). A
+  profile that lists `exec` but not `exec_env` denies every program start at the
+  syscall gate before the exec rules are even consulted. The test caught it on
+  the first boot; real profiles must list the `_env` forms.
+* The built-in demo tasks are ring-3 tasks whose code and strings live INSIDE the
+  kernel image. `paging_user_range_ok()` rejects exactly that region (it is the
+  kernel's shared identity map), so the strict validated copy refused every
+  `exec` they made. They are marked (`mac_embedded`, set where they are created)
+  and read raw as before; every program loaded from a file is validated strictly.
+* `vfs_read_file()` returns -1 both for "not found" and "not mounted", so a
+  profile that cannot be read is indistinguishable from no profile.
+* Boot time of `make test` is thin against its 240 s ceiling (197 s for the Phase
+  86 tree today, up from 145-179 s earlier the same day on this single-core
+  host); this phase adds about 10 s (`MACTEST` measures itself). An attempted
+  speed-up (remembering programs with no profile file) made no difference, so
+  it was removed again.
+
+### Mistakes of mine worth recording
+
+* I wrote two checks that could not fail (`... || 1`) and a "too long name" test
+  whose literal was 59 characters (under the 64 limit), so it never exercised the
+  path. Found on re-reading, removed, and replaced by real hostile inputs.
+* I asserted "well over 100 denials" without counting. The jail makes exactly 72.
+* I expected a file open in complain mode to count as one complaint; it counts two.
+* A boot-hook variable collided with one the messaging test already declares.
+* My first boot broke every `exec` from the old demo tasks (above). The first
+  version of the check did not know the kernel's own fixtures use kernel pointers.
+* A `sed` over a build script garbled its header comment.
+* The kernel fault-injection harness restores the SOURCE after each run but
+  leaves the last mutant's BINARIES in the working tree; and with the gate
+  broken, the sweep really executes syscalls (it spawned a process). Rebuild
+  before trusting a tree the harness has touched.
+* A speculative optimisation (the negative-lookup memory) cost a build and a full
+  suite run to refute, and was removed.
+
+### Known limits
+
+* An UNREADABLE profile is the same as NO profile (see above): the program runs
+  unconfined. Protecting the policy files is what stops anyone deleting one, but
+  a read failure at the wrong moment fails open. A "require a profile" mode would
+  close it.
+* Only `open`, `write_file`, `delete_file`, `tftp_fetch`, `connect`, `bind`,
+  `sendto` and program starts have ARGUMENT-level rules. Everything else (ping,
+  DNS, `net_send`, message service names, shared-memory grants, framebuffer ...)
+  is controlled only at the syscall level: allowed or not, with no say over which.
+* Other handlers still dereference raw user pointers for their non-name
+  arguments (data buffers, structs), as before; only the names MAC decides on are
+  copied and validated.
+* Profiles bind to the program NAME, not its path or content; a program copied
+  under another name gets that name's profile (or none).
+* The table holds 32 profiles and never unloads one; a changed file takes a new
+  slot and a full table refuses the exec.
+* The trusted in-kernel shell can write `*.MAC` files without MAC checks (it is
+  the TCB, and the operator's own hands).
+* Tested only on QEMU, 2 vCPUs, on a host with a single core.
+
+## Phase 88 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

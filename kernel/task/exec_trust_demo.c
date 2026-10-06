@@ -345,6 +345,25 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: RLIMTEST.ELF - the resource limits "
                     "conformance suite did not pass.\n");
 
+    /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
+     * and policy administrator; it starts MACJAIL.ELF (and its other names),
+     * each confined by its own NAME.MAC profile, and checks what the kernel
+     * did to them: a root process with every capability refused each syscall,
+     * file, peer and program its profile does not list; no escape by exec;
+     * fails closed; the profile-stack limit; and last the one-way freeze. It
+     * is started TRUSTED so it inherits this task's capabilities to delegate
+     * them to the jail - the whole point is that the jail has every
+     * capability and only the profile holds it. It runs LAST: the freeze at
+     * its end cannot be undone until reboot. */
+    static const char* const mac_all[] = {"MACTEST.ELF"};
+    int pid_mac = sys_exec_trusted("MACTEST.ELF", (char**)mac_all, 1);
+    int code_mac = (pid_mac >= 0) ? sys_wait(pid_mac) : -1;
+    sys_write(pid_mac >= 0 && code_mac == 0
+                  ? "[sandbox] PASS: MACTEST.ELF (mandatory access control "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: MACTEST.ELF - the mandatory access "
+                    "control conformance suite did not pass.\n");
+
     sys_exit(0);
 
     for (;;) { }

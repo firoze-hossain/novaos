@@ -430,6 +430,14 @@ audio-test:
 rlimit-test:
 	@sh tools/tests/run_rlimit_tests.sh
 
+# Phase 87: mandatory access control. `mac-test` runs the Rust policy engine
+# (kernel/rust/mac.rs) on the host: the profile parser, the pattern matcher, the
+# evaluation of a profile stack, complain mode, failing closed, the profile
+# table, and a model-based test against an independent reference. No QEMU; a few
+# seconds. The in-OS conformance test is MACTEST.ELF, part of `make test`.
+mac-test:
+	@sh tools/tests/run_mac_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -530,4 +538,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test clean setup check-prereqs help install-image test-custom-boot

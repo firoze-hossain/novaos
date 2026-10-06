@@ -1,0 +1,17 @@
+# MACJAIL - a deliberately tight profile for the in-OS conformance test
+# (userland/macjail, driven by userland/mactest). The test program runs as
+# ROOT with its capability lists wide open, so everything it is refused below is
+# refused by THIS file and nothing else.
+mode enforce
+allow syscall write yield sbrk open read close getuid rtc_read pipe
+allow syscall fork wait wait_nonblock
+# libc's sys_exec()/sys_exec_trusted() call the _env forms (Phase 73), so a program
+# that starts others needs THOSE listed; exec and exec_trusted are listed too.
+allow syscall exec exec_trusted exec_env exec_trusted_env
+allow syscall write_file delete_file
+allow syscall socket_udp sendto bind connect
+allow file r JAIL.TXT *.LOG
+allow file rw JAILOUT.TXT
+allow exec MACKID.ELF
+allow net s 10.0.2.2:9
+allow net b *:7000

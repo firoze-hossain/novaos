@@ -1,0 +1,8 @@
+# MACKID - a PERMISSIVE profile. On its own it allows everything; started by the
+# jail, the child is bound by this AND the jail's, so none of this widens what
+# the jail allows. That is the point of the test.
+mode enforce
+allow syscall *
+allow file rwd *
+allow exec *
+allow net cbs *:*

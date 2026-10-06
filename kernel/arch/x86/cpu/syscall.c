@@ -39,6 +39,8 @@
 #include "../../ipc/msg.h"
 #include "../../drivers/sound/audio.h"
 #include "../../task/rlimit.h"
+#include "../../security/mac.h"
+#include "../../../userland/libc/include/nova_mac_abi.h"
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -202,7 +204,21 @@ void syscall_init(void) {
 
 static void handle_open(registers_t* regs) {
     process_t* p = process_current();
-    const char* filename = (const char*)regs->ebx;
+    const char* user_filename = (const char*)regs->ebx;
+    /* Phase 87: ONE validated kernel copy of the name. The capability check and
+     * the stored name used to read the user's string separately - with shared
+     * memory another process could change it in between, passing the check
+     * with one name and opening another. */
+    char kname[MAC_NAME_MAX];
+    if (p == NULL || !mac_copy_name(p, kname, sizeof kname, user_filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    const char* filename = kname;
+    if (!mac_file_allowed(p, filename, MAC_FILE_READ)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (p == NULL || !process_has_capability(p, filename)) {
         kernel_log("[SECURITY] pid %d denied SYS_OPEN('%s') - not in its "
@@ -719,7 +735,18 @@ static void handle_beep(registers_t* regs) {
 
 static void handle_write_file(registers_t* regs) {
     process_t* p = process_current();
-    const char* filename = (const char*)regs->ebx;
+    const char* user_filename = (const char*)regs->ebx;
+    char kname[MAC_NAME_MAX]; /* Phase 87: see handle_open() */
+    if (p == NULL || !mac_copy_name(p, kname, sizeof kname, user_filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    const char* filename = kname;
+    if (!mac_file_allowed(p, filename, MAC_FILE_WRITE) ||
+        !mac_policy_write_allowed(p, filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     const void* data = (const void*)regs->ecx;
     uint32_t size = regs->edx;
 
@@ -736,7 +763,18 @@ static void handle_write_file(registers_t* regs) {
 
 static void handle_delete_file(registers_t* regs) {
     process_t* p = process_current();
-    const char* filename = (const char*)regs->ebx;
+    const char* user_filename = (const char*)regs->ebx;
+    char kname[MAC_NAME_MAX]; /* Phase 87: see handle_open() */
+    if (p == NULL || !mac_copy_name(p, kname, sizeof kname, user_filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    const char* filename = kname;
+    if (!mac_file_allowed(p, filename, MAC_FILE_DELETE) ||
+        !mac_policy_write_allowed(p, filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (p == NULL || !p->can_open_any_file) {
         kernel_log("[SECURITY] pid %d denied SYS_DELETE_FILE('%s') - "
@@ -936,6 +974,17 @@ AUDIO_HANDLER(handle_audio_close, audio_sys_close)
 /* Phase 86: resource limits. Any process may call it for itself (tightening
  * only, unless root); touching another process is root-only - all decided in
  * rlimit_sys() from the kernel's own record of the caller's uid. */
+/* Phase 87: mandatory access control. SYS_MAC_INFO says what confines the
+ * caller and what has been denied; SYS_MAC_CTL is the administrator's call
+ * (an unconfined root only - decided in mac_sys_ctl()). */
+static void handle_mac_info(registers_t* regs) {
+    regs->eax = (uint32_t)mac_sys_info(regs->ebx);
+}
+
+static void handle_mac_ctl(registers_t* regs) {
+    regs->eax = (uint32_t)mac_sys_ctl(regs->ebx, regs->ecx);
+}
+
 static void handle_rlimit(registers_t* regs) {
     process_t* p = process_current();
     regs->eax = (p == NULL || !p->is_user)
@@ -1183,7 +1232,19 @@ static void handle_tftp_fetch(registers_t* regs) {
     process_t* p = process_current();
     uint32_t server_ip = regs->ebx;
     const char* remote_filename = (const char*)regs->ecx;
-    const char* local_filename = (const char*)regs->edx;
+    const char* user_local_filename = (const char*)regs->edx;
+    char klocal[MAC_NAME_MAX]; /* Phase 87: see handle_open() */
+    if (p == NULL || !mac_copy_name(p, klocal, sizeof klocal, user_local_filename)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    const char* local_filename = klocal;
+    if (!mac_file_allowed(p, local_filename, MAC_FILE_WRITE) ||
+        !mac_policy_write_allowed(p, local_filename) ||
+        !mac_net_allowed(p, MAC_NET_SEND, server_ip, 69)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (p == NULL || !p->can_open_any_file) {
         kernel_log("[SECURITY] pid %d denied SYS_TFTP_FETCH('%s' -> '%s') - "
@@ -1395,6 +1456,10 @@ static void handle_bind(registers_t* regs) {
         regs->eax = (uint32_t)-1;
         return;
     }
+    if (!mac_net_allowed(process_current(), MAC_NET_BIND, 0, (uint16_t)regs->ecx)) { /* Phase 87 */
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     if (kind == OPEN_KIND_UDP_SOCKET) {
         regs->eax = (uint32_t)rust_udp_bind(conn_id, (uint16_t)regs->ecx);
     } else {
@@ -1434,6 +1499,10 @@ static void handle_connect(registers_t* regs) {
     process_t* p = process_current();
     uint32_t dest_ip = regs->ecx;
     uint16_t dest_port = (uint16_t)regs->edx;
+    if (!mac_net_allowed(p, MAC_NET_CONNECT, dest_ip, dest_port)) { /* Phase 87 */
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     if (kind == OPEN_KIND_UDP_SOCKET) {
         /* Phase 78: records a fixed peer - no handshake, no capability
          * gate (see kernel/rust/udp.rs's own top comment for exactly
@@ -1547,6 +1616,10 @@ static void handle_sendto(registers_t* regs) {
     uint32_t len = regs->esi;
     uint32_t dest_ip = addr->ip;
     uint16_t dest_port = addr->port;
+    if (!mac_net_allowed(p, MAC_NET_SEND, dest_ip, dest_port)) { /* Phase 87 */
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     int sent = rust_udp_sendto(sock_id, buf, len, dest_ip, dest_port);
     kernel_log("[SYSCALL] pid %d SYS_SENDTO handle %d -> %d.%d.%d.%d:%d "
                "(%d bytes) -> %s\n", p != NULL ? p->pid : -1, (int)regs->ebx,
@@ -1585,6 +1658,15 @@ static void handle_recvfrom(registers_t* regs) {
 }
 
 void syscall_handler(registers_t* regs) {
+    /* Phase 87: the mandatory access control gate. Every syscall of a confined
+     * process is checked against its profiles BEFORE the handler runs; a
+     * process with no profile costs one load and one compare. Argument-aware
+     * rules (which file, which peer, which program) are checked inside the
+     * handlers that have a kernel copy of the argument. */
+    if (mac_gate_syscall(regs->eax)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     switch (regs->eax) {
         case SYS_WRITE: {
             const char* str = (const char*)regs->ebx;
@@ -1841,6 +1923,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_RLIMIT:
             handle_rlimit(regs);
+            break;
+
+        case SYS_MAC_INFO:
+            handle_mac_info(regs);
+            break;
+
+        case SYS_MAC_CTL:
+            handle_mac_ctl(regs);
             break;
 
         case SYS_FB_INFO:

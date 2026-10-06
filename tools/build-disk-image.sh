@@ -62,7 +62,7 @@ TOTAL_MB=$((1 + PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))  # +1MiB
 # --- Partition 1: FAT32, exactly the same fixtures as before ---
 dd if=/dev/zero of="$TMP/part1.img" bs=1M count=$PART1_MB status=none
 mformat -i "$TMP/part1.img" -F ::
-for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF; do
+for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT LS.ELF ECHO.ELF CP.ELF RM.ELF; do
     # Phase 59: LS.ELF/ECHO.ELF/CP.ELF/RM.ELF come from userland/
     # coreutils-rs/build.sh, built against the project's own bare-metal
     # Rust sysroot (tools/rust-sysroot/) - not every environment that
@@ -76,6 +76,23 @@ for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG HELLO.E
         continue
     fi
     mcopy -i "$TMP/part1.img" "$FIXTURES/$f" "::$f"
+done
+
+# Phase 87: mandatory access control. A profile is bound to the program NAME
+# (NAME.MAC beside NAME.ELF), and the conformance test needs several programs
+# with different profiles, so ONE test binary (MACJAIL.ELF, whose mode comes
+# from argv) is installed under each name. The profiles are in
+# tools/fixtures/mac/. MACFRZ has no profile on the image: the test writes it
+# at run time, before it freezes the policy.
+if [ -f "$FIXTURES/MACJAIL.ELF" ]; then
+    for n in MACJAIL MACKID MACCOMP MACLITE MACBAD MACD1 MACD2 MACD3 MACD4 MACD5 MACFRZ MACLATE; do
+        mcopy -i "$TMP/part1.img" "$FIXTURES/MACJAIL.ELF" "::$n.ELF"
+    done
+else
+    echo "warning: MACJAIL.ELF not found in $FIXTURES - the MAC conformance test will not run (run userland/macjail/build.sh)" >&2
+fi
+for f in "$FIXTURES"/mac/*.MAC; do
+    [ -f "$f" ] && mcopy -i "$TMP/part1.img" "$f" "::$(basename "$f")"
 done
 
 # --- Partition 2: a real ext2 filesystem, populated via debugfs (no

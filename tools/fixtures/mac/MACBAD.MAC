@@ -1,0 +1,2 @@
+allow syscall write
+allow syscall frobnicate
