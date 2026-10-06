@@ -175,6 +175,7 @@ static process_t* allocate_slot(void) {
             p->state = PROCESS_ALLOCATING;
             rl_reset(&p->rl);
             mac_reset(p);
+            p->bsp_only = false; /* slots are recycled: never inherit a stale pin */
             spinlock_release(&process_table_lock, flags);
             return p;
         }
@@ -210,6 +211,7 @@ static process_t* allocate_slot(void) {
     p->state = PROCESS_ALLOCATING;
     rl_reset(&p->rl);
     mac_reset(p);
+    p->bsp_only = false; /* slots are recycled: never inherit a stale pin */
     spinlock_release(&process_table_lock, flags);
     return p;
 }
@@ -238,6 +240,17 @@ static void process_publish(process_t* p) {
     __asm__ volatile ("" ::: "memory");
     p->state = PROCESS_READY;
     scheduler_add(p);
+}
+
+/* Set by process_create_kernel_task_bsp_only() for the one call it makes (it
+ * runs on the BSP before any other CPU creates processes). */
+static bool create_next_bsp_only;
+
+int process_create_kernel_task_bsp_only(const char* name, void (*entry)(void)) {
+    create_next_bsp_only = true;
+    int pid = process_create_kernel_task(name, entry);
+    create_next_bsp_only = false;
+    return pid;
 }
 
 int process_create_kernel_task(const char* name, void (*entry)(void)) {
@@ -281,6 +294,13 @@ int process_create_kernel_task(const char* name, void (*entry)(void)) {
                    internal, never the result of a login */
     p->gid = 0;
 
+    /* A second CPU spins in scheduler_ap_join() from boot, taking any READY
+     * process that is not pinned. Pinning AFTER publishing (as this used to be
+     * done for idle, via process_pin_to_bsp()) leaves a window in which it can
+     * take the idle task - whose hlt loop then runs on a CPU nothing can wake,
+     * and the BSP is left with no idle. Set before the task is visible. */
+    p->bsp_only = create_next_bsp_only;
+    create_next_bsp_only = false;
     process_publish(p);
     return p->pid;
 }
