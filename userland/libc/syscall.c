@@ -496,3 +496,17 @@ int sys_audio_close(const nova_audio_close_t* req) {
 int sys_rlimit(nova_rlimit_t* req) {
     return fb_call1(NOVA_SYS_RLIMIT, (unsigned int)req);
 }
+
+/* Phase 87: mandatory access control. */
+int sys_mac_info(nova_mac_info_t* out) {
+    return fb_call1(NOVA_SYS_MAC_INFO, (unsigned int)out);
+}
+
+int sys_mac_ctl(unsigned int op, unsigned int arg) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(NOVA_SYS_MAC_CTL), "b"(op), "c"(arg)
+                      : "memory");
+    return r;
+}

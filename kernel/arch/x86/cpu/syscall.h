@@ -624,6 +624,14 @@
  * rlimit_policy.c and the enforcement kernel/task/rlimit.c. */
 #define SYS_RLIMIT      70
 
+/* Phase 87: mandatory access control - the per-app profile layer that sits
+ * beside the capability lists. SYS_MAC_INFO says what confines the caller (and
+ * what has been denied); SYS_MAC_CTL is the administrator's interface (an
+ * unconfined root only). Contract: userland/libc/include/nova_mac_abi.h;
+ * engine: kernel/rust/mac.rs; enforcement points: kernel/security/mac.c. */
+#define SYS_MAC_INFO    71
+#define SYS_MAC_CTL     72
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

@@ -1,0 +1,3 @@
+# MACCOMP - complain mode: what the profile does not list is LOGGED and ALLOWED.
+mode complain
+allow syscall write yield getuid

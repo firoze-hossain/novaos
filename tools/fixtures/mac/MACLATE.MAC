@@ -1,0 +1,2 @@
+# MACLATE - never started before the policy is frozen, so it can never be loaded after
+allow syscall *

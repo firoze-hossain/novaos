@@ -1,0 +1,6 @@
+# MACLITE - allows everything. Started WITHOUT capabilities, to show that MAC
+# never grants what the capability model refuses.
+mode enforce
+allow syscall *
+allow file rwd *
+allow exec *

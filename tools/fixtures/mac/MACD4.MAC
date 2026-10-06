@@ -1,0 +1,3 @@
+# MACD4 - one link of the chain that tests the profile-stack limit
+allow syscall *
+allow exec MACD?.ELF

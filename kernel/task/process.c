@@ -174,6 +174,7 @@ static process_t* allocate_slot(void) {
             p->pid = next_pid++;
             p->state = PROCESS_ALLOCATING;
             rl_reset(&p->rl);
+            mac_reset(p);
             spinlock_release(&process_table_lock, flags);
             return p;
         }
@@ -208,6 +209,7 @@ static process_t* allocate_slot(void) {
     p->pid = next_pid++;
     p->state = PROCESS_ALLOCATING;
     rl_reset(&p->rl);
+    mac_reset(p);
     spinlock_release(&process_table_lock, flags);
     return p;
 }
@@ -361,6 +363,7 @@ static process_t* create_user_task_common(const char* name,
     p->exit_code = 0;
     p->heap_current = HEAP_VIRT_BASE;
     p->heap_mapped_end = HEAP_VIRT_BASE;
+    p->mac_embedded = true; /* Phase 87: see process.h */
     p->uid = 0; /* kernel-created tasks (this function backs both
                    process_create_user_task() and
                    process_create_sandboxed_task(), both only ever
@@ -1463,6 +1466,18 @@ static int process_exec_internal(const char* path, const char** argv,
         argc = MAX_EXEC_ARGS;
     }
 
+    /* Phase 87: mandatory access control, decided BEFORE any slot is claimed
+     * (a refusal after allocate_slot() would leak it). The path is copied once,
+     * validated, into the kernel, and EVERY later use of `path` in this
+     * function is of that copy: checking the caller's string and re-reading it
+     * is a time-of-check/time-of-use hole once memory can be shared. */
+    char mac_path[64];
+    mac_stack_t mac_stack;
+    if (!mac_prepare_exec(process_current(), path, mac_path, sizeof mac_path, &mac_stack)) {
+        return -1;
+    }
+    path = mac_path;
+
     /* Phase 86: the process-count limit. Refused HERE, before allocate_slot():
      * every failure after a slot is claimed leaks it, and a fork bomb that
      * leaked a slot per refusal would drain the process table by being
@@ -1759,6 +1774,7 @@ static int process_exec_internal(const char* path, const char** argv,
         }
     }
 
+    mac_apply_stack(p, &mac_stack); /* Phase 87: its profiles */
     kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
                "%d arg(s)\n", path, p->pid, entry_point, argc);
 
@@ -2201,6 +2217,7 @@ int process_fork(registers_t* parent_regs) {
                                   own inheritance, see process.h's own
                                   comment on process_t's uid/gid */
     child->gid = parent->gid;
+    mac_inherit_fork(child, parent); /* Phase 87: same domain */
     if (!rlimit_commit_spawn(child, parent)) { /* Phase 86 */
         kernel_log("[ .. ] rlimit: pid %d '%s' lost a race for the last "
                    "place in its process quota\n", parent->pid, parent->name);
