@@ -37,4 +37,11 @@ void timer_sleep_ms(uint32_t ms);
  * a second caller ever needs one. */
 void timer_set_tick_hook(void (*hook)(void));
 
+/* Phase 85: additional per-tick callbacks. The single tick hook above is the
+ * scheduler's; the audio mixer needs a 10ms tick of its own to keep the
+ * sound card's DMA ring fed, and it must not replace the scheduler's. A
+ * listener runs from the timer interrupt, EVERY tick, so it must be short
+ * and must not block. Returns false if the (small, fixed) table is full. */
+bool timer_add_tick_listener(void (*fn)(void));
+
 #endif

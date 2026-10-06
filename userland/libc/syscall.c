@@ -472,3 +472,21 @@ int sys_msg_service(nova_msg_service_t* req) {
 int sys_msg_ctl(nova_msg_ctl_t* req) {
     return fb_call1(NOVA_SYS_MSG_CTL, (unsigned int)req);
 }
+
+/* Phase 85: audio wrappers. Same one-argument int 0x80 shape as the
+ * framebuffer, shared-memory and messaging calls above. */
+int sys_audio_open(nova_audio_open_t* req) {
+    return fb_call1(NOVA_SYS_AUDIO_OPEN, (unsigned int)req);
+}
+
+int sys_audio_write(nova_audio_write_t* req) {
+    return fb_call1(NOVA_SYS_AUDIO_WRITE, (unsigned int)req);
+}
+
+int sys_audio_ctl(nova_audio_ctl_t* req) {
+    return fb_call1(NOVA_SYS_AUDIO_CTL, (unsigned int)req);
+}
+
+int sys_audio_close(const nova_audio_close_t* req) {
+    return fb_call1(NOVA_SYS_AUDIO_CLOSE, (unsigned int)req);
+}

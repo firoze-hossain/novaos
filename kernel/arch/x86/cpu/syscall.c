@@ -37,6 +37,7 @@
 #include "../../drivers/video/fb.h"
 #include "../../ipc/shm.h"
 #include "../../ipc/msg.h"
+#include "../../drivers/sound/audio.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
@@ -911,6 +912,24 @@ MSG_HANDLER(handle_msg_send, msg_sys_send)
 MSG_HANDLER(handle_msg_recv, msg_sys_recv)
 MSG_HANDLER(handle_msg_service, msg_sys_service)
 MSG_HANDLER(handle_msg_ctl, msg_sys_ctl)
+
+/* Phase 85: audio. Same shape as the handlers above. No capability gate: a
+ * stream belongs to its opener and nothing about it is visible to anyone
+ * else; the two controls that affect or expose EVERYONE's sound (the master
+ * volume and the tap) are gated on the caller's uid inside audio_sys_ctl(),
+ * using the kernel's own record of it. */
+#define AUDIO_HANDLER(NAME, CALL)                                            \
+    static void NAME(registers_t* regs) {                                    \
+        process_t* p = process_current();                                    \
+        regs->eax = (p == NULL || !p->is_user)                               \
+                        ? (uint32_t)-NOVA_AUDIO_ERR_PERM                     \
+                        : (uint32_t)CALL(p->pid, regs->ebx);                 \
+    }
+
+AUDIO_HANDLER(handle_audio_open, audio_sys_open)
+AUDIO_HANDLER(handle_audio_write, audio_sys_write)
+AUDIO_HANDLER(handle_audio_ctl, audio_sys_ctl)
+AUDIO_HANDLER(handle_audio_close, audio_sys_close)
 
 static void handle_fb_readback(registers_t* regs) {
     process_t* p = process_current();
@@ -1790,6 +1809,22 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_MSG_CTL:
             handle_msg_ctl(regs);
+            break;
+
+        case SYS_AUDIO_OPEN:
+            handle_audio_open(regs);
+            break;
+
+        case SYS_AUDIO_WRITE:
+            handle_audio_write(regs);
+            break;
+
+        case SYS_AUDIO_CTL:
+            handle_audio_ctl(regs);
+            break;
+
+        case SYS_AUDIO_CLOSE:
+            handle_audio_close(regs);
             break;
 
         case SYS_FB_INFO:

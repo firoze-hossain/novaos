@@ -7,6 +7,7 @@
 #include "../../lib/string.h"
 #include "../../include/kernel.h"
 #include "../driver.h"
+#include "audio.h"
 
 DRIVER_REGISTER("AC97 audio", ac97_init, DRIVER_PHASE_AFTER_PCI);
 
@@ -57,8 +58,16 @@ static bool present = false;
 static uint16_t nam_base = 0;
 static uint16_t nabm_base = 0;
 
-static int16_t tone_buffer[TONE_WORDS] __attribute__((aligned(4)));
-static buffer_descriptor_t bdl[1] __attribute__((aligned(8)));
+/* Phase 85: the PCM-out DMA RING the audio mixer (kernel/rust/mixer.rs)
+ * streams into. The AC97 buffer descriptor list has exactly 32 entries; each
+ * points at one 10ms period (480 stereo frames = 960 16-bit words). Static
+ * buffers in the identity-mapped low memory, valid for DMA for the same
+ * reason the RTL8139's are (see rtl8139.h). */
+#define RING_PERIODS      32
+#define RING_PERIOD_WORDS 960
+#define SR_DCH            0x0001 /* DMA controller halted */
+static int16_t ring_buf[RING_PERIODS][RING_PERIOD_WORDS] __attribute__((aligned(4096)));
+static buffer_descriptor_t bdl_ring[RING_PERIODS] __attribute__((aligned(8)));
 
 typedef struct {
     bool found;
@@ -95,33 +104,6 @@ static void enable_bus_mastering(uint8_t bus, uint8_t device,
     outl(0xCFC, command);
 }
 
-static void generate_square_wave(void) {
-    /* Integer-only square wave (no FPU/floating point dependency this
-     * kernel hasn't set up) - alternates between +/-amplitude every
-     * half-period, computed directly from the sample rate and target
-     * frequency rather than needing a sine table. */
-    uint32_t half_period_frames = SAMPLE_RATE / TONE_HZ / 2;
-    if (half_period_frames == 0) {
-        half_period_frames = 1;
-    }
-
-    const int16_t amplitude = 8000; /* comfortably below int16 max,
-                                        avoids clipping */
-    bool high = true;
-    uint32_t frames_in_this_half = 0;
-
-    for (uint32_t frame = 0; frame < TONE_FRAMES; frame++) {
-        int16_t sample = high ? amplitude : (int16_t)(-amplitude);
-        tone_buffer[frame * 2] = sample;     /* left */
-        tone_buffer[frame * 2 + 1] = sample; /* right */
-
-        frames_in_this_half++;
-        if (frames_in_this_half >= half_period_frames) {
-            high = !high;
-            frames_in_this_half = 0;
-        }
-    }
-}
 
 void ac97_init(void) {
     present = false;
@@ -168,50 +150,78 @@ bool ac97_is_present(void) {
     return present;
 }
 
+/* Phase 85: SYS_BEEP no longer takes over the card. It adds a built-in tone
+ * voice to the audio mixer (kernel/rust/mixer.rs), so a beep sounds
+ * TOGETHER with whatever else is playing instead of cutting it off. Same
+ * tone as before (440Hz, 0.3s, 14400 frames) and the same log line. */
 bool ac97_beep(void) {
     if (!present) {
         return false;
     }
+    if (!rust_audio_beep()) {
+        return false;
+    }
+    kernel_log("[ OK ] AC97 beep: playing a %dHz tone (%d frames, %dHz "
+               "sample rate)\n", (int)TONE_HZ, (int)TONE_FRAMES,
+               (int)SAMPLE_RATE);
+    return true;
+}
 
-    generate_square_wave();
+/* ---- the streaming ring (driven by kernel/rust/mixer.rs's pump) ---- */
 
-    /* Stop and reset the PCM OUT engine before setting up a new play.
-     * Found the hard way: without this, a second call to ac97_beep()
-     * after a previous one had already finished playing produced no
-     * audible output at all, even though the function ran and logged
-     * normally - the card's internal state (CIV and friends) was left
-     * wherever the first playback's completion left it, and simply
-     * rewriting BDBAR/LVI/CR without resetting first wasn't enough to
-     * make it recognize a genuinely new play request. Writing RR
-     * (Reset Registers) restores the channel to its post-reset
-     * defaults; a stopped state (RPBM=0) is required before setting
-     * RR, so this clears RPBM first rather than assuming it's already
-     * clear. */
+int ac97_ring_present(void) {
+    return present ? 1 : 0;
+}
+
+int16_t* ac97_ring_period(uint32_t idx) {
+    if (idx >= RING_PERIODS) {
+        return NULL;
+    }
+    return ring_buf[idx];
+}
+
+/* Resets the PCM-out engine, points it at the ring, sets the last valid
+ * index and starts it at descriptor 0. */
+void ac97_ring_start(uint32_t lvi) {
+    if (!present) {
+        return;
+    }
     outb((uint16_t)(nabm_base + NABM_PO_CR), 0x00);
     outb((uint16_t)(nabm_base + NABM_PO_CR), CR_RR);
     uint32_t spins = 0;
     while (inb((uint16_t)(nabm_base + NABM_PO_CR)) & CR_RR) {
         if (++spins > 100000u) {
-            break; /* proceed anyway - see the poll-based sends elsewhere
-                       in this tree for the same "don't hang forever"
-                       philosophy */
+            break; /* proceed anyway: never hang the tick */
         }
     }
-
-    bdl[0].buffer_phys = (uint32_t)tone_buffer;
-    /* Length is in words (16-bit samples), not bytes or frames - a
-     * stereo frame is 2 words. bit31 (IOC) left clear: this driver
-     * polls PICB for progress rather than using the completion
-     * interrupt, matching the polling style of every other driver in
-     * this tree. */
-    bdl[0].control_and_length = TONE_WORDS & 0xFFFFu;
-
-    outl((uint16_t)(nabm_base + NABM_PO_BDBAR), (uint32_t)bdl);
-    outb((uint16_t)(nabm_base + NABM_PO_LVI), 0); /* one valid entry: index 0 */
+    for (uint32_t i = 0; i < RING_PERIODS; i++) {
+        bdl_ring[i].buffer_phys = (uint32_t)ring_buf[i];
+        bdl_ring[i].control_and_length = RING_PERIOD_WORDS & 0xFFFFu;
+    }
+    outl((uint16_t)(nabm_base + NABM_PO_BDBAR), (uint32_t)bdl_ring);
+    outb((uint16_t)(nabm_base + NABM_PO_LVI), (uint8_t)(lvi & 0x1F));
     outb((uint16_t)(nabm_base + NABM_PO_CR), CR_RPBM);
+}
 
-    kernel_log("[ OK ] AC97 beep: playing a %dHz tone (%d frames, %dHz "
-               "sample rate)\n", (int)TONE_HZ, (int)TONE_FRAMES,
-               (int)SAMPLE_RATE);
-    return true;
+void ac97_ring_stop(void) {
+    if (present) {
+        outb((uint16_t)(nabm_base + NABM_PO_CR), 0x00);
+    }
+}
+
+uint32_t ac97_ring_civ(void) {
+    return present ? (uint32_t)(inb((uint16_t)(nabm_base + NABM_PO_CIV)) & 0x1F) : 0;
+}
+
+int ac97_ring_running(void) {
+    if (!present) {
+        return 0;
+    }
+    return (inw((uint16_t)(nabm_base + NABM_PO_SR)) & SR_DCH) ? 0 : 1;
+}
+
+void ac97_ring_set_lvi(uint32_t idx) {
+    if (present) {
+        outb((uint16_t)(nabm_base + NABM_PO_LVI), (uint8_t)(idx & 0x1F));
+    }
 }

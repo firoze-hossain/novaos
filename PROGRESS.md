@@ -10153,7 +10153,216 @@ removal need a different structure.**
   sender cannot tell that a receiver exited with its message still queued).
 * Verified on QEMU/TCG with two vCPUs only.
 
-## Phase 85 and beyond
+## Phase 85: audio mixing, so several apps share one output (SYS_AUDIO_*), in Rust
+
+**Status: done and verified. Four levels: `make audio-test` (24 Rust host
+tests against a simulated AC97 engine, no QEMU, a few seconds), `make test`
+(159 assertions; the 10 new ones are this phase's), the in-OS conformance
+program `AUDTEST.ELF` (149 checks across 7 groups, with forked peers playing
+at the same time), and a recording of what the emulated sound card's DAC
+actually played. It is the roadmap's "audio mixing support so multiple apps
+can share one output": several programs play through the card's single PCM
+output at once, instead of the last caller owning the device.**
+
+### What was there, and what this adds
+
+Before this phase there was **no audio API at all**. No app could open a
+stream or hand the kernel one sample. The only thing was `SYS_BEEP`, which
+reset the card's DMA engine and played one hard-coded 0.3s square wave from a
+static buffer: a second sound cut the first off, and "the sound device" was
+whoever called last. The card has ONE output, so sharing it needs the kernel
+in the middle: a stream per app, a mixer that sums them, and a driver that
+STREAMS (a ring of DMA buffers refilled as the hardware consumes them)
+instead of playing one buffer once. The contract, with every error code and
+stat index, is `userland/libc/include/nova_audio_abi.h`, shared verbatim by
+kernel and userland, with compile-time size and errno checks and a host test
+that fails if any limit, errno or stat-array index disagrees with the Rust
+constant.
+
+| piece | what |
+|---|---|
+| **Stream** | `AUDIO_OPEN`: mono or stereo, signed 16-bit, any rate 8000-48000Hz, per-stream volume. A ring of 16384 samples (8192 stereo or 16384 mono frames). `AUDIO_WRITE` copies WHOLE frames in and never blocks: a full stream is `-EAGAIN` or a short write. |
+| **Conversion** | mono is duplicated to both channels; other rates are resampled by linear interpolation with a 16.16 fixed-point phase accumulator. At exactly 48kHz the path is the identity - no interpolation, no rounding (tested bit-exact). |
+| **Mix** | one 10ms PERIOD (480 frames) at a time: each stream's next frames scaled by its volume, summed in 32 bits, scaled by the master volume, saturated to 16 bits. Saturated samples are COUNTED, not hidden. A stream that runs dry contributes silence and is counted as an underrun; it never stalls the others. |
+| **Close** | `AUDIO_CLOSE` plays out what is buffered, then frees the stream (so an app can write its last second and close at once); `ABORT` frees immediately. A process that exits has its streams aborted. |
+| **Tap** | a ring of the last ~85ms of MIXED output, readable by root: what a recorder, a visualizer or a test reads. |
+| **Beep** | `SYS_BEEP` no longer takes the card over: it adds a built-in square-wave voice to the mix (same 440Hz / 14400 frames / log line as before), so it sounds together with whatever else is playing. |
+| **Privilege** | a stream belongs to its opener (a wrong handle is `-EBADF`, never `-EPERM`, so existence is not revealed). The two controls that affect or expose EVERYONE's sound - the master volume/mute and the tap - are root-only; the check happens BEFORE the caller's pointer is examined. |
+
+Files: `kernel/rust/mixer.rs` (the subsystem and its tests, ~2,100 lines),
+`kernel/drivers/sound/audio.{c,h}` (syscall entry: pointer validation,
+chunked copy of sample data, and the 10ms tick), `kernel/drivers/sound/
+ac97.c` (the streaming ring: `ac97_ring_*`), the timer listener list in
+`kernel/drivers/timer/timer.{c,h}`, the `SYS_AUDIO_*` wiring (66-69) in
+`syscall.{c,h}`, the exit hook in `process.c`, `userland/libc/include/
+{nova_audio_abi,novaaudio}.h` + wrappers in `libc/syscall.c`,
+`userland/audiotest/`, and `tools/tests/run_audio_tests.sh`.
+
+### The driver: keeping a DMA ring fed (the part with no margin for error)
+
+The AC97 plays a ring of exactly 32 buffer descriptors (its list has 32
+entries and the engine's current-index wraps at 32), each pointing at one
+480-frame period. The engine plays from descriptor 0, advances its
+current-index (CIV) as each descriptor finishes, and **halts after it
+finishes the "last valid index" (LVI)** unless software has moved LVI on. So
+the pump (`Mixer::pump`, run from a new timer-tick listener every 10ms)
+does this each tick: read CIV; work out how many descriptors the engine
+finished since last tick; mix fresh periods into the ones it is done with so
+that ~6 (60ms) are always queued ahead; move LVI to the last period written.
+If the engine ran past what was written, or halted while audio was waiting,
+that is counted as a hardware underrun and the ring is restarted cleanly
+(reset, rewrite, start at descriptor 0). When nothing is playing the pump
+stops feeding and the engine is allowed to run out and halt, so an idle
+system costs nothing. A cold start mixes only 3 periods so the first sound
+is not delayed by the whole cushion.
+
+This logic is the reason the module is written against a small `Hw` trait:
+the host tests drive it against a mock that SIMULATES the engine - time passes
+only when the test says so, descriptors play in order at 48kHz, the engine
+halts at LVI, and EVERY SAMPLE THE DAC WOULD PLAY IS RECORDED - so the tests
+check what would be HEARD, including a stale period replayed after the system
+fell behind (which the real hardware has no way to report).
+
+The timer's single tick-hook slot belongs to the scheduler, so the audio feed
+could not take it; `timer.c` gained a small listener list (4 slots) that runs
+every tick alongside it.
+
+### Verification, and how far each piece can be trusted
+
+* **The Rust mixer** (`make audio-test`): 24 tests. Mixing is checked exactly
+  (two streams sum to the sum, a mono stream appears in both channels, stream
+  and master volume scale as specified, saturation clips and is counted); the
+  resampler by properties (bit-exact identity at 48kHz; a constant stays
+  exactly constant at every rate and lasts the right time; a tone keeps its
+  pitch through conversion, measured by zero crossings); the pump by what the
+  simulated DAC plays (exactly the ramp that was written, no gaps, no stale
+  periods, over hundreds of ring wraps; a 30ms late tick is harmless; a 200ms
+  stall is detected, counted and recovered from; an idle system halts the
+  engine and stops mixing). A 60,000-operation random run is compared SAMPLE
+  BY SAMPLE and counter by counter against an independent oracle (a plain
+  queue of frames per stream, written from the rules rather than from the ring
+  buffer).
+  **Shown able to fail:** 34 deliberate bugs injected one at a time (mono not
+  duplicated; resampler step, interpolation weight or missing-next-frame
+  handling wrong; stream or master volume ignored; mute ignored; saturation
+  removed; clipping not counted; underruns counted before start or per frame;
+  paused streams still mixed; close never draining; drained streams never
+  freed; exit keeping streams; handle generation not bumped; any process able
+  to use any stream; per-process limit off by one; rate range unchecked;
+  partial frames accepted; full streams silently accepting; master control or
+  tap open to everyone; tap returned out of order; the pump never moving the
+  last valid index, forgetting consumed periods, ignoring a halted engine,
+  keeping too little ahead, never letting the engine idle, starting with the
+  wrong last valid index, writing to the wrong descriptor, not counting
+  starvation; a beep of the wrong length); all 34 caught.
+* **The hardware path.** QEMU's WAV audio backend records exactly the PCM the
+  card's DAC plays. The boot demo fires `SYS_BEEP` twice in quick succession;
+  the recording contains one 0.55s segment at **443.6Hz** (a 54-frame
+  half-period square wave) with **peak 16000** - two 8000-amplitude beeps
+  SUMMING, where previously the second reset the engine and cut the first
+  off. During the formats test the recording contains BOTH a 440Hz stereo
+  48kHz tone and a 660Hz mono 22.05kHz tone: 43x and 14x the power of the
+  neighbouring 550Hz bin and over 10,000x that of 1500Hz. (QEMU's wav backend
+  writes at 44.1kHz, its own resampling of our 48kHz stream.)
+* **In the real OS**, `AUDTEST.ELF` runs as root, so it can read the mixer's
+  TAP and check the mix itself: exact sums and volumes, mono in both channels,
+  mute, counted saturation; a forked child's stream (3000) mixing with its
+  parent's (1000) to exactly 4000 and VANISHING from the mix when the child
+  exits without closing; 440Hz stereo/48kHz plus 660Hz mono/22.05kHz both at
+  their own pitch by integer Goertzel analysis; the beep appearing on top of a
+  playing stream (frames of 9000 and -7000) and the stream carrying on after
+  it; stream counters (played, written, underruns); close draining then
+  freeing; twenty exiting owners of four streams each leaking nothing from the
+  8-stream table; the mixer producing 48000 frames/s while a stream plays (the
+  card consumes 48000/s, so the ring is genuinely being fed); the engine going
+  idle when silent; a uid-700 login being refused the master volume and the
+  tap and unable to touch the root process's stream; hostile pointers to every
+  call; and a 4096-frame write (several kernel copy chunks) arriving as one
+  contiguous ramp.
+  **Shown able to fail:** six faults injected into the KERNEL integration, one
+  at a time, each caught by AUDTEST alone: the exit hook removed (the exited
+  child's stream is still in the mix); the tap's privilege check moved after
+  the pointer check (a non-root caller with a bad pointer gets -EFAULT, which
+  would reveal whether the pointer was valid); the caller always treated as
+  root (a non-root master-volume change succeeds); the multi-chunk write
+  copying from the wrong offset; the last valid index never moved, and the
+  "engine running" test inverted (both starve the card: the frame rate leaves
+  the 24000-72000 band).
+* `make test`: 159/159 on the working tree (every expected line after 113s)
+  and again on a FRESH CLONE of upstream with this patch applied (125s), where
+  the mixer measured exactly 48000 frames/s against the card's 48000.
+  `make test-3d` (a real virglrenderer): 168/168 on the fresh clone, first
+  attempt, no panics. Host suites on the fresh clone: `audio-test` 24/24,
+  `msg-test` 20/20, `shm-test` 23 + 41 checks, `libc-test` 1,010, `fb-test`
+  4/4, `virgl-test` 20/20. One earlier full run on the working tree took 266s
+  because the known-flaky `usb_device_enumerated` never appeared and the
+  runner waited out its whole 240s ceiling; every other assertion, including
+  all ten audio ones, passed in it.
+
+### Things learned that are not obvious
+
+* **The card plays 32 descriptors, not "a ring of whatever I like".** The
+  AC97's list has exactly 32 entries and CIV wraps at 32, so a smaller ring
+  would run off the end into descriptors nobody wrote.
+* **A halted engine is the starvation signal, and the only one.** The
+  hardware reports nothing when it replays stale data; it simply stops after
+  LVI. Counting CIV movement against what was written (and treating a halt
+  with audio waiting as a starvation) is what makes the failure visible.
+* **A zero-initialised mixer must be a valid one**, or the ~290KB state moves
+  from .bss into the kernel image's .data. The master volume is therefore
+  stored as an ATTENUATION (0 = full volume).
+* **QEMU's wav backend records at 44.1kHz** whatever the card is fed; analyse
+  with the file's own header rate.
+* **The kernel's serial log truncates a `SYS_WRITE` at roughly 250
+  characters.** A long `ok:` line shows as a stump with the next message glued
+  on, and the harness assertions match against that log. Keep them short.
+* **FAT filenames are 8.3.** `AUDIOTEST.ELF` (nine characters) silently never
+  reached the disk image: `process_exec: couldn't read`.
+* **Ring-3 code avoids floating point** (the FPU is shared and not saved on a
+  task switch): the tests use an integer sine table and an integer Goertzel.
+* The beep is now a voice IN the mix. The legacy one-shot code, its static
+  tone buffer and its single-entry descriptor list are gone.
+
+### Mistakes of mine worth recording
+
+* **A test that could not catch the bug it was written for.** The chunked-
+  write test required a run of 300 exact ramp steps, but one 512-frame chunk
+  holds 511 of them, so a wrong chunk offset (each chunk repeating the first)
+  still passed. Found only because the fault was injected; the threshold is
+  now 600, which no single chunk can reach.
+* **An assertion regex that could never match.** Written through two layers
+  of escaping, it contained `\\[` where the working ones have `\[` - "a
+  literal backslash, then a character class". Found by checking every
+  assertion against the line its program prints.
+* **My own regex corrupted C source**: a replacement string's `\n` became a
+  real newline inside six string literals (the compiler caught it at once).
+* **Test arithmetic**: I assumed 600 frames fit in one 480-frame block, and
+  forgot that a stream still held a block of audio when testing "a dry stream
+  is silence".
+* **An undefined variable** (`p700`) in a group I had not yet compiled.
+
+### Known limits
+
+* Nothing blocks in the kernel (a syscall runs with interrupts off and there
+  is no blocked-process state), so apps poll with `SYS_YIELD`;
+  `nova_audio_write_all` times out in whole seconds because RTC seconds are
+  the only clock a plain process has.
+* Latency is ~60ms by design, and an app must keep its stream fed that far
+  ahead of the mixer; a late tick of up to ~50ms is absorbed, a longer stall is
+  an audible gap (counted, then recovered).
+* 16-bit PCM only; linear interpolation (no filtering needed for upsampling,
+  since the maximum rate is the card's own); hard saturation with no limiter.
+* No capture/recording from a microphone: only the playback side exists. The
+  tap is a copy of the mixed OUTPUT.
+* The master volume is root-only, so a user-facing volume control needs a
+  root service reached over messaging (Phase 84).
+* Mixing runs from the timer interrupt. It is short (480 frames x at most 8
+  streams) and the lock is interrupt-safe, but it does run there.
+* Verified only on QEMU's AC97 with two vCPUs; real hardware codecs may differ
+  (variable-rate audio, different halt behaviour).
+* The tap shows what was MIXED, up to ~60ms before it is heard.
+
+## Phase 86 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a
