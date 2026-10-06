@@ -305,10 +305,22 @@ ISO_FILE = novaos.iso
 # Default target
 all: $(ISO_FILE)
 
-# Compile C files
-$(BUILD_DIR)/%.o: %.c
+# Compile C files.
+#
+# Phase 86: HEADER DEPENDENCIES. Until now an object file depended only on its
+# own .c, so editing a header (process.h, say) rebuilt nothing that included
+# it. Changing a struct's layout then left a MIX of old and new objects in the
+# kernel - one file zeroing a field the other thought did not exist - and the
+# symptom was a heap panic two subsystems away, many seconds into a boot.
+# -MMD -MP makes the compiler write a .d file next to each object listing every
+# header it read, which is included below. Every object also depends on this
+# Makefile, so changing a compiler flag (or, once, applying this very rule to
+# an existing build directory that has no .d files yet) rebuilds everything.
+$(BUILD_DIR)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(C_OBJS:.o=.d)
 
 # Compile ASM files
 $(BUILD_DIR)/%.o: %.asm
@@ -410,6 +422,14 @@ msg-test:
 audio-test:
 	@sh tools/tests/run_audio_tests.sh
 
+# Phase 86: per-process resource limits. `rlimit-test` compiles the PURE policy
+# (kernel/task/rlimit_policy.c) on the host and attacks it: every boundary, a
+# per-tick reference model, a simulated scheduler loop, the tick counter's
+# wraparound, a fork-bomb simulation. No QEMU; a few seconds. The in-OS
+# conformance test is RLIMTEST.ELF, part of `make test`.
+rlimit-test:
+	@sh tools/tests/run_rlimit_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -510,4 +530,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test clean setup check-prereqs help install-image test-custom-boot

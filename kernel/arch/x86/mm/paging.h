@@ -164,4 +164,13 @@ void paging_switch_address_space(uint32_t page_directory_phys);
  * tasks don't get (or need) a private address space. */
 uint32_t paging_kernel_directory_phys(void);
 
+
+/* Phase 86: how many user-accessible pages the address space whose page
+ * directory is at physical address `pd_phys` maps. Walks the directory and
+ * every present page table; only pages marked PAGE_USER count, which excludes
+ * the kernel's own identity mapping that every address space shares. Used by
+ * the memory limit (rlimit.c) - a real count of what the process can touch,
+ * not a counter that could drift. */
+uint32_t paging_count_user_pages(uint32_t pd_phys);
+
 #endif

@@ -328,6 +328,23 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: AUDTEST.ELF - the audio mixing "
                     "conformance suite did not pass.\n");
 
+    /* Phase 86: per-process resource limits. RLIMTEST.ELF creates real
+     * runaways - processes that spin forever without a system call, that grow
+     * the heap until stopped, and that fork until stopped - and checks that
+     * the limits end them: a CPU-time limit terminating a process from the
+     * timer tick (on either CPU), a CPU share throttling one in the
+     * scheduler, a memory limit stopping the heap path at exactly the limit,
+     * and a process-count limit that a fork bomb cannot exceed. Like the
+     * other conformance programs it needs no delegated capability. */
+    static const char* const rlimit_all[] = {"RLIMTEST.ELF"};
+    int pid_r = sys_exec("RLIMTEST.ELF", (const char**)rlimit_all, 1);
+    int code_r = (pid_r >= 0) ? sys_wait(pid_r) : -1;
+    sys_write(pid_r >= 0 && code_r == 0
+                  ? "[sandbox] PASS: RLIMTEST.ELF (per-process resource "
+                    "limits conformance).\n"
+                  : "[sandbox] FAIL: RLIMTEST.ELF - the resource limits "
+                    "conformance suite did not pass.\n");
+
     sys_exit(0);
 
     for (;;) { }

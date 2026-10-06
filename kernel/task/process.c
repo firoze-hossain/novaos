@@ -173,6 +173,7 @@ static process_t* allocate_slot(void) {
              * across an unlocked gap. */
             p->pid = next_pid++;
             p->state = PROCESS_ALLOCATING;
+            rl_reset(&p->rl);
             spinlock_release(&process_table_lock, flags);
             return p;
         }
@@ -206,6 +207,7 @@ static process_t* allocate_slot(void) {
     process_t* p = pt_slot((int)capacity);
     p->pid = next_pid++;
     p->state = PROCESS_ALLOCATING;
+    rl_reset(&p->rl);
     spinlock_release(&process_table_lock, flags);
     return p;
 }
@@ -808,6 +810,18 @@ bool process_uid_of(int pid, uint32_t* out_uid) {
         }
     }
     return false;
+}
+
+process_t* process_find_live(int pid) {
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = pt_slot(i);
+        if (p->pid == pid && p->state != PROCESS_UNUSED &&
+            p->state != PROCESS_TERMINATED) {
+            return p;
+        }
+    }
+    return NULL;
 }
 
 bool process_is_live(int pid) {
@@ -1449,6 +1463,20 @@ static int process_exec_internal(const char* path, const char** argv,
         argc = MAX_EXEC_ARGS;
     }
 
+    /* Phase 86: the process-count limit. Refused HERE, before allocate_slot():
+     * every failure after a slot is claimed leaks it, and a fork bomb that
+     * leaked a slot per refusal would drain the process table by being
+     * refused. */
+    {
+        process_t* spawner = process_current();
+        if (spawner != NULL && !rlimit_may_spawn(spawner->pid)) {
+            kernel_log("[ .. ] rlimit: pid %d '%s' may not create another "
+                       "process (its process limit is reached)\n",
+                       spawner->pid, spawner->name);
+            return -1;
+        }
+    }
+
     /* Phase 73: refuse an environment (or argv+environment) that will
      * not fit, BEFORE anything is allocated. This has to come first,
      * not at the point the stack is written: the failure paths further
@@ -1717,6 +1745,19 @@ static int process_exec_internal(const char* path, const char** argv,
     process_t* caller = process_current();
     p->uid = (caller != NULL) ? caller->uid : 0;
     p->gid = (caller != NULL) ? caller->gid : 0;
+    if (caller != NULL) {
+        /* Phase 86: limits are inherited (the usage starts at zero). A
+         * memory limit smaller than the program's own image does not stop it
+         * loading - refusing here would leak the slot like any failure after
+         * allocate_slot() - it stops the program GROWING. */
+        if (!rlimit_commit_spawn(p, caller)) {
+            kernel_log("[ .. ] rlimit: pid %d '%s' lost a race for the last "
+                       "place in its process quota\n", caller->pid, caller->name);
+            kfree(p->kernel_stack_alloc);
+            free_user_address_space(p->page_directory_phys);
+            return -1;
+        }
+    }
 
     kernel_log("[ OK ] process_exec: loaded '%s' as pid %d, entry=0x%x, "
                "%d arg(s)\n", path, p->pid, entry_point, argc);
@@ -2023,6 +2064,22 @@ uint32_t process_sbrk(process_t* p, int increment) {
     uint32_t new_break = old_break + (uint32_t)increment;
     uint32_t* pd = (uint32_t*)p->page_directory_phys;
 
+    /* Phase 86: the memory limit, checked BEFORE any page is mapped - a
+     * refused sbrk() grows nothing (the loop below can otherwise leave the
+     * heap half-grown when it runs out of frames). The count is a walk of the
+     * process's real page tables, so it includes everything it can touch. */
+    if (p->rl.max_vm_pages != 0 && p->heap_mapped_end < new_break) {
+        uint32_t end = (new_break + 4095u) & ~4095u;
+        uint32_t extra_pages = (end - p->heap_mapped_end) / 4096u;
+        uint32_t now_pages = paging_count_user_pages(p->page_directory_phys);
+        rl_note_vm(&p->rl, now_pages);
+        if (!rl_vm_allows(&p->rl, now_pages, extra_pages)) {
+            p->rl.mem_denied++;
+            return (uint32_t)-1;
+        }
+        rl_note_vm(&p->rl, now_pages + extra_pages);
+    }
+
     while (p->heap_mapped_end < new_break) {
         uint32_t frame = pmm_alloc_frame();
         if (frame == 0) {
@@ -2043,6 +2100,14 @@ uint32_t process_sbrk(process_t* p, int increment) {
 int process_fork(registers_t* parent_regs) {
     process_t* parent = scheduler_current();
     if (parent == NULL) {
+        return -1;
+    }
+
+    /* Phase 86: the process-count limit, refused before a slot is claimed
+     * (see the same check in process_exec_internal()). */
+    if (!rlimit_may_spawn(parent->pid)) {
+        kernel_log("[ .. ] rlimit: pid %d '%s' may not fork (its process "
+                   "limit is reached)\n", parent->pid, parent->name);
         return -1;
     }
 
@@ -2136,6 +2201,13 @@ int process_fork(registers_t* parent_regs) {
                                   own inheritance, see process.h's own
                                   comment on process_t's uid/gid */
     child->gid = parent->gid;
+    if (!rlimit_commit_spawn(child, parent)) { /* Phase 86 */
+        kernel_log("[ .. ] rlimit: pid %d '%s' lost a race for the last "
+                   "place in its process quota\n", parent->pid, parent->name);
+        kfree(child_kstack);
+        free_user_address_space(child_pd_phys);
+        return -1;
+    }
 
     kernel_log("[ OK ] process_fork: pid %d forked -> new pid %d\n",
                parent->pid, child->pid);

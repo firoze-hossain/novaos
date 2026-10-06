@@ -55,4 +55,14 @@ void scheduler_yield(void);
  * scheduling yet, or isn't one this scheduler recognizes. */
 process_t* scheduler_current(void);
 
+/* Phase 86: the process running on CPU `cpu` right now, or NULL if that CPU
+ * has not started scheduling. The BSP's tick uses it to find the process
+ * running on another CPU that needs its limits enforced. */
+process_t* scheduler_cpu_current(uint8_t cpu);
+
+/* Phase 86: reschedule THIS CPU now, instead of waiting for the next
+ * scheduler tick: a process that has just been throttled must stop running at
+ * once, and one that has just been released should not wait a slice. */
+void scheduler_force_resched(void);
+
 #endif

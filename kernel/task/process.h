@@ -1,6 +1,7 @@
 #ifndef TASK_PROCESS_H
 #define TASK_PROCESS_H
 
+#include "rlimit.h"
 #include "../include/types.h"
 #include "../arch/x86/cpu/isr.h"
 
@@ -217,6 +218,12 @@ typedef struct process {
      * Placed last in the struct so no existing field's offset changes.
      * volatile: written by one CPU, read by another. */
     volatile uint32_t off_cpu;
+
+    /* Phase 86: this process's resource limits and the accounting that
+     * enforces them - see kernel/task/rlimit.h. Reset whenever a slot is
+     * claimed (allocate_slot): slots are recycled, and a stale throttled flag
+     * would silently starve whatever process got the slot next. */
+    rlimit_state_t rl;
 } process_t;
 
 /* Called once at boot, before any process_create_*() call. */
@@ -540,6 +547,10 @@ bool process_is_live(int pid);
 
 /* Phase 84: the uid of a live process; false if no such live process. */
 bool process_uid_of(int pid, uint32_t* out_uid);
+
+/* Phase 86: the live process with this pid (any state but unused or
+ * terminated, so one still being set up counts), or NULL. */
+process_t* process_find_live(int pid);
 
 /* Phase 82: deterministic test of that rule. */
 bool process_selftest_reap_waits_for_the_exiting_cpu(void);

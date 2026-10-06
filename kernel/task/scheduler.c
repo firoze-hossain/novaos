@@ -14,6 +14,7 @@
 #include "../include/smp.h"
 #include "../lib/spinlock.h"
 #include "../include/kernel.h"
+#include "../drivers/timer/timer.h"
 
 extern void switch_context(uint32_t* old_esp_out, uint32_t new_esp,
                            volatile uint32_t* done_flag);
@@ -129,6 +130,12 @@ static process_t* pick_next_locked(bool for_ap, uint8_t cpu_index) {
             continue;
         }
         /* Phase 73: READY is not enough - see process_t.off_cpu. */
+        /* Phase 86: a process that has used its CPU share for this window
+         * is skipped - including the one running right now, which is how a
+         * throttle takes effect. */
+        if (p->rl.throttled) {
+            continue;
+        }
         bool eligible = (p->state == PROCESS_READY && p->off_cpu) ||
                         (p->state == PROCESS_RUNNING &&
                          cpu_index < SCHED_MAX_CPUS &&
@@ -184,6 +191,13 @@ static void do_schedule(uint8_t cpu_index) {
     next->state = PROCESS_RUNNING;
     next->off_cpu = 0; /* on a CPU again until it is switched away from */
     current[cpu_index] = next;
+    {
+        /* Phase 86: CPU accounting. A process is charged for the time since
+         * it was switched in when it is switched out (see rlimit_policy.c). */
+        uint32_t acct_now = timer_get_ticks();
+        rl_switch_out(&prev->rl, acct_now);
+        rl_switch_in(&next->rl, acct_now);
+    }
 
     /* Released before switch_context() - a second CPU spinning on
      * this same lock must not be blocked for the entire duration of
@@ -245,6 +259,7 @@ void scheduler_start(void) {
     }
 
     current[0] = first;
+    rl_switch_in(&first->rl, timer_get_ticks());
     first->state = PROCESS_RUNNING;
     /* Same real bug, same fix, as do_schedule()'s own identical
      * sequence - see that function's own comment for the full
@@ -286,6 +301,7 @@ void scheduler_ap_join(uint8_t cpu_index) {
         first = pick_next_locked(true, cpu_index);
         if (first != NULL) {
             current[cpu_index] = first;
+            rl_switch_in(&first->rl, timer_get_ticks());
             first->state = PROCESS_RUNNING;
             /* Same fix as do_schedule()/scheduler_start() - see
              * do_schedule()'s own comment for the full account. */
@@ -374,4 +390,15 @@ process_t* scheduler_current(void) {
         return NULL;
     }
     return current[cpu];
+}
+
+process_t* scheduler_cpu_current(uint8_t cpu) {
+    if (cpu >= SCHED_MAX_CPUS) {
+        return NULL;
+    }
+    return current[cpu];
+}
+
+void scheduler_force_resched(void) {
+    do_schedule(rust_smp_current_cpu_index());
 }

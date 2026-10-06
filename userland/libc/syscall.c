@@ -490,3 +490,9 @@ int sys_audio_ctl(nova_audio_ctl_t* req) {
 int sys_audio_close(const nova_audio_close_t* req) {
     return fb_call1(NOVA_SYS_AUDIO_CLOSE, (unsigned int)req);
 }
+
+/* Phase 86: resource limits. Same one-argument int 0x80 shape as the other
+ * struct-passing calls above. */
+int sys_rlimit(nova_rlimit_t* req) {
+    return fb_call1(NOVA_SYS_RLIMIT, (unsigned int)req);
+}

@@ -6,6 +6,7 @@
 #include "nova_shm_abi.h"
 #include "nova_msg_abi.h"
 #include "nova_audio_abi.h"
+#include "nova_rlimit_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -142,6 +143,10 @@ int sys_delete_file(const char* filename);
 /* Phase 85: audio mixing. Model, structs and limits are in nova_audio_abi.h;
  * novaaudio.h wraps these (and adds write_all(), tone generation). Every call
  * returns 0 / a non-negative result, or a NEGATIVE errno. */
+/* Phase 86: per-process resource limits. Model, rules and the usage fields are
+ * in nova_rlimit_abi.h. Returns 0, or a NEGATIVE errno. */
+int sys_rlimit(nova_rlimit_t* req);
+
 int sys_audio_open(nova_audio_open_t* req);
 int sys_audio_write(nova_audio_write_t* req);
 int sys_audio_ctl(nova_audio_ctl_t* req);
