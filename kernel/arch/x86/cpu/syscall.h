@@ -618,6 +618,12 @@
 #define SYS_AUDIO_CTL   68
 #define SYS_AUDIO_CLOSE 69
 
+/* Phase 86: per-process resource limits (memory, CPU share, CPU time,
+ * process count) and the usage they are enforced against. The contract is
+ * userland/libc/include/nova_rlimit_abi.h; the policy is kernel/task/
+ * rlimit_policy.c and the enforcement kernel/task/rlimit.c. */
+#define SYS_RLIMIT      70
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

@@ -44,4 +44,10 @@ void timer_set_tick_hook(void (*hook)(void));
  * and must not block. Returns false if the (small, fixed) table is full. */
 bool timer_add_tick_listener(void (*fn)(void));
 
+/* Phase 86: was the tick now being handled taken while the CPU was running
+ * USER code? Meaningful only from inside a tick listener. Killing a process
+ * from the tick is safe only when this is true (the process then holds no
+ * kernel lock): see kernel/task/rlimit.c. */
+bool timer_tick_was_user(void);
+
 #endif

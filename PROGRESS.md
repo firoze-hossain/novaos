@@ -10362,7 +10362,239 @@ every tick alongside it.
   (variable-rate audio, different halt behaviour).
 * The tap shows what was MIXED, up to ~60ms before it is heard.
 
-## Phase 86 and beyond
+## Phase 86: per-process resource limits - memory, CPU share, CPU time and process count, as a real scheduler feature, in C
+
+**Status: done, with the gaps listed under "Known limits". Four levels: `make
+rlimit-test` (80,310 host checks on the pure policy, also under ASan/UBSan, no
+QEMU, a few seconds), `make test` (169 assertions; the 10 new ones are this
+phase's), the in-OS conformance program `RLIMTEST.ELF` (111 checks across 7
+groups, using real runaway processes), and fault injection into the kernel
+(5 kernel mutants run: 3 caught, 2 survived and are explained below).
+`make test-3d`: 177 of 178 (the one miss is the known-flaky USB enumeration, see
+below). It is the roadmap's "per-process resource limits (memory/CPU
+quotas) as a real scheduler feature": one runaway process can no longer starve
+the machine, because the scheduler and the heap path now enforce limits instead
+of trusting every process to behave.**
+
+### What was there, and what this adds
+
+Before this phase nothing bounded a process. A loop that never yielded held
+its CPU forever; a loop calling `sbrk()` ate every free frame; a `fork()` loop
+filled the process table. Worse, the kernel had no way to END a misbehaving
+process at all: the page-fault handler logs and panics, so a process only ever
+left by calling `SYS_EXIT` itself.
+
+`SYS_RLIMIT` (70, `userland/libc/include/nova_rlimit_abi.h`, an 80-byte struct)
+gets and sets four limits, 0 meaning "none", and reports the usage they are
+enforced against:
+
+* `MAX_VM_PAGES` - the most user pages the process may have mapped (heap,
+  stack, image, framebuffer and shared-memory mappings all count; it is a walk
+  of the real page tables, not a counter). Checked in `process_sbrk()` BEFORE
+  any page is mapped, so a refused `sbrk()` grows nothing - which the old loop
+  could not promise (it could leave the heap half-grown when frames ran out).
+* `CPU_PERCENT` - a CAP, not a guarantee: at most this share of one CPU per
+  100-tick (1 s) window. A process that has used its share is skipped by
+  `pick_next_locked()` until the window ends.
+* `CPU_TIME_TICKS` - the most total CPU time; the first tick after it is
+  exceeded TERMINATES the process (exit code `NOVA_RLIMIT_EXIT_CPU`, -1001).
+* `MAX_PROCS` - the most live processes that may exist beneath this one,
+  counted from when it is set. `fork()` and spawn fail beyond it, which is what
+  stops a fork bomb.
+
+Any process may TIGHTEN its own limits; loosening one, or touching another
+process's, needs root. A non-root process confined under someone's
+`MAX_PROCS` may not set its own (that would hand it a fresh allowance).
+Limits are inherited by fork and spawn, except `MAX_PROCS`: descendants inherit
+MEMBERSHIP of the group (`quota_root`), not the number, or every process in a
+bomb would carry its own allowance.
+
+The code is C throughout, in two layers. `kernel/task/rlimit_policy.c` is PURE
+(window accounting, the throttle and kill verdicts, the privilege rules, the
+page-count check, inheritance, the group rule): no kernel dependencies, so
+`tools/tests/rlimit_test.c` compiles it on the host. `kernel/task/rlimit.c` is
+the integration: the timer tick, the second CPU's tick IPI, killing a process
+from interrupt context, and the syscall.
+
+### The parts with no margin for error
+
+* **CPU accounting is sampled at context switch.** A process is charged for
+  the ticks since it was switched in when it is switched out, on either CPU
+  (`scheduler.c`). That is unbiased (a process running a fraction of a tick is
+  charged a tick with that probability) and costs two subtractions per switch.
+  While running, usage is computed on demand, so a limit can be checked at any
+  tick. The window rolls in O(1) however long a process was idle, and a slice
+  that straddles a window boundary is split exactly at it.
+* **The second CPU has no timer interrupt.** Only the BSP gets the tick, so a
+  limited process running on the other CPU would never have been charged,
+  throttled or stopped. While (and only while) a process with a CPU limit runs
+  there, the BSP's tick sends it an IPI (`rlimit_ipi_stub.asm`, vector 0xF1,
+  its own stub because `irq_handler` indexes a 16-entry table by vector - 32)
+  and `rlimit_ipi_handler()` does for that CPU what the BSP tick does for the
+  BSP. Unlimited processes never get the IPI, so they behave exactly as
+  before. The kernel counts, per process, how many times that path enforced it
+  (`ap_ticks`), and the test requires it to be non-zero: a run in which the
+  second CPU was never involved cannot pass.
+* **Killing from the tick is only safe when the interrupt hit user mode.**
+  `process_exit_current()` is called on the victim's own kernel stack. If the
+  tick landed in user mode the process provably holds no kernel lock, and
+  abandoning the interrupt frame is no different from abandoning a syscall
+  frame. If it landed in kernel mode the kill waits for the next tick that
+  lands in user mode. `timer_tick_was_user()` records which it was.
+* **The process count is a SCAN, not a counter.** Every fork counts the live
+  members of the group in the process table. A counter would have to be
+  decremented exactly once per exit on every path and would drift whenever an
+  intermediate parent is reaped; a scan cannot be wrong.
+* **Refuse before claiming a slot.** `process_fork()` calls `allocate_slot()`
+  first and every failure after it leaks the slot, so a fork bomb that was
+  merely REFUSED would drain the table. The limit is therefore checked at the
+  top of fork and spawn. That check cannot be the whole answer (two members
+  forking at the same instant on two CPUs both pass it), so the decision is
+  made AGAIN, under a lock, with the child already counted, at the moment it
+  joins the group (`rlimit_commit_spawn()`). A loser of that genuine race
+  leaks one slot, which is why the early check matters.
+* **Slots are recycled and `allocate_slot()` does not zero them.** The limits
+  are reset there; a stale `throttled` flag would silently starve whatever
+  process got the slot next. `RLIMTEST` checks 30 processes in recycled slots.
+
+### Verification, and how far each piece can be trusted
+
+**Host (`make rlimit-test`): 80,310 checks, 0 failures**, natively and under
+ASan/UBSan. Every threshold is checked at, one below and one above; the O(1)
+window arithmetic is compared after EVERY step of random runs against a
+reference model that is just an array saying whether the process ran on each
+tick; a simulated scheduler loop shows a 20%-capped process gets EXACTLY 20
+ticks in each of 50 windows (and the same at 1%, 10%, 50%, 75%, 99%); a
+CPU-time limit condemns on exactly the tick it is reached; all of it again
+across the wrap of the 32-bit tick counter; a fork-bomb simulation against the
+group rule never exceeds the cap and reaches it exactly.
+
+**Fault injection, policy: 28 bugs injected, all caught.** Three survived at
+first and each taught something: a missing test that a CPU-TIME limit needs the
+tick (the property that makes a runaway loop killable); an edge at UINT32_MAX
+where `cur + 1` wraps; and an equivalent mutant (the "at least one tick" guard
+on the budget was dead code, since one percent of 100 ticks is already one) -
+the guard was deleted and the assumption made a compile-time assertion.
+
+**In-OS: `RLIMTEST.ELF`, 111 checks, 7 groups.** Measured, not asserted-by-
+construction: three processes that spin forever without a single system call
+are each terminated at exactly `used 40 ticks of CPU (limit 40)`; two
+processes capped at 20% get exactly 80 CPU ticks in 400 of wall clock while an
+unlimited sibling gets about 394; three capped at 10% get exactly 40, 40 and
+40; the heap stops at exactly the limit and a refused `sbrk(5 pages)` with 3
+free maps nothing; a heap-hog loop is halted after exactly the number of pages
+that fit; a fork bomb makes 24-30 attempts, 21-26 are refused, and sampling the
+group WHILE it runs never shows more than its 4 members alive; the count shows
+no drift over 20 exit-and-refork cycles. Privilege is checked from a real
+uid-700 login. A non-root caller asking about another pid gets EPERM, not
+ESRCH, so it learns nothing about which pids exist.
+
+**Fault injection, kernel: 5 mutants run, on the real kernel, one boot each.**
+
+| Mutant | Result |
+|---|---|
+| BSP tick never sends the IPI | CAUGHT: hogs on the second CPU survive (`all_stopped`, `ap_seen`, throttle checks) |
+| IPI handler never acknowledges (no EOI) | CAUGHT: the LAPIC blocks later IPIs, same checks |
+| Early process-limit check removed | CAUGHT, by a slot-leak detector (see below): 53 forks were refused LATE, each leaking a slot |
+| Throttled process on the second CPU does not wait there | SURVIVED - see Known limits |
+| Released process not rescheduled at once | SURVIVED - latency only |
+
+The slot-leak detector deserves a note: every refused-late fork consumes a pid,
+so the pids of consecutive group members drift apart; the test asserts they do
+not. Without it that mutant would have passed every other check.
+
+NOT RUN (stated plainly, because "obviously caught" is not evidence): the tick
+never reporting user mode, a throttled process still being scheduled, CPU
+accounting removed from the switch, the `sbrk` check removed, a recycled slot
+keeping old limits, a child not inheriting, another process being treated as
+self, and the atomic re-check at spawn removed. The last one matters most: the
+race it closes needs two members forking at the same instant, which this
+harness cannot provoke on demand (the build machine has ONE host core), so
+the lock's effect is reasoned, not demonstrated.
+
+`make test`: 169/169 on the working tree and again on a fresh clone of upstream
+with the patch applied. `make test-3d` (a real virglrenderer, on the fresh clone): 177 of 178. The one
+miss is `usb_device_enumerated`, the known-flaky assertion (the UHCI driver
+logged "device attached but initial GET_DESCRIPTOR failed" at boot, long before
+any test of this phase runs); the runner classifies it as non-fatal. All 10 of
+this phase's assertions and the global no-panic scan passed in that run, and
+`usb_device_enumerated` passed in all three non-3D `make test` runs. It was
+run once; a clean 178/178 would be better evidence than this.
+
+### Things learned that are not obvious
+
+* The second CPU is cooperative for everything except limited processes, and
+  has no idle task: only the BSP's idle is `bsp_only`, and nothing can wake a
+  halted AP. So "throttled and nothing else to run" cannot idle there; it has
+  to wait inside the tick interrupt.
+* An unlimited process spinning on the second CPU holds it forever. That was
+  already true and is deliberately unchanged: only limited processes are
+  ticked there, so everything else behaves as before.
+* The round-robin scheduler cycles the parent through the idle task, which
+  briefly makes it eligible for the second CPU. That is why a throttled process
+  there almost always finds somewhere to go, and why the "nothing to run"
+  branch could not be provoked deterministically from userland.
+* A refused request that leaks a slot is worse than it sounds: see above.
+* Time in the kernel is a 32-bit tick counter that wraps; every comparison of
+  two times is a signed difference, and the tests start 30 ticks before the
+  wrap.
+
+### Mistakes of mine worth recording
+
+* `%%` in a `kernel_log` format string. The kernel's `kernel_log` supports only
+  `%s/%d/%x/%c`; it would have printed garbage. Caught on review.
+* Twice, a multi-line edit anchor failed because my condensed views of the
+  source had hidden blank lines. The edit helper computes the new text before
+  writing, so nothing was half-applied either time; I then switched to
+  single-line anchors.
+* A throttled-time threshold in my test was wrong, not the kernel: processes
+  that were released also waited READY for a CPU, which is waiting, not
+  throttling. The invariants now are the true ones (never throttled while
+  running; throttled for a large share of the time).
+* A field rename left a stale `req.reserved = 0;` that failed the build.
+* I called the linker's "missing .note.GNU-stack" warning a defect of my new
+  assembly stub. `readelf` showed EVERY assembly object lacks the note; the
+  warning is pre-existing and names one object. Retracted; left alone.
+* `make test` first failed 2 of 169 on `ext2_write_readback` and the global
+  scan: not the feature. The ext2 write test is create-only and my many dev
+  boots had already written the file into the shared test disk. Deleting
+  `build/virtio.img` fixed it; 169/169 on the rerun and on a fresh clone.
+* A debugging diagnostic I did not remember adding was sitting in
+  `kernel/arch/x86/mm/heap.c`, before the "bad free" panic. Its origin could
+  not be established, it is outside this phase, and it was REVERTED. A heap
+  panic during this phase's testing is therefore possible but unconfirmed;
+  none appeared in any full run afterwards (`make test` x3, `make test-3d`).
+  If one ever does, that diagnostic is the first thing to put back.
+* The first fault-injection run of the first mutant ended with no verdict at
+  146 s, the serial log stopped mid-boot, and nothing indicated why. It did
+  not reproduce in two more runs (one of them the same mutant, which was then
+  caught). I cannot explain it.
+
+### Known limits
+
+* A CPU cap is a CAP, not a guarantee, and it is per PROCESS, not per group;
+  there is no group CPU quota.
+* The "throttled process waits on the second CPU" branch has no assertion
+  behind it: removing it SURVIVES the suite. `ap_parks` is reported but not
+  asserted, because whether it happens depends on where the scheduler put
+  everyone.
+* The process cap counts only processes created after it was set, and only
+  through `fork()` and spawn in the same way; the spawn path is NOT exercised
+  in-OS (a plain-exec'd program lacks the spawn capability, so a test there
+  would pass whether or not the limit worked).
+* A memory limit smaller than a program's own image does not stop it loading
+  (failing after the slot is claimed would leak the slot); it stops it growing.
+* Only heap growth is checked against the memory limit. Framebuffer and shared
+  memory mappings count toward the total but have their own quotas.
+* A loser of the two-CPU fork race leaks one process-table slot.
+* Kills happen only when the tick landed in user mode, so a process that is
+  almost always in the kernel is stopped later (never earlier than its limit).
+* Accounting resolution is one tick (10 ms), and slices are 50 ms: caps are
+  exact over many windows, not within one.
+* Each `sbrk` under a memory limit walks the page tables (about 16k entries).
+* Tested only on QEMU, 2 vCPUs, on a host with a single core.
+
+## Phase 87 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

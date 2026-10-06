@@ -45,7 +45,14 @@ static void (*tick_listeners[TIMER_MAX_LISTENERS])(void);
 static int tick_listener_count = 0;
 static uint32_t ticks_since_hook = 0;
 
+static volatile bool tick_was_user = false;
+
+bool timer_tick_was_user(void) {
+    return tick_was_user;
+}
+
 static void timer_tick(registers_t* regs) {
+    tick_was_user = (regs->cs & 3u) == 3u;
     (void)regs;
     ticks++;
 

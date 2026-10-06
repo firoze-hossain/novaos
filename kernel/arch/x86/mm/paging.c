@@ -408,3 +408,22 @@ bool paging_pde_is_kernel_shared(uint32_t pde, uint32_t index) {
     }
     return ((pde ^ kernel_pde) & 0xFFFFF000u) == 0;
 }
+
+/* Phase 86: see paging.h. */
+uint32_t paging_count_user_pages(uint32_t pd_phys) {
+    const uint32_t* pd = (const uint32_t*)pd_phys;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t pde = pd[i];
+        if (!(pde & PAGE_PRESENT)) {
+            continue;
+        }
+        const uint32_t* pt = (const uint32_t*)(pde & 0xFFFFF000u);
+        for (uint32_t j = 0; j < 1024; j++) {
+            if ((pt[j] & (PAGE_PRESENT | PAGE_USER)) == (PAGE_PRESENT | PAGE_USER)) {
+                count++;
+            }
+        }
+    }
+    return count;
+}

@@ -38,6 +38,8 @@
 #include "../../ipc/shm.h"
 #include "../../ipc/msg.h"
 #include "../../drivers/sound/audio.h"
+#include "../../task/rlimit.h"
+#include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
@@ -930,6 +932,16 @@ AUDIO_HANDLER(handle_audio_open, audio_sys_open)
 AUDIO_HANDLER(handle_audio_write, audio_sys_write)
 AUDIO_HANDLER(handle_audio_ctl, audio_sys_ctl)
 AUDIO_HANDLER(handle_audio_close, audio_sys_close)
+
+/* Phase 86: resource limits. Any process may call it for itself (tightening
+ * only, unless root); touching another process is root-only - all decided in
+ * rlimit_sys() from the kernel's own record of the caller's uid. */
+static void handle_rlimit(registers_t* regs) {
+    process_t* p = process_current();
+    regs->eax = (p == NULL || !p->is_user)
+                    ? (uint32_t)-NOVA_RLIMIT_ERR_PERM
+                    : (uint32_t)rlimit_sys(p->pid, regs->ebx);
+}
 
 static void handle_fb_readback(registers_t* regs) {
     process_t* p = process_current();
@@ -1825,6 +1837,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_AUDIO_CLOSE:
             handle_audio_close(regs);
+            break;
+
+        case SYS_RLIMIT:
+            handle_rlimit(regs);
             break;
 
         case SYS_FB_INFO:
