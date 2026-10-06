@@ -5,6 +5,7 @@
 #include "../drivers/video/fb.h"
 #include "../ipc/shm.h"
 #include "../ipc/msg.h"
+#include "../drivers/sound/audio.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -510,6 +511,7 @@ void kernel_late_init(void) {
      * process_selftest_shared_pde_accessed_bit()'s own comment. */
     shm_init();
     msg_init();
+    audio_init();
 
     {
         bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();

@@ -311,6 +311,23 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: MSGTEST.ELF - the app-to-app messaging "
                     "conformance suite did not pass.\n");
 
+    /* Phase 85: audio mixing. AUDTEST.ELF plays several streams at once -
+     * its own and forked children's, at different rates and channel counts -
+     * through the real AC97 driver's DMA ring, reads the mixer's output back
+     * through its root-only tap, and checks the mix exactly (constants) or
+     * by integer Goertzel analysis (tones). Like the other conformance
+     * programs it needs no delegated capability: a stream belongs to its
+     * opener, and the controls that affect everyone are gated on uid inside
+     * the kernel, so plain sys_exec() is the right call. */
+    static const char* const audio_all[] = {"AUDTEST.ELF"};
+    int pid_a = sys_exec("AUDTEST.ELF", (const char**)audio_all, 1);
+    int code_a = (pid_a >= 0) ? sys_wait(pid_a) : -1;
+    sys_write(pid_a >= 0 && code_a == 0
+                  ? "[sandbox] PASS: AUDTEST.ELF (audio mixing "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: AUDTEST.ELF - the audio mixing "
+                    "conformance suite did not pass.\n");
+
     sys_exit(0);
 
     for (;;) { }

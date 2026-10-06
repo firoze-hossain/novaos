@@ -39,6 +39,10 @@ static uint32_t configured_frequency_hz = 100;
 #define TICK_HOOK_QUANTUM 5
 
 static void (*tick_hook)(void) = NULL;
+
+#define TIMER_MAX_LISTENERS 4
+static void (*tick_listeners[TIMER_MAX_LISTENERS])(void);
+static int tick_listener_count = 0;
 static uint32_t ticks_since_hook = 0;
 
 static void timer_tick(registers_t* regs) {
@@ -52,6 +56,18 @@ static void timer_tick(registers_t* regs) {
             tick_hook();
         }
     }
+
+    for (int i = 0; i < tick_listener_count; i++) {
+        tick_listeners[i]();
+    }
+}
+
+bool timer_add_tick_listener(void (*fn)(void)) {
+    if (fn == NULL || tick_listener_count >= TIMER_MAX_LISTENERS) {
+        return false;
+    }
+    tick_listeners[tick_listener_count++] = fn;
+    return true;
 }
 
 void timer_set_tick_hook(void (*hook)(void)) {

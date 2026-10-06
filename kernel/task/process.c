@@ -13,6 +13,7 @@
 #include "../drivers/video/fb.h"
 #include "../ipc/shm.h"
 #include "../ipc/msg.h"
+#include "../drivers/sound/audio.h"
 #include "process.h"
 #include "scheduler.h"
 #include "elf.h"
@@ -866,6 +867,12 @@ void process_exit_current(int exit_code) {
          * its names already being released. (Messages it had ALREADY sent
          * stay in other processes' inboxes: they were delivered.) */
         rust_msg_process_exit(p->pid);
+
+        /* Phase 85: abort this process's audio streams. A process that exits
+         * cannot stay behind to be heard (it should drain first if the end of
+         * its sound matters); what it left must not keep playing or hold a
+         * stream slot. Same placement and reason as the hooks above. */
+        rust_audio_process_exit(p->pid);
 
         p->exit_code = exit_code;
         p->state = PROCESS_TERMINATED;

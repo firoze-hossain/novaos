@@ -5,6 +5,7 @@
 #include "nova_fb_abi.h"
 #include "nova_shm_abi.h"
 #include "nova_msg_abi.h"
+#include "nova_audio_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -138,6 +139,14 @@ int sys_delete_file(const char* filename);
  * nova_msg_abi.h; novamsg.h wraps these and adds waiting (nothing blocks
  * in the kernel). Every call returns 0 / a non-negative result, or a
  * NEGATIVE errno. */
+/* Phase 85: audio mixing. Model, structs and limits are in nova_audio_abi.h;
+ * novaaudio.h wraps these (and adds write_all(), tone generation). Every call
+ * returns 0 / a non-negative result, or a NEGATIVE errno. */
+int sys_audio_open(nova_audio_open_t* req);
+int sys_audio_write(nova_audio_write_t* req);
+int sys_audio_ctl(nova_audio_ctl_t* req);
+int sys_audio_close(const nova_audio_close_t* req);
+
 int sys_msg_open(nova_msg_open_t* req);
 int sys_msg_close(void);
 int sys_msg_send(const nova_msg_send_t* req);

@@ -606,6 +606,18 @@
 #define SYS_MSG_SERVICE 64
 #define SYS_MSG_CTL     65
 
+/* Phase 85: audio mixing - several apps play through the one sound card at
+ * once. Each app opens its own stream; the kernel mixes them and feeds the
+ * card. The model, the structs and the limits are in
+ * userland/libc/include/nova_audio_abi.h; the subsystem is
+ * kernel/rust/mixer.rs. kernel/drivers/sound/audio.c asserts at compile time
+ * that these numbers match the ABI header's. SYS_BEEP (17) now adds a tone to
+ * the mix instead of taking the card over. */
+#define SYS_AUDIO_OPEN  66
+#define SYS_AUDIO_WRITE 67
+#define SYS_AUDIO_CTL   68
+#define SYS_AUDIO_CLOSE 69
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
