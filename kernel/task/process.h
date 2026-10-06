@@ -256,6 +256,11 @@ void process_init(void);
  * of NovaOS's kernel tasks (idle, shell) already loop forever. */
 int process_create_kernel_task(const char* name, void (*entry)(void));
 
+/* Like process_create_kernel_task(), but the task is pinned to the BSP BEFORE it
+ * is published, so no other CPU can ever take it. For the idle task, whose hlt
+ * loop only ever wakes via the BSP-only timer interrupt. */
+int process_create_kernel_task_bsp_only(const char* name, void (*entry)(void));
+
 /* Creates a task that starts in ring 3. `entry` is a function compiled
  * into the kernel image (see kernel/task/user_demo.c) rather than
  * loaded from disk - NovaOS has no ELF loader yet, so this is a

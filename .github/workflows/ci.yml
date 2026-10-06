@@ -13,6 +13,10 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # A run that goes wrong must END. Without this the default is six hours, and
+    # a boot test whose expected lines never appear sits out its whole 240s
+    # ceiling per attempt, three attempts in a row.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +44,7 @@ jobs:
         run: make libc-test
 
       - name: Headless boot smoke test
+        timeout-minutes: 30
         # A real, honest accommodation for a real, still-open problem,
         # not a way to hide it: this project has a known, non-
         # deterministic kernel memory-corruption bug (tracked in
@@ -67,10 +72,25 @@ jobs:
               exit 0
             fi
             echo "=== make test failed on attempt $attempt ==="
+            # Keep what the kernel actually printed. The runner's summary says
+            # WHICH assertions failed; only the serial log says why.
+            mkdir -p ci-logs
+            cp build/test-serial.log "ci-logs/serial-attempt-$attempt.log" 2>/dev/null || true
+            cp build/test-serial.qemu-stderr.log "ci-logs/qemu-stderr-attempt-$attempt.log" 2>/dev/null || true
             rm -f disk.img
           done
           echo "=== make test failed on all 3 attempts - treating as a real failure ==="
           exit 1
+
+      - name: Upload boot logs from failed attempts
+        # always(): the step above exits non-zero on a real failure, which
+        # would otherwise skip every later step, this one included.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-logs
+          path: ci-logs/
+          if-no-files-found: ignore
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4

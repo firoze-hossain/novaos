@@ -10809,6 +10809,88 @@ never run.
   the TCB, and the operator's own hands).
 * Tested only on QEMU, 2 vCPUs, on a host with a single core.
 
+## CI fix after Phase 87: the second CPU could take the idle task
+
+**Status: done. Found because `make test` failed deterministically on GitHub's
+runner (5 of 179 assertions, all three retry attempts, the same five) while
+passing on every local run. A real, latent kernel race (since Phase 57), exposed
+by Phase 86's tests being the first to need real work on the second CPU.**
+
+### Symptom
+
+On the CI runner the assertions `rlimtest_conformance`, `rlimtest_cpu_time`,
+`rlimtest_cap_second_cpu`, `rlimtest_exit_ok` and `no_panic_fault_or_fail` failed;
+every other assertion passed, including `rlimtest_cpu_share` (the same cap logic on
+the boot CPU). That pattern - everything the boot CPU can do passes, only what
+needs the SECOND CPU fails - was the clue. The "never finishes" feeling was not an
+infinite loop: a failed attempt waits out the full 240 s ceiling (the expected
+lines never appear), the retry loop repeats it three times, there was no job
+timeout and no log was kept.
+
+### Cause
+
+The second CPU spins in `scheduler_ap_join()` from `kernel_late_init`, taking the
+first READY process that is not pinned to the boot CPU. `idle` was created and
+PUBLISHED as READY, and only afterwards pinned (`process_pin_to_bsp`). In that
+window the spinning CPU can take it. Idle's `hlt` loop then runs on a CPU nothing
+can ever wake (the timer is boot-CPU-only), the CPU is lost for the whole boot,
+and the boot CPU is left without an idle task.
+
+On a CI runner QEMU runs the two vCPUs truly in parallel and the second one wins
+that window; in a single-core sandbox the second vCPU's thread almost never runs
+in those few microseconds, so it never happened locally.
+
+### How it was confirmed (not inferred)
+
+1. The window was widened with a busy loop between creating and pinning `idle`.
+   That reproduced CI's EXACT failure signature on the sandbox: the same four
+   Phase 86 assertions plus the global scan failed, `api`/`memory`/`cpu_share`/
+   `process_count`/`hygiene` passed.
+2. A log line was added saying which process the second CPU takes first. With the
+   window widened it printed `pid 1 'idle'`.
+3. With the fix and the SAME widened window the CPU took `NOVAINIT.ELF` and
+   `RLIMTEST` passed all 111 checks. With the loop removed, `make test` is 180/180.
+
+### Fix
+
+* `process_create_kernel_task_bsp_only()`: the pin is set BEFORE the task is
+  published. `main.c` uses it for idle and no longer calls `process_pin_to_bsp`.
+* `allocate_slot()` now resets `bsp_only`. It was only ever written by the pin and
+  never cleared when a slot was recycled - a second, separate latent bug (a stale
+  pin would silently confine whatever process got the slot).
+* `scheduler_ap_join()` logs the process the second CPU took first.
+* A boot assertion `second_cpu_did_not_take_idle` checks that line: the invariant
+  is now tested every run. Checked able to fail against the real broken-run line.
+* Workflow: `timeout-minutes` on the job and the boot step; the serial log and
+  QEMU stderr of every failed attempt are kept and uploaded as an artifact
+  (`boot-logs`), so the next failure shows what the kernel printed.
+
+### What this does NOT establish
+
+* I have one host core. I reproduced the race by widening the window, which is
+  evidence the fix works when the second CPU wins, but I have NOT run on a
+  genuinely parallel machine. Whether CI is green is for CI to say; if it is not,
+  the `boot-logs` artifact will now say why.
+* The second CPU is still cooperative: it takes new work only when the process it
+  holds yields or exits. It is stranded if it holds one that never does. Phase 86's
+  `ap_seen` assertion (a runaway must be seen enforced by the second CPU's tick)
+  still depends on what that CPU happens to hold. It held a yielding process on
+  every run here, but that is scheduling luck and not a guarantee.
+* Phase 86's throttle logic assumes the boot CPU always has an idle task to fall
+  back on; with idle now guaranteed to stay there, that holds, but it was false
+  on any boot where the race was lost.
+
+### Mistakes of mine worth recording
+
+* Phase 86's `ap_seen` assertion made a test PASS or FAIL on where the scheduler
+  happened to put a process. Its own comment said so. It was tuned on a machine
+  where it held and shipped without asking whether it would hold elsewhere.
+* I called the original Phase 86 verification clean without any parallel-hardware
+  run, and said "tested only on QEMU, 2 vCPUs, host with a single core" in the
+  limits - which was true, and was exactly the gap.
+* A first run of the fixed suite was cut off by a `timeout` I set shorter than the
+  suite (it needs about 200 s); the fix was fine, my timeout was not.
+
 ## Phase 88 and beyond
 
 Immediate CI priority: continue using this phase's own full-

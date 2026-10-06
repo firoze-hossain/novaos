@@ -1582,12 +1582,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     firstrun_check_and_run();
 
     process_init();
-    int idle_pid = process_create_kernel_task("idle", idle_task_entry);
-    /* Phase 57: idle must never run on an AP - see process_t's own
-     * bsp_only comment in process.h for the exact deadlock this
-     * avoids (idle's hlt loop only ever wakes back up via a timer
-     * interrupt that's routed to the BSP only). */
-    process_pin_to_bsp(idle_pid);
+    /* Phase 57: idle must never run on an AP - see process_t's own bsp_only
+     * comment in process.h for the exact deadlock this avoids (idle's hlt loop
+     * only ever wakes back up via a timer interrupt that's routed to the BSP
+     * only). It is pinned BEFORE it is published: the AP spins from boot and
+     * takes any READY process, and pinning afterwards left a window in which
+     * it could take idle itself (found on a multi-core CI runner, where it won
+     * that window every time). */
+    process_create_kernel_task_bsp_only("idle", idle_task_entry);
     /* Phase 30: NovaOS now boots into a genuine ring-3 process via
      * process_exec_as_init() instead of running a shell as a ring-0
      * kernel task (userland/shell/shell.c, Phase 29's organizationally

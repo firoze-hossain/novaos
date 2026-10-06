@@ -320,6 +320,15 @@ void scheduler_ap_join(uint8_t cpu_index) {
         __asm__ volatile ("pause" ::: "memory");
     }
 
+    /* Which process a second CPU takes first decides what that CPU is for the
+     * rest of the boot: it reschedules only when ITS process yields or exits
+     * (it has no timer), so it is stranded with whatever it grabbed. Say so in
+     * the log - when this ever goes wrong (it once took the idle task, whose
+     * hlt loop then ran on a CPU nothing can wake) the cause is otherwise
+     * invisible. */
+    kernel_log("[ OK ] Second CPU (cpu %d) took its first process: pid %d '%s'\n",
+               (int)cpu_index, first->pid, first->name);
+
     tss_set_kernel_stack(cpu_index, first->kernel_stack_top);
     paging_switch_address_space(first->page_directory_phys);
 
