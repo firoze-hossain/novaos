@@ -62,7 +62,7 @@ TOTAL_MB=$((1 + PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))  # +1MiB
 # --- Partition 1: FAT32, exactly the same fixtures as before ---
 dd if=/dev/zero of="$TMP/part1.img" bs=1M count=$PART1_MB status=none
 mformat -i "$TMP/part1.img" -F ::
-for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT LS.ELF ECHO.ELF CP.ELF RM.ELF; do
+for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT FIREWALL.CFG FWTEST.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF; do
     # Phase 59: LS.ELF/ECHO.ELF/CP.ELF/RM.ELF come from userland/
     # coreutils-rs/build.sh, built against the project's own bare-metal
     # Rust sysroot (tools/rust-sysroot/) - not every environment that
@@ -90,6 +90,11 @@ if [ -f "$FIXTURES/MACJAIL.ELF" ]; then
     done
 else
     echo "warning: MACJAIL.ELF not found in $FIXTURES - the MAC conformance test will not run (run userland/macjail/build.sh)" >&2
+fi
+# Phase 88: the same trick for the firewall test - FWTEST.ELF under a second
+# name, FWCONF, bound by tools/fixtures/mac/FWCONF.MAC, is a confined root.
+if [ -f "$FIXTURES/FWTEST.ELF" ]; then
+    mcopy -i "$TMP/part1.img" "$FIXTURES/FWTEST.ELF" "::FWCONF.ELF"
 fi
 for f in "$FIXTURES"/mac/*.MAC; do
     [ -f "$f" ] && mcopy -i "$TMP/part1.img" "$f" "::$(basename "$f")"

@@ -7,6 +7,7 @@
 #include "icmp.h"
 #include "udp.h"
 #include "net.h"
+#include "firewall.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -67,6 +68,15 @@ bool ip_send(uint32_t dest_ip, uint8_t protocol, const void* payload,
      * header's own destination address stays the true final
      * destination unchanged - exactly what every real IP router/host
      * does. */
+    /* Phase 88: the OUTBOUND filter. Every IP packet this kernel sends comes
+     * through here (udp_send, icmp, the Rust TCP and UDP stacks), so this is
+     * the one place to decide it. Before ARP: a packet that is not going to be
+     * sent should not cost an ARP request. A refusal looks like any other send
+     * failure to the caller. */
+    if (!fw_allow_out(dest_ip, protocol, payload, payload_len)) {
+        return false;
+    }
+
     bool same_subnet = (dest_ip & NET_NETMASK) == (NET_OUR_IP & NET_NETMASK);
     uint32_t next_hop_ip = same_subnet ? dest_ip : NET_GATEWAY_IP;
 
@@ -135,6 +145,16 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
     }
 
     uint32_t src_ip = be32(hdr.src_ip);
+
+    /* Phase 88: the INBOUND filter - after the packet has been parsed and is
+     * known to be for us, before anything is allowed to act on it. Fragments
+     * are reported to it as such: this stack does not reassemble them. */
+    {
+        bool fragment = (eth_ntohs(hdr.flags_fragment) & 0x3FFF) != 0;
+        if (!fw_allow_in(src_ip, hdr.protocol, fragment, transport, transport_len)) {
+            return;
+        }
+    }
 
     switch (hdr.protocol) {
         case IP_PROTO_ICMP:

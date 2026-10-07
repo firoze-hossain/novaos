@@ -10891,7 +10891,158 @@ in those few microseconds, so it never happened locally.
 * A first run of the fixed suite was cut off by a `timeout` I set shorter than the
   suite (it needs about 200 s); the fix was fine, my timeout was not.
 
-## Phase 88 and beyond
+## Phase 88: a real, stateful firewall in the network stack, in Rust
+
+**Status: done, with the gaps under "What this does NOT establish". Four levels:
+`make fw-test` (39 host tests of the Rust engine, no QEMU, 0.2 s), `make test`
+(195 assertions; the 15 new ones are this phase's), the in-OS conformance program
+`FWTEST.ELF` (217 checks, run as an unconfined root) plus the same binary run as a
+MAC-confined root, and fault injection - 79 injected bugs in the engine, all caught,
+and 21 in the kernel glue, 18 caught (the 3 that survive are listed). It is the
+roadmap's "a real, stateful firewall in the network stack".**
+
+### What was there, and what this adds
+
+The stack accepted every IP packet addressed to it and sent every packet it was
+asked to; "is a port open" was the whole policy. Now `ip_send()` (outbound) and
+`ip_handle_packet()` (inbound) - the only two places IP traffic passes - ask
+`kernel/rust/firewall.rs` about every packet before anything acts on it.
+
+* STATE. Every flow is tracked (NEW / ESTABLISHED / RELATED / INVALID). A reply to
+  something we sent is recognised and let in; a packet belonging to no flow that is
+  not a valid way to start one is INVALID and dropped, whatever the rules say.
+* TCP is followed through SYN_SENT, SYN_RECV, ESTABLISHED, FIN_WAIT, LAST_ACK,
+  TIME_WAIT and CLOSE, including a simultaneous open and a reused tuple; impossible
+  flag sets (none, SYN+FIN, SYN+RST, FIN without ACK, "xmas") and segments that are
+  impossible in the current state are INVALID. UDP is unreplied/replied. An ICMP echo
+  reply is accepted ONCE per request; an ICMP error is RELATED only if it is about a
+  flow we track. A TFTP helper expects the server's answer from another port.
+* Fragments, protocols the stack does not handle and malformed headers are always
+  dropped (this stack does not reassemble, so a fragment's ports cannot be known).
+  A rule never overrides that, and a packet a rule drops does not advance state.
+* RULES: an ordered list (32), first match wins, plus a per-direction default policy.
+  A rule matches direction, protocol, source/destination network (CIDR), port range,
+  state and ICMP type. Baseline and shipped `FIREWALL.CFG`: `policy in drop`,
+  `policy out accept`, `rule accept in state established,related` - nothing in unless
+  we asked for it. The shipped file also lets in a ping from 10.0.2.0/24.
+* LIMITS: 256 tracked flows (a full table refuses NEW flows, it never evicts live
+  ones), 64 inbound half-open TCP connections, logging rate-limited (the first 32
+  lines, then one in 256).
+* FAILS CLOSED: an engine that was never initialised drops everything; a config that
+  does not parse is refused whole and the baseline stays (with a warning, never an
+  open firewall); all tick comparisons survive the counter wrapping.
+* LOCK: one-way until reboot. Afterwards no rule, policy or switch can change, so a
+  compromised administrator after boot cannot open the firewall.
+* SYSCALLS: `SYS_FW_INFO` (73) and `SYS_FW_CTL` (74). Both need uid 0, checked BEFORE
+  the user pointer is looked at, so a hostile pointer from a non-root caller is a
+  permission error and tells it nothing. Anything that CHANGES something needs
+  `mac_is_admin()` - an UNCONFINED root (Phase 87) - so a root process bound by a MAC
+  profile may read the firewall and ask what a packet would get, but not change it.
+  A dry-run probe (`PROBE`, commit 0) changes nothing, not even a counter.
+
+### Where it is
+
+* `kernel/rust/firewall.rs` - the pure engine (state machine, rules, parser, tables)
+  and `kernel_glue` (the `rust_fw_*` exports). `kernel/net/firewall.c` - the two hooks,
+  config loading, log formatting, the syscalls, and a boot-time wire self-test.
+* `userland/libc/include/nova_fw_abi.h` - the ABI; `tools/fixtures/FIREWALL.CFG`;
+  `userland/fwtest/` and `tools/fixtures/mac/FWCONF.MAC`.
+* `fw_init()` is the FIRST thing `net_init()` does. The first version called it much
+  later, after the NICs; the gateway ping and the TFTP fetch then went out
+  unfiltered and, once the table was in use, their answers were dropped. Before any
+  NIC exists is the only place with no window in either direction.
+
+### How it is tested
+
+1. HOST (`make fw-test`): 39 tests, among them a model-based session test against a
+   simple reference implementation, fuzzing of the parser and the packet path, tick
+   wraparound, CIDR edge cases, ICMP-type rules, atomic config apply.
+2. BOOT SELF-TEST: the engine runs 13 fixed cases at every boot
+   (`Firewall: ... engine self-test 13/13`), and `fw_wire_selftest()` pushes three
+   hand-built packets - a fragment, a SYN nobody asked for, a ping from outside - through
+   the real `ip_handle_packet()` and reads the counters (3/3). That one exists
+   because fault injection showed nothing else proved the inbound hook and the
+   fragment flag were wired in.
+3. IN-OS (`FWTEST.ELF`, 217 checks): privilege and hostile pointers; probes that leave
+   no trace; a TCP connection through every state; an inbound connection that is dropped
+   until a rule invites it and survives the rule being withdrawn; UDP, ICMP and the
+   helper; exactly 256 flows; rule management and every kind of bad rule; a real TFTP
+   download through the filter, stopped by a rule dropping the request, stopped by a rule
+   dropping the answer, restored when the rule goes; the same binary installed as
+   `FWCONF.ELF` and bound by a MAC profile (a confined root, refused every change); and
+   last, the one-way lock.
+4. FAULT INJECTION. Engine: 79 mutants (`fw_mutate.py` style: one change each, rebuild,
+   run the host tests) - 79 caught; the first run left 7 alive and each got its own new
+   assertion. Kernel glue: 21 mutants, boot, check the verdicts.
+
+| Kernel mutant | Result |
+|---|---|
+| outbound hook removed / inbound hook removed / fragment flag lost | caught (the last only by the wire self-test) |
+| root check removed from info / from ctl; admin check removed; committing probe not treated as a change | caught |
+| lock does nothing; set_enabled inverted; flush_conns does nothing; add_rule position ignored | caught |
+| user pointer not checked (info and ctl); results not copied back | caught |
+| `fw_init` never called; config never loaded; outbound uses the inbound direction | caught |
+| `mac_is_admin` ignores confinement | caught (by the confined-root run) |
+| clock frozen at 0 for the inbound hook | SURVIVES - see below |
+| rule text not NUL-terminated by the C side | SURVIVES - see below |
+| "accept if the engine returns >= 0" instead of "!= 0" | SURVIVES - equivalent: the engine only returns 0 or 1 |
+
+### Findings along the way
+
+* A real ping to the gateway is a bad live probe: the emulated network forwards ICMP to
+  the host, which answers late or not at all (the replies arrive when the NEXT request is
+  sent). This is already visible in the existing ping demos and in udptest, which report "Request timed out" and "no reply" and carry on. The
+  live-traffic group uses a TFTP download instead.
+* Later in the boot the emulated network stops answering promptly at all (the other suites'
+  tasks compete for the host's two CPUs). So `FWTEST.ELF` runs FIRST in the sandbox task,
+  not last, even though it ends in an irreversible lock; nothing after it changes a rule.
+  If the download fails anyway, the group runs a CONTROL - the same download with the
+  firewall switched off - and is skipped only if that fails just as badly. A download that
+  works with the firewall off but not on is a firewall bug and fails the test. The boot's
+  own gateway ping, TFTP fetch, DNS lookup and package install pass through the firewall
+  and have their own assertions.
+* The emulated TFTP server answers from port 69, the port it was asked on, so over the
+  real network the reply is an ordinary ESTABLISHED one; the other-port helper is exercised by
+  the hand-built flows only. I had assumed otherwise and the first live test failed on it.
+* The MAC jail's syscall sweep and denial counts grew from 72 to 74 syscalls.
+
+### What this does NOT establish
+
+* TCP tracking is by flags and direction, with NO sequence-number window: an off-path
+  attacker who can guess a flow's 5-tuple can inject a segment that is valid in its state.
+* One helper (TFTP). No NAT, no IPv6, IP options and fragments are not interpreted, no
+  rate limiting beyond the half-open cap. Only IPv4 unicast addressed to us is seen.
+* Timeouts are tested in the engine against a model and at the boundaries, not on the wire:
+  the shortest real flow timeout is 10 s (30 s for UDP and ICMP), and no boot test waits that
+  long. That is why "clock frozen at 0 for the inbound hook" survives: the kernel hook
+  passes `timer_get_ticks()`, a flow would never look expired to inbound packets, and nothing
+  that runs in a boot can tell.
+* `req.text[sizeof req.text - 1] = '\0'` in `fw_sys_ctl` survives its mutant because the
+  engine caps rule text length and refuses an over-long one either way. It is defence in
+  depth the tests cannot observe; the unterminated-text test passes with and without it.
+* The wire self-test runs only the DROP direction (accepting a packet would answer it).
+  Acceptance over the wire is covered by the boot's real traffic.
+* Verified on QEMU with 2 vCPUs on a 2-core sandbox. I have not run it on parallel hardware.
+* This session's sandbox was reset in the middle of the phase and I rebuilt the toolchain.
+  The pinned `compiler_builtins` 0.1.152 does not compile on a current rustc (1.97), and
+  the RUSTC_BOOTSTRAP fallback of `tools/rust-sysroot/` therefore fails on one; I worked
+  around it locally (the in-tree compiler-builtins of the toolchain's `rust-src`) and did
+  NOT change the repository. CI uses nightly + `-Z build-std` and is unaffected, but
+  anyone building the fallback path on a new stable compiler will hit it.
+
+### Mistakes of mine worth recording
+
+* `fw_init()` was first placed late in boot and silently broke the boot ping and TFTP.
+* The first live-traffic test skipped itself when the ping failed - a silent pass. It now
+  fails unless a control run proves the network, not the firewall, is at fault.
+* Two checks of the form `x || 1` / `a == 1 || a != 1` (vacuous) had been written and were removed.
+* A fault-injection harness run overlapped with my own edits to the same file; it restored
+  an old copy of the file over a mutated one and left a mutation in place until I looked at
+  the diff. The tree was verified clean before every measurement reported here.
+* A dev boot against the shared test disk polluted it and made two unrelated assertions
+  (`ext2_write_readback`, the global scan) fail; the disk image is recreated before a real run.
+
+## Phase 89 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

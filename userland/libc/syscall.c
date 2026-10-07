@@ -510,3 +510,12 @@ int sys_mac_ctl(unsigned int op, unsigned int arg) {
                       : "memory");
     return r;
 }
+
+/* Phase 88: the firewall. */
+int sys_fw_info(nova_fw_info_t* out) {
+    return fb_call1(NOVA_SYS_FW_INFO, (unsigned int)out);
+}
+
+int sys_fw_ctl(nova_fw_req_t* req) {
+    return fb_call1(NOVA_SYS_FW_CTL, (unsigned int)req);
+}

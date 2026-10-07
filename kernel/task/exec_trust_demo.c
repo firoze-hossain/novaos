@@ -57,6 +57,27 @@ void exec_trust_demo_task(void) {
 
     const char* argv0[] = {"TPROBE.ELF"};
 
+    /* Phase 88: the stateful firewall. FWTEST.ELF is the unconfined root and
+     * firewall administrator: it drives SYS_FW_CTL against the real filter -
+     * probes, hand-built TCP/UDP/ICMP flows, the 256-flow table limit, rule
+     * management, one real TFTP download through the filter - and last locks
+     * the rules one way. Started TRUSTED so it keeps this task's capabilities.
+     *
+     * It runs FIRST, not last, though it ends with the one-way lock: its
+     * live-traffic group needs the emulated network to answer, and that only
+     * happens early in the boot. Later, with the other suites competing for
+     * the host's CPUs, replies come seconds late or not at all (see the "no
+     * reply" notes of udptest and the ping demos). Nothing after it changes a
+     * rule, so the lock costs the others nothing. */
+    static const char* const fw_all[] = {"FWTEST.ELF"};
+    int pid_fw = sys_exec_trusted("FWTEST.ELF", (char**)fw_all, 1);
+    int code_fw = (pid_fw >= 0) ? sys_wait(pid_fw) : -1;
+    sys_write(pid_fw >= 0 && code_fw == 0
+                  ? "[sandbox] PASS: FWTEST.ELF (stateful firewall "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: FWTEST.ELF - the stateful firewall "
+                    "conformance suite did not pass.\n");
+
     /* First: plain SYS_EXEC. Even though *this* task has can_open_any_
      * file, plain SYS_EXEC never delegates it - the new process should
      * get nothing, exactly like any other ordinary program, and

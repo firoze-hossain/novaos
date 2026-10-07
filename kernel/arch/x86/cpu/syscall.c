@@ -40,6 +40,7 @@
 #include "../../drivers/sound/audio.h"
 #include "../../task/rlimit.h"
 #include "../../security/mac.h"
+#include "../../net/firewall.h"
 #include "../../../userland/libc/include/nova_mac_abi.h"
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../mm/paging.h"
@@ -977,6 +978,17 @@ AUDIO_HANDLER(handle_audio_close, audio_sys_close)
 /* Phase 87: mandatory access control. SYS_MAC_INFO says what confines the
  * caller and what has been denied; SYS_MAC_CTL is the administrator's call
  * (an unconfined root only - decided in mac_sys_ctl()). */
+/* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
+ * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
+ * kernel's own record of the caller. */
+static void handle_fw_info(registers_t* regs) {
+    regs->eax = (uint32_t)fw_sys_info(regs->ebx);
+}
+
+static void handle_fw_ctl(registers_t* regs) {
+    regs->eax = (uint32_t)fw_sys_ctl(regs->ebx);
+}
+
 static void handle_mac_info(registers_t* regs) {
     regs->eax = (uint32_t)mac_sys_info(regs->ebx);
 }
@@ -1931,6 +1943,14 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_MAC_CTL:
             handle_mac_ctl(regs);
+            break;
+
+        case SYS_FW_INFO:
+            handle_fw_info(regs);
+            break;
+
+        case SYS_FW_CTL:
+            handle_fw_ctl(regs);
             break;
 
         case SYS_FB_INFO:

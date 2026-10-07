@@ -438,6 +438,16 @@ rlimit-test:
 mac-test:
 	@sh tools/tests/run_mac_tests.sh
 
+# Phase 88: the stateful firewall. `fw-test` runs the Rust engine
+# (kernel/rust/firewall.rs) on the host: rule and config parsing, packet-header
+# parsing, the TCP state machine, UDP/ICMP tracking, ICMP errors and the TFTP
+# helper, expiry across the tick counter's wrap, table and half-open limits, the
+# lock, a model-based test (every legitimate session accepted, every stray packet
+# dropped) and fuzzing. No QEMU; a few seconds. The in-OS conformance test is
+# FWTEST.ELF, part of `make test`.
+fw-test:
+	@sh tools/tests/run_fw_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -538,4 +548,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test clean setup check-prereqs help install-image test-custom-boot

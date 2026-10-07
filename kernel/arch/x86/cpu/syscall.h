@@ -632,6 +632,15 @@
 #define SYS_MAC_INFO    71
 #define SYS_MAC_CTL     72
 
+/* Phase 88: the stateful firewall in the network stack. SYS_FW_INFO reads its
+ * state and counters (uid 0); SYS_FW_CTL reads rules and tracked flows, probes
+ * what it would do with a packet, and - for the MAC administrator only -
+ * changes rules, policy and the lock. Contract:
+ * userland/libc/include/nova_fw_abi.h; engine: kernel/rust/firewall.rs;
+ * the hooks and the syscalls: kernel/net/firewall.c. */
+#define SYS_FW_INFO     73
+#define SYS_FW_CTL      74
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

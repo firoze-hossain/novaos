@@ -135,15 +135,15 @@ static void test_jail(void) {
     CHECK(code != NOSPAWN, "the jail could not be started at all");
     CHECK(code == 0, "the jail reported %d failed checks (its own lines say which)", code);
     nova_mac_info_t after = info();
-    /* the jail's own 72, plus what its child, its forked child and ITS forked child were refused */
-    CHECK(after.total_denied >= before.total_denied + 78, "the kernel's system-wide denial count rose by only %u", after.total_denied - before.total_denied);
+    /* the jail's own 74, plus what its child, its forked child and ITS forked child were refused */
+    CHECK(after.total_denied >= before.total_denied + 80, "the kernel's system-wide denial count rose by only %u", after.total_denied - before.total_denied);
     CHECK(after.loaded >= before.loaded + 2, "the jail's and its child's profiles were loaded (%u -> %u)", before.loaded, after.loaded);
     CHECK(after.denied == 0, "the driver itself is unconfined and was never denied (%u)", after.denied);
     /* the one write it was allowed to make really happened, and the administrator can clean it up */
     CHECK(sys_delete_file("JAILOUT.TXT") == 1, "the jail's permitted write to JAILOUT.TXT did not happen");
     /* the files it was refused were never touched */
     CHECK(sys_delete_file("OTHER.TXT") == -1, "OTHER.TXT must not exist: the jail was refused it");
-    if (failures == f0) printf("[mactest] ok: the jail - a root process with every capability was refused each syscall it did not list and every file, peer and program off its list - 72 refusals, each counted against the right thing\n");
+    if (failures == f0) printf("[mactest] ok: the jail - a root process with every capability was refused each syscall it did not list and every file, peer and program off its list - 74 refusals, each counted against the right thing\n");
 }
 
 static void test_no_escape_by_exec(void) {

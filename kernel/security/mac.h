@@ -65,6 +65,10 @@ void mac_apply_stack(struct process* child, const mac_stack_t* st);
 void mac_inherit_fork(struct process* child, const struct process* parent);
 void mac_reset(struct process* p);
 
+/* Is `p` the policy administrator: root, and not itself confined by any profile?
+ * (The firewall uses the same definition for who may change it.) */
+bool mac_is_admin(const struct process* p);
+
 int mac_sys_info(uint32_t user_ptr);
 int mac_sys_ctl(uint32_t op, uint32_t arg);
 
