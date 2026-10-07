@@ -1,0 +1,6 @@
+# FWCONF - allows every syscall, and nothing else. FWTEST.ELF installed under this
+# name is a ROOT process with every capability that is nonetheless CONFINED: the
+# firewall's administrator is an UNCONFINED root, so it may read the firewall but
+# must not change it.
+mode enforce
+allow syscall *

@@ -113,7 +113,7 @@ const SYS_MAC_INFO: u32 = 71;
 /// `SYSCALL_NAMES[n]` is the profile name of syscall number `n`
 /// (kernel/arch/x86/cpu/syscall.h). A host test parses that header and fails
 /// if this table and it ever disagree.
-pub const SYSCALL_NAMES: [&str; 73] = [
+pub const SYSCALL_NAMES: [&str; 75] = [
     "", "write", "exit", "yield", "open", "read", "close", "net_send", "spawn", "exec",
     "wait", "sbrk", "fork", "read_key", "list_files", "rtc_read", "lspci", "beep",
     "write_file", "delete_file", "gfx_enter", "gfx_exit", "gfx_put_pixel",
@@ -125,7 +125,7 @@ pub const SYSCALL_NAMES: [&str; 73] = [
     "fb_readback", "shm_create", "shm_grant", "shm_map", "shm_unmap", "shm_destroy",
     "shm_info", "msg_open", "msg_close", "msg_send", "msg_recv", "msg_service",
     "msg_ctl", "audio_open", "audio_write", "audio_ctl", "audio_close", "rlimit",
-    "mac_info", "mac_ctl",
+    "mac_info", "mac_ctl", "fw_info", "fw_ctl",
 ];
 
 // ------------------------------------------------------------------------

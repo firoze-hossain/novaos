@@ -8,6 +8,7 @@
 #include "nova_audio_abi.h"
 #include "nova_rlimit_abi.h"
 #include "nova_mac_abi.h"
+#include "nova_fw_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -154,6 +155,11 @@ int sys_rlimit(nova_rlimit_t* req);
  * administrator's call (an unconfined root only): returns 0, 1, or -1. */
 int sys_mac_info(nova_mac_info_t* out);
 int sys_mac_ctl(unsigned int op, unsigned int arg);
+
+/* Phase 88: the stateful firewall (see nova_fw_abi.h). Both need uid 0; anything
+ * that changes it needs the MAC administrator. Return 0 or a negative errno. */
+int sys_fw_info(nova_fw_info_t* out);
+int sys_fw_ctl(nova_fw_req_t* req);
 
 int sys_audio_open(nova_audio_open_t* req);
 int sys_audio_write(nova_audio_write_t* req);

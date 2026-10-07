@@ -2,6 +2,7 @@
  * net.c - NIC selection, the receive-poll loop, and the shared IP/
  * ICMP checksum helper
  */
+#include "firewall.h"
 #include "net.h"
 #include "ethernet.h"
 #include "../drivers/net/ne2000.h"
@@ -27,6 +28,15 @@ static active_nic_t active_nic = NIC_NONE;
 DRIVER_REGISTER("Network", net_init, DRIVER_PHASE_NETWORK);
 
 void net_init(void) {
+    /* Phase 88: the firewall's baseline is in place BEFORE any NIC is brought
+     * up, so there is no moment at which a packet can be sent or received
+     * unfiltered. (An engine nobody has initialised drops everything - and
+     * the first version of this called fw_init() much later, at the end of
+     * early boot, which silently failed the gateway ping and the TFTP fetch
+     * that run before it.) FIREWALL.CFG is read later, once there is a
+     * filesystem: fw_load_config(). */
+    fw_init();
+
     /* Phase 45: virtio-net checked first, preferred over both
      * existing drivers if present - matching real-world practice
      * (virtio is preferred over emulated real hardware whenever a

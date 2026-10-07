@@ -135,14 +135,14 @@ static int mode_probe(void) {
      * AND counted against that exact number. exit and mac_info are always
      * allowed; everything else not listed is not. */
     int swept = 0;
-    for (unsigned n = 1; n <= 72; n++) {
+    for (unsigned n = 1; n <= 74; n++) {
         if (is_in(jail_allowed, (int)(sizeof jail_allowed / sizeof jail_allowed[0]), n)) continue;
         DENIED(raw(n, 0, 0, 0), KIND_SYSCALL, n);
         swept++;
     }
     CHECK(swept >= 45, "only %d syscalls were swept", swept);
     /* numbers the kernel has never heard of are denied too, not passed through */
-    static const unsigned unknown[] = { 73, 100, 127, 128, 255, 4096, 0x7FFFFFFF };
+    static const unsigned unknown[] = { 75, 100, 127, 128, 255, 4096, 0x7FFFFFFF };
     for (unsigned k = 0; k < sizeof unknown / sizeof unknown[0]; k++) {
         DENIED(raw(unknown[k], 0, 0, 0), KIND_SYSCALL, unknown[k]);
     }
@@ -242,8 +242,8 @@ static int mode_probe(void) {
 
     /* 8. the whole thing was counted */
     nova_mac_info_t fin = info();
-    /* 48 swept syscalls + 7 unknown numbers + 4 + 7 file refusals + 4 network + 2 exec = 72 */
-    CHECK(fin.denied == 72, "the jail made exactly 72 refused attempts and the kernel counted %u", fin.denied);
+    /* 50 swept syscalls + 7 unknown numbers + 4 + 7 file refusals + 4 network + 2 exec = 74 */
+    CHECK(fin.denied == 74, "the jail made exactly 74 refused attempts and the kernel counted %u", fin.denied);
     CHECK(fin.total_denied >= fin.denied, "the system-wide count (%u) cannot be below this process's (%u)", fin.total_denied, fin.denied);
     CHECK(fin.complained == 0, "a process in enforce mode complains about nothing (%u)", fin.complained);
     printf("[macjail] note: the jail made %u denied attempts (%d syscalls swept), all counted\n", fin.denied, swept);

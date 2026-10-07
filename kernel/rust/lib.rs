@@ -44,6 +44,7 @@ mod virgl;
 mod shm;
 mod msg;
 mod mac;
+mod firewall;
 mod mixer;
 mod http;
 mod pkgsign_core;

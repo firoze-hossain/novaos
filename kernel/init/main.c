@@ -8,6 +8,7 @@
 #include "../drivers/sound/audio.h"
 #include "../task/rlimit.h"
 #include "../security/mac.h"
+#include "../net/firewall.h"
 #include "../drivers/serial/serial.h"
 #include "../lib/spinlock.h"
 #include "../drivers/timer/timer.h"
@@ -516,6 +517,10 @@ void kernel_late_init(void) {
     audio_init();
     rlimit_init();
     mac_init();
+    /* Phase 88: the firewall's baseline is already up (net_init() did it, before
+     * any NIC); now that there is a filesystem, read its rules. */
+    fw_load_config();
+    fw_wire_selftest();
 
     {
         bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();

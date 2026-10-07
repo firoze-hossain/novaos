@@ -187,7 +187,7 @@ bool mac_net_allowed(process_t* p, uint32_t op, uint32_t ip, uint16_t port) {
     return v > 0;
 }
 
-static bool is_admin(const process_t* p) {
+bool mac_is_admin(const process_t* p) {
     return p->uid == 0 && p->mac_n == 0;
 }
 
@@ -198,7 +198,7 @@ bool mac_policy_write_allowed(process_t* p, const char* kname) {
     if (!rust_mac_is_policy_file((const uint8_t*)kname, cstr_len(kname))) {
         return true;
     }
-    if (is_admin(p) && !rust_mac_is_frozen()) {
+    if (mac_is_admin(p) && !rust_mac_is_frozen()) {
         return true;
     }
     p->mac_denied++;
@@ -368,9 +368,9 @@ int mac_sys_ctl(uint32_t op, uint32_t arg) {
     }
     switch (op) {
     case NOVA_MAC_CTL_IS_ADMIN:
-        return is_admin(p) ? 1 : 0;
+        return mac_is_admin(p) ? 1 : 0;
     case NOVA_MAC_CTL_FREEZE:
-        if (!is_admin(p)) {
+        if (!mac_is_admin(p)) {
             p->mac_denied++;
             p->mac_last_kind = NOVA_MAC_KIND_POLICY;
             p->mac_last_arg = op;
