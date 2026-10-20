@@ -110,10 +110,9 @@ static inline int nova_audio_write_all(const nova_audio_stream_t* s, const short
         if (n != -EAGAIN && n != 0) {
             return n;
         }
-        int e = nova_audio_now_s() - start;
-        if (e < 0) {
-            e += 86400;
-        }
+        int now = nova_audio_now_s();
+        int e = (now >= start) ? (now - start) :
+                (start >= 86400 - 3600 && now < 3600) ? (now + 86400 - start) : 0;
         if ((unsigned int)e > timeout_s) {
             return -EAGAIN;
         }

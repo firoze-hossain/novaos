@@ -84,8 +84,10 @@ static int now_s(void) {
 }
 
 static int elapsed_s(int start) {
-    int e = now_s() - start;
-    return e < 0 ? e + 86400 : e;
+    int now = now_s();
+    if (now >= start) return now - start;
+    if (start >= 86400 - 3600 && now < 3600) return now + 86400 - start;
+    return 0;
 }
 
 /* A shared-memory mailbox (Phase 83) for sequencing children WITHOUT using the

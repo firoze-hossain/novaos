@@ -107,11 +107,16 @@ static int rl_set(int pid, unsigned int mask, unsigned int vm, unsigned int pct,
 static int now_s(void) {
     nova_rtc_time_t t;
     sys_rtc_read(&t);
+    t.hour %= 24;
+    t.minute %= 60;
+    t.second %= 60;
     return t.hour * 3600 + t.minute * 60 + t.second;
 }
 static int elapsed_s(int start) {
-    int e = now_s() - start;
-    return e < 0 ? e + 86400 : e;
+    int now = now_s();
+    if (now >= start) return now - start;
+    if (start >= 86400 - 3600 && now < 3600) return now + 86400 - start;
+    return 0;
 }
 
 /* Waits for `pid` to exit, up to `timeout_s`. Returns 1 and sets *code if it
@@ -338,7 +343,14 @@ static void test_cpu_time(void) {
         feeders[i] = sys_fork();
         if (feeders[i] == 0) {
             int t = now_s();
-            while (res[R_FEED_STOP] == 0 && elapsed_s(t) < 25) sys_yield();
+            int loops = 0;
+            while (res[R_FEED_STOP] == 0) {
+                if (++loops >= 200) {
+                    loops = 0;
+                    if (elapsed_s(t) >= 25) break;
+                }
+                sys_yield();
+            }
             sys_exit(0);
         }
     }
@@ -477,7 +489,14 @@ static void test_cpu_share(void) {
 
 static void gated_child(unsigned int slot) {
     int start = now_s();
-    while (res[R_GATE + slot] == 0 && elapsed_s(start) < 30) sys_yield();
+    int loops = 0;
+    while (res[R_GATE + slot] == 0) {
+        if (++loops >= 200) {
+            loops = 0;
+            if (elapsed_s(start) >= 30) break;
+        }
+        sys_yield();
+    }
     sys_exit(0);
 }
 
@@ -488,7 +507,14 @@ enum { R_BOMB_GATE = R_GATE + 7 };
 
 static void hold_until_released(void) {
     int t = now_s();
-    while (res[R_BOMB_GATE] == 0 && elapsed_s(t) < 20) sys_yield();
+    int loops = 0;
+    while (res[R_BOMB_GATE] == 0) {
+        if (++loops >= 200) {
+            loops = 0;
+            if (elapsed_s(t) >= 20) break;
+        }
+        sys_yield();
+    }
 }
 
 /* A deliberately finite fork bomb: every process forks six times, and its

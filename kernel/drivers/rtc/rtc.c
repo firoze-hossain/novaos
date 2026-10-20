@@ -3,6 +3,7 @@
  */
 #include "rtc.h"
 #include "../../arch/x86/io.h"
+#include "../../lib/spinlock.h"
 
 #define CMOS_ADDRESS 0x70
 #define CMOS_DATA    0x71
@@ -15,6 +16,8 @@
 #define REG_YEAR     0x09
 #define REG_STATUS_A 0x0A
 #define REG_STATUS_B 0x0B
+
+static spinlock_t rtc_lock;
 
 static uint8_t cmos_read(uint8_t reg) {
     outb(CMOS_ADDRESS, reg);
@@ -39,6 +42,7 @@ static void read_raw(rtc_time_t* out) {
 }
 
 void rtc_read(rtc_time_t* out) {
+    uint32_t flags = spinlock_acquire(&rtc_lock);
     rtc_time_t a, b;
 
     /* Two things can produce a torn/wrong reading here: the RTC being
@@ -51,9 +55,11 @@ void rtc_read(rtc_time_t* out) {
      * emulated-oddly RTC can't hang the boot sequence forever. */
     rtc_time_t result;
     for (int attempt = 0; attempt < 10; attempt++) {
-        while (update_in_progress()) { }
+        int spins = 0;
+        while (update_in_progress() && spins < 1000) { spins++; }
         read_raw(&a);
-        while (update_in_progress()) { }
+        spins = 0;
+        while (update_in_progress() && spins < 1000) { spins++; }
         read_raw(&b);
 
         if (a.second == b.second && a.minute == b.minute &&
@@ -95,4 +101,5 @@ void rtc_read(rtc_time_t* out) {
     out->day = (uint8_t)result.day;
     out->month = (uint8_t)result.month;
     out->year = (uint16_t)(2000 + result.year);
+    spinlock_release(&rtc_lock, flags);
 }
