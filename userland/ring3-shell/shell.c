@@ -220,6 +220,7 @@ static void cmd_help(void) {
     printf("  ping HOST_IP    - ICMP echo (real ~3s timeout, written in Rust)\n");
     printf("  nslookup HOST   - resolve a hostname via DNS (Rust, Phase 60)\n");
     printf("  tftp IP REMOTE [LOCAL] - fetch a file over TFTP (Rust, Phase 60)\n");
+    printf("  update          - check & stage OS update from RozeHub / GitHub (Rust)\n");
     printf("  help            - show this message\n");
     printf("\n");
     printf("Not yet available here: store (the full compositor +\n");
@@ -464,6 +465,24 @@ static void cmd_tftp(int argc, char* argv[]) {
     int exit_code = sys_wait(pid);
     if (exit_code != 0) {
         printf("tftp: failed (see TFTP.ELF's own message above, if any)\n");
+    }
+}
+
+static void cmd_update(int argc, char* argv[]) {
+    char* update_argv[4];
+    int update_argc = 0;
+    update_argv[update_argc++] = "UPDATE.ELF";
+    if (argc >= 2) {
+        update_argv[update_argc++] = argv[1];
+    }
+    int pid = sys_exec_trusted("UPDATE.ELF", update_argv, update_argc);
+    if (pid < 0) {
+        printf("update: failed to load UPDATE.ELF\n");
+        return;
+    }
+    int exit_code = sys_wait(pid);
+    if (exit_code != 0) {
+        printf("update: finished with exit code %d\n", exit_code);
     }
 }
 
@@ -937,6 +956,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_nslookup(argc2, tokens);
         } else if (strcmp(tokens[0], "tftp") == 0) {
             cmd_tftp(argc2, tokens);
+        } else if (strcmp(tokens[0], "update") == 0) {
+            cmd_update(argc2, tokens);
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

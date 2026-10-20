@@ -23,6 +23,7 @@ CC="gcc -m32 -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -I$LIBC/
 nasm -f elf32 "$LIBC/crt0.asm" -o crt0.o
 $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
+$CC -c "$LIBC/string.c" -o string.o
 
 # Same rustc-flavor detection as ping-rs/build.sh - see that script's
 # own comment for why this matters (must match whichever toolchain
@@ -47,7 +48,7 @@ for prog in ls echo cp rm; do
         "$prog.rs"
 
     ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
-        -o "$prog.elf" crt0.o "${prog}_main.o" syscall.o stdlib.o \
+        -o "$prog.elf" crt0.o "${prog}_main.o" syscall.o string.o stdlib.o \
         "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
     cp "$prog.elf" "../../tools/fixtures/$(echo $prog | tr a-z A-Z).ELF"
