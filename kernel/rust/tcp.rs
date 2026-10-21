@@ -548,6 +548,33 @@ pub extern "C" fn rust_tcp_accept(id: i32) -> i32 {
     }
 }
 
+/// Non-blocking variant of rust_tcp_accept: pops an already-established
+/// connection from listener `id`'s backlog if one is ready.
+/// Returns socket id on success, -2 if no connection is pending (EWOULDBLOCK),
+/// or -1 if `id` is not a valid listening socket.
+#[no_mangle]
+pub extern "C" fn rust_tcp_accept_nonblock(id: i32) -> i32 {
+    if id < 0 || (id as usize) >= MAX_TCP_CONNS {
+        return -1;
+    }
+    let idx = id as usize;
+    let mut conns = CONNS.lock();
+    if !conns[idx].in_use || !conns[idx].is_listener || conns[idx].state != TcpState::Listen {
+        return -1;
+    }
+    if conns[idx].backlog_len > 0 {
+        let popped = conns[idx].backlog[0];
+        for i in 1..MAX_BACKLOG {
+            conns[idx].backlog[i - 1] = conns[idx].backlog[i];
+        }
+        conns[idx].backlog[MAX_BACKLOG - 1] = -1;
+        conns[idx].backlog_len -= 1;
+        popped as i32
+    } else {
+        -2
+    }
+}
+
 /// Opens a connection to remote_ip:remote_port - a full, real 3-way
 /// handshake, with genuine SYN retransmission on loss (unlike the old
 /// tcp.c's single fire-and-hope SYN). Auto-binds an ephemeral local

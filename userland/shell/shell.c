@@ -23,6 +23,7 @@
 #include "../gui/compositor.h"
 #include "../gui/store.h"
 #include "../pkg/pkgmgr.h"
+#include "../libc/include/nova_pkgrepo_abi.h"
 #include "../../kernel/drivers/rtc/rtc.h"
 #include "../../kernel/drivers/pci/pci.h"
 #include "../../kernel/drivers/sound/ac97.h"
@@ -431,10 +432,57 @@ static void cmd_pkg(const char* arg) {
             vga_printf("pkg install-http: failed - see the log above for "
                        "the specific reason\n");
         }
+    } else if (strncmp(arg, "repo start", 10) == 0 || strncmp(arg, "serve", 5) == 0) {
+        extern int rust_pkgrepo_ctl(uint32_t cmd, void* arg);
+        int port = 8080;
+        const char* pstr = (strncmp(arg, "serve", 5) == 0) ? (arg + 5) : (arg + 10);
+        while (*pstr == ' ') pstr++;
+        if (*pstr != '\0') {
+            int p = 0;
+            while (*pstr >= '0' && *pstr <= '9') {
+                p = p * 10 + (*pstr - '0');
+                pstr++;
+            }
+            if (p > 0 && p <= 65535) {
+                port = p;
+            }
+        }
+        int res = rust_pkgrepo_ctl(NOVA_PKGREPO_CTL_START, (void*)(uintptr_t)port);
+        if (res == 0) {
+            vga_printf("Package repository server started on port %d.\n", port);
+        } else if (res == -16) {
+            vga_puts("pkg repo: server is already running.\n");
+        } else {
+            vga_printf("pkg repo: failed to start server (error %d).\n", res);
+        }
+    } else if (strncmp(arg, "repo stop", 9) == 0) {
+        extern int rust_pkgrepo_ctl(uint32_t cmd, void* arg);
+        int res = rust_pkgrepo_ctl(NOVA_PKGREPO_CTL_STOP, NULL);
+        if (res == 0) {
+            vga_puts("Package repository server stopped.\n");
+        } else {
+            vga_puts("pkg repo: server is not currently running.\n");
+        }
+    } else if (strncmp(arg, "repo status", 11) == 0 || strcmp(arg, "repo") == 0) {
+        extern int rust_pkgrepo_ctl(uint32_t cmd, void* arg);
+        nova_pkgrepo_status_t status;
+        int res = rust_pkgrepo_ctl(NOVA_PKGREPO_CTL_STATUS, (void*)&status);
+        if (res == 0) {
+            vga_printf("Package repository server: %s\n", status.is_running ? "RUNNING" : "STOPPED");
+            if (status.is_running) {
+                vga_printf("  Port: %u\n", (unsigned int)status.port);
+                vga_printf("  Total requests: %u\n", (unsigned int)status.requests_total);
+                vga_printf("  Packages served: %u\n", (unsigned int)status.packages_served);
+                vga_printf("  Bytes served: %u\n", (unsigned int)status.bytes_served);
+            }
+        } else {
+            vga_printf("pkg repo: failed to query status (error %d).\n", res);
+        }
     } else {
         vga_puts("Usage: pkg list | pkg installed | pkg install NAME | "
                   "pkg remove NAME | pkg fetch NAME | pkg install-http "
-                  "HOST:PORT NAME\n");
+                  "HOST:PORT NAME | pkg repo start [PORT] | pkg repo stop | "
+                  "pkg repo status\n");
     }
 }
 

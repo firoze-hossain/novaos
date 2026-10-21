@@ -650,6 +650,11 @@
 #define SYS_KLOG_WRITE  76
 #define SYS_KLOG_INFO   77
 
+/* Phase 90: package-repository network protocol support, server side (see nova_pkgrepo_abi.h).
+ * SYS_PKGREPO_CTL controls and queries the in-kernel package repository HTTP server
+ * (start, stop, status). */
+#define SYS_PKGREPO_CTL 78
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

@@ -11076,7 +11076,47 @@ From Month 4 ("Server & security core") of the NovaOS Build Plan: replaced the p
    - Ring-3 userspace conformance test (`userland/klogtest/klogtest.c` -> `KLOGTEST.ELF`) run during boot, validating info query, write/read roundtrip, severity thresholding, facility filtering, and hostile pointer error handling (EFAULT).
    - All 198 boot assertions pass in `tools/python/test_runner.py`.
 
-## Phase 90 and beyond
+## Phase 90: Package-repository network protocol support, server side (in Rust)
+
+From Month 4 ("Server & security core") of the NovaOS Build Plan: built the server-side counterpart to the existing `pkg install-http` client (Phase 64), enabling a NovaOS machine to serve cryptographically verified packages (`.PKG` files) to other machines over HTTP/1.1 directly on top of the memory-safe kernel TCP stack (`kernel/rust/tcp.rs`) and signature verification (`kernel/rust/pkgsign_core.rs`), implemented fully in memory-safe `#![no_std]` Rust (`kernel/rust/pkgrepo.rs`).
+
+### What was built
+
+1. **Protocol Engine & Cryptographic Integrity (`kernel/rust/pkgrepo.rs`)**:
+   - Lightweight, zero-heap-allocation HTTP/1.1 request parser supporting `GET` and `HEAD` methods.
+   - Endpoint routing:
+     - `GET /packages/<NAME>.PKG` (or `/<NAME>.PKG` / `/packages/<NAME>`): reads package from VFS, parses `NVPK` header, and verifies the 32-byte HMAC-SHA256 signature against the kernel's trusted signing key. Tampered or unsigned packages are refused with `403 Forbidden` (`403 Signature Invalid`), while valid packages are served with `200 OK` (`application/octet-stream`). Missing packages yield `404 Not Found`.
+     - `HEAD /packages/<NAME>.PKG`: returns headers and Content-Length without payload body.
+     - `GET /packages` / `GET /packages/index` / `GET /index`: dynamically formats a repository manifest index of all available signed packages (`EDITOR.PKG`, `GAME.PKG`).
+     - `GET /status` / `GET /health`: telemetry status report (`200 OK` `text/plain`).
+     - Malformed requests return `400 Bad Request`; unsupported methods return `405 Method Not Allowed`.
+   - Thread-safe lifecycle state (`active`, `listen_sock`, `port`, `requests_total`, `packages_served`, `bytes_served`) protected by `SpinLock`.
+   - Non-blocking connection polling hook (`rust_pkgrepo_poll()`) integrated into `kernel/net/net.c`'s `net_poll()` via `rust_tcp_accept_nonblock()`.
+
+2. **Syscall Control Gateway (`SYS_PKGREPO_CTL`, 78)**:
+   - Defined in `userland/libc/include/nova_pkgrepo_abi.h`, `kernel/arch/x86/cpu/syscall.h`, and `userland/libc/include/novasys.h`.
+   - Commands:
+     - `NOVA_PKGREPO_CTL_START` (1): starts repository HTTP server on specified port (default 8080).
+     - `NOVA_PKGREPO_CTL_STOP` (2): stops server and closes listen socket.
+     - `NOVA_PKGREPO_CTL_STATUS` (3): queries `nova_pkgrepo_status_t` telemetry.
+   - Kernel handler in `kernel/arch/x86/cpu/syscall.c` performs memory-range validation via `paging_user_range_ok()` returning `-EFAULT` on invalid user pointers and `-EINVAL` on unknown commands.
+
+3. **Userland CLI Integration (`userland/shell/shell.c`)**:
+   - `pkg repo start [PORT]` / `pkg serve [PORT]`: launches repo server on specified or default port.
+   - `pkg repo stop`: stops active repo server.
+   - `pkg repo status`: prints running state, port, requests served, packages served, and total bytes.
+
+4. **Verification & Testing**:
+   - Host Rust unit tests (`tools/tests/run_pkgrepo_tests.sh`, `make pkgrepo-test`): 4 test suites covering HTTP request parsing, 8.3 filename normalization, response formatting, and server lifecycle.
+   - Kernel boot self-test (`rust_pkgrepo_selftest()`): verified in `kernel/init/main.c`.
+   - In-OS ring-3 conformance test (`userland/pkgrepotest/pkgrepotest.c` -> `PKGRTEST.ELF`): exercises status queries, invalid/hostile pointer rejection (`-EFAULT`), invalid command rejection (`-EINVAL`), server start, duplicate start rejection (`-EBUSY`), running state verification, clean stop, and stopped state verification.
+   - Full test suite: all 201 assertions pass in `tools/python/test_runner.py` (`make test`).
+
+5. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Updated Sheet 2 (Kernel Track): Row 16 (Stateful firewall), Row 17 (Structured kernel logging), and Row 18 (Package repository network protocol support) marked as "Done".
+   - Updated Sheet 1 (Summary): Month 4 completed (4/4, 100%), Kernel Track at 17/26 (65.38%), Overall at 17/56 (30.36%).
+
+## Future Directions
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

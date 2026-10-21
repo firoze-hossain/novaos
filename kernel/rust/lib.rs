@@ -52,6 +52,7 @@ mod pkgsign;
 mod dynlink;
 mod growtable;
 mod klog;
+mod pkgrepo;
 
 use core::panic::PanicInfo;
 

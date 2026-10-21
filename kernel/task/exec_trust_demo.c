@@ -379,6 +379,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: KLOGTEST.ELF - the structured kernel logging "
                     "conformance suite did not pass.\n");
 
+    /* Phase 90: package-repository network protocol support, server side.
+     * PKGRTEST.ELF exercises SYS_PKGREPO_CTL, invalid/hostile pointers,
+     * server start/stop lifecycle, port configuration, and running state
+     * verification from ring 3. */
+    static const char* const pkgrepo_all[] = {"PKGRTEST.ELF"};
+    int pid_pkgrepo = sys_exec("PKGRTEST.ELF", (const char**)pkgrepo_all, 1);
+    int code_pkgrepo = (pid_pkgrepo >= 0) ? sys_wait(pid_pkgrepo) : -1;
+    sys_write(pid_pkgrepo >= 0 && code_pkgrepo == 0
+                  ? "[sandbox] PASS: PKGRTEST.ELF (package repository "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: PKGRTEST.ELF - the package repository "
+                    "conformance suite did not pass.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

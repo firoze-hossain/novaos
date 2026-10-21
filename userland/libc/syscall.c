@@ -533,3 +533,13 @@ int sys_klog_info(nova_klog_info_t* out) {
     return fb_call1(NOVA_SYS_KLOG_INFO, (unsigned int)out);
 }
 
+/* Phase 90: package repository server control. */
+int sys_pkgrepo_ctl(uint32_t cmd, void* arg) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(SYS_PKGREPO_CTL), "b"(cmd), "c"((uint32_t)arg)
+                      : "memory");
+    return r;
+}
+

@@ -222,6 +222,8 @@ void net_poll(void) {
      * to retransmit or send more buffered data even on a tick where
      * nothing arrived. */
     rust_tcp_poll();
+    extern void rust_pkgrepo_poll(void);
+    rust_pkgrepo_poll();
 }
 
 uint16_t net_checksum16(const void* data, uint16_t length) {

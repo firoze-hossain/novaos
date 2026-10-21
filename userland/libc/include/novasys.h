@@ -10,6 +10,7 @@
 #include "nova_mac_abi.h"
 #include "nova_fw_abi.h"
 #include "nova_klog_abi.h"
+#include "nova_pkgrepo_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -66,6 +67,7 @@
 #define SYS_KLOG_READ   75
 #define SYS_KLOG_WRITE  76
 #define SYS_KLOG_INFO   77
+#define SYS_PKGREPO_CTL 78
 
 /* Phase 73: the largest environment a process may hand to a child at
  * exec time - mirrors MAX_EXEC_ENV / MAX_EXEC_ENV_BYTES in
@@ -169,6 +171,9 @@ int sys_fw_ctl(nova_fw_req_t* req);
 int sys_klog_read(nova_klog_read_t* req);
 int sys_klog_write(const nova_klog_write_t* req);
 int sys_klog_info(nova_klog_info_t* out);
+
+/* Phase 90: package repository server control (see nova_pkgrepo_abi.h). */
+int sys_pkgrepo_ctl(uint32_t cmd, void* arg);
 
 int sys_audio_open(nova_audio_open_t* req);
 int sys_audio_write(nova_audio_write_t* req);

@@ -44,6 +44,7 @@
 #include "../../../userland/libc/include/nova_mac_abi.h"
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../../../userland/libc/include/nova_klog_abi.h"
+#include "../../../userland/libc/include/nova_pkgrepo_abi.h"
 #include "../../drivers/timer/timer.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -1096,6 +1097,26 @@ static void handle_klog_info(registers_t* regs) {
     regs->eax = 0;
 }
 
+/* Phase 90: package repository server control. */
+extern int rust_pkgrepo_ctl(uint32_t cmd, void* arg);
+
+static void handle_pkgrepo_ctl(registers_t* regs) {
+    uint32_t cmd = regs->ebx;
+    void* arg = (void*)regs->ecx;
+
+    if (cmd == NOVA_PKGREPO_CTL_STATUS) {
+        if (!paging_user_range_ok((uint32_t)arg, sizeof(nova_pkgrepo_status_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+    } else if (cmd != NOVA_PKGREPO_CTL_START && cmd != NOVA_PKGREPO_CTL_STOP) {
+        regs->eax = (uint32_t)-22; /* -EINVAL */
+        return;
+    }
+
+    regs->eax = (uint32_t)rust_pkgrepo_ctl(cmd, arg);
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2081,6 +2102,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_KLOG_INFO:
             handle_klog_info(regs);
+            break;
+
+        case SYS_PKGREPO_CTL:
+            handle_pkgrepo_ctl(regs);
             break;
 
         case SYS_FB_INFO:

@@ -535,6 +535,15 @@ void kernel_late_init(void) {
                    klog_res == 0 ? "OK" : "FAIL", (int)klog_res);
     }
 
+    /* Phase 90: package-repository network protocol support, server side */
+    {
+        extern int rust_pkgrepo_selftest(void);
+        int pkgrepo_res = rust_pkgrepo_selftest();
+        kernel_log("[ %s ] Kernel-side Rust package repository server self-test (HTTP/1.1 GET/HEAD, "
+                   "manifest index, signature verification, 404/403/405 error handling): result=%d\n",
+                   pkgrepo_res == 0 ? "OK" : "FAIL", pkgrepo_res);
+    }
+
     {
         bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();
         kernel_log("[ %s ] Reaper waits for an exiting process's CPU to leave "
