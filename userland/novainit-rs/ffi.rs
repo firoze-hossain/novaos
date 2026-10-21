@@ -54,4 +54,14 @@ extern "C" {
     /// NONBLOCK doc comment for the full contract this is a thin
     /// wrapper over.
     pub fn sys_wait_nonblock(pid: i32, out_exit_code: *mut i32) -> i32;
+
+    /// Phase 89: writes a structured log entry into the kernel logging ring buffer.
+    pub fn sys_klog_write(req: *const NovaKlogWrite) -> i32;
+}
+
+#[repr(C)]
+pub struct NovaKlogWrite {
+    pub severity: u32,
+    pub facility: *const u8,
+    pub msg: *const u8,
 }

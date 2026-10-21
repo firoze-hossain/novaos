@@ -278,7 +278,15 @@ fn write_str(s: &[u8]) {
     let mut buf = [0u8; 128];
     let n = s.len().min(buf.len() - 1);
     buf[..n].copy_from_slice(&s[..n]);
-    unsafe { ffi::sys_write(buf.as_ptr()) };
+    unsafe {
+        ffi::sys_write(buf.as_ptr());
+        let klog_req = ffi::NovaKlogWrite {
+            severity: 6, // NOVA_KLOG_INFO
+            facility: b"novainit\0".as_ptr(),
+            msg: buf.as_ptr(),
+        };
+        ffi::sys_klog_write(&klog_req);
+    };
 }
 
 /// Phase 77: the one piece of this file's own log output that needs

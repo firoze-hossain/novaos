@@ -704,6 +704,12 @@ ASSERTIONS: list[Assertion] = [
               "Phase 88: after the one-way lock nothing - not even root - can change a rule, the policy or the switch; reading, filtering and flushing flows still work. The lock cannot be undone until reboot"),
     Assertion("fwtest_exit_ok", r"\[sandbox\] PASS: FWTEST\.ELF \(stateful firewall conformance\)",
               "Phase 88: FWTEST.ELF also exited 0 as seen by its parent, so the program's own verdict and the process-level verdict agree"),
+    Assertion("klog_kernel_selftest", r"\[ OK \] Kernel-side Rust structured logging self-test \(ring-buffer, monotonic seq, severity filter, facility filter, wraparound gap detection\): result=0",
+              "Phase 89: the kernel-side Rust structured logging subsystem self-test passed at boot, validating ring-buffer monotonic sequences, severity and facility filtering, and wraparound gap detection in memory-safe Rust"),
+    Assertion("klogtest_conformance", r"\[klogtest\] PASS: the full SYS_KLOG_\* structured logging contract holds",
+              "Phase 89: userland/klogtest/klogtest.c exercised SYS_KLOG_INFO, SYS_KLOG_WRITE, and SYS_KLOG_READ round-trip, ring buffer overwrite, and hostile pointer validation from ring 3"),
+    Assertion("klogtest_exit_ok", r"\[sandbox\] PASS: KLOGTEST\.ELF \(structured kernel logging conformance\)",
+              "Phase 89: KLOGTEST.ELF also exited 0 as seen by its parent, so the program's own verdict and the process-level verdict agree"),
     Assertion("rlimtest_exit_ok", r"\[sandbox\] PASS: RLIMTEST\.ELF \(per-process resource limits conformance\)",
               "Phase 86: RLIMTEST.ELF also exited 0 as seen by its parent - the program's own verdict and the process-level verdict agree"),
     Assertion("reaper_waits_for_exiting_cpu", r"\[ OK \] Reaper waits for an exiting process's CPU to leave its kernel stack before freeing it \(off_cpu handshake\)",
@@ -820,6 +826,9 @@ def boot_and_capture(
     if log_path.exists():
         log_path.unlink()
 
+    working_disk = BUILD_DIR / "test-disk.img"
+    shutil.copyfile(disk_path, working_disk)
+
     ensure_virtio_test_disk(virtio_disk_path)
     virtio_flags = [
         "-drive", f"file={virtio_disk_path},if=none,id=vblk0",
@@ -841,7 +850,7 @@ def boot_and_capture(
         [qemu_bin]
         + QEMU_BASE_FLAGS
         + ["-boot", "order=d", "-drive",
-           f"file={disk_path},format=raw,if=ide,index=0,media=disk"]
+           f"file={working_disk},format=raw,if=ide,index=0,media=disk"]
         + NET_FLAGS
         + AUDIO_FLAGS
         + USB_FLAGS

@@ -43,6 +43,8 @@
 #include "../../net/firewall.h"
 #include "../../../userland/libc/include/nova_mac_abi.h"
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
+#include "../../../userland/libc/include/nova_klog_abi.h"
+#include "../../drivers/timer/timer.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
 #include "../../net/icmp.h"
@@ -978,6 +980,122 @@ AUDIO_HANDLER(handle_audio_close, audio_sys_close)
 /* Phase 87: mandatory access control. SYS_MAC_INFO says what confines the
  * caller and what has been denied; SYS_MAC_CTL is the administrator's call
  * (an unconfined root only - decided in mac_sys_ctl()). */
+/* Phase 89: structured, queryable kernel logging subsystem */
+extern uint64_t rust_klog_append(uint32_t severity, const uint8_t* facility_ptr, uint32_t facility_len,
+                                 const uint8_t* msg_ptr, uint32_t msg_len, uint32_t pid, uint32_t ticks);
+extern int32_t rust_klog_read(uint64_t start_seq, uint32_t max_entries, uint32_t max_severity,
+                              const uint8_t* filter_ptr, uint32_t filter_len,
+                              nova_klog_entry_t* out_entries, uint64_t* out_stats);
+extern int32_t rust_klog_info(uint64_t* out_info);
+
+static void handle_klog_read(registers_t* regs) {
+    uint32_t user_ptr = regs->ebx;
+    if (!paging_user_range_ok(user_ptr, sizeof(nova_klog_read_t), true)) {
+        regs->eax = (uint32_t)-14; /* -EFAULT */
+        return;
+    }
+    nova_klog_read_t req;
+    memcpy(&req, (const void*)user_ptr, sizeof(req));
+    req.facility_filter[sizeof(req.facility_filter) - 1] = '\0';
+
+    if (req.max_entries == 0) {
+        regs->eax = 0;
+        return;
+    }
+    if (req.max_entries > 256) {
+        req.max_entries = 256;
+    }
+    uint32_t entries_bytes = req.max_entries * sizeof(nova_klog_entry_t);
+    if (!paging_user_range_ok((uint32_t)req.entries, entries_bytes, true)) {
+        regs->eax = (uint32_t)-14; /* -EFAULT */
+        return;
+    }
+
+    uint64_t stats[4]; /* [next_seq, dropped_count, total_logged, count_written] */
+    int32_t n = rust_klog_read(req.start_seq, req.max_entries, req.max_severity,
+                               (const uint8_t*)req.facility_filter, (uint32_t)strlen(req.facility_filter),
+                               req.entries, stats);
+    if (n < 0) {
+        regs->eax = (uint32_t)n;
+        return;
+    }
+    req.next_seq = stats[0];
+    req.dropped_count = stats[1];
+    req.total_logged = stats[2];
+
+    memcpy((void*)user_ptr, &req, sizeof(req));
+    regs->eax = (uint32_t)n;
+}
+
+static void handle_klog_write(registers_t* regs) {
+    process_t* p = process_current();
+    uint32_t user_ptr = regs->ebx;
+    if (!paging_user_range_ok(user_ptr, sizeof(nova_klog_write_t), false)) {
+        regs->eax = (uint32_t)-14; /* -EFAULT */
+        return;
+    }
+    nova_klog_write_t req;
+    memcpy(&req, (const void*)user_ptr, sizeof(req));
+    if (req.msg == NULL || !paging_user_range_ok((uint32_t)req.msg, 1, false)) {
+        regs->eax = (uint32_t)-14;
+        return;
+    }
+
+    char fac_buf[16];
+    uint32_t fi = 0;
+    if (req.facility != NULL && paging_user_range_ok((uint32_t)req.facility, 1, false)) {
+        while (fi < sizeof(fac_buf) - 1) {
+            if (!paging_user_range_ok((uint32_t)(req.facility + fi), 1, false)) break;
+            char c = req.facility[fi];
+            if (c == '\0') break;
+            fac_buf[fi++] = c;
+        }
+    } else {
+        const char* dname = (p != NULL && p->name[0] != '\0') ? p->name : "user";
+        while (fi < sizeof(fac_buf) - 1 && dname[fi] != '\0') {
+            fac_buf[fi] = dname[fi];
+            fi++;
+        }
+    }
+    fac_buf[fi] = '\0';
+
+    char msg_buf[128];
+    uint32_t i = 0;
+    while (i < sizeof(msg_buf) - 1) {
+        if (!paging_user_range_ok((uint32_t)(req.msg + i), 1, false)) break;
+        char c = req.msg[i];
+        if (c == '\0') break;
+        msg_buf[i++] = c;
+    }
+    msg_buf[i] = '\0';
+
+    uint32_t pid = p != NULL ? p->pid : 0;
+    uint32_t ticks = timer_get_ticks();
+    rust_klog_append(req.severity, (const uint8_t*)fac_buf, (uint32_t)strlen(fac_buf),
+                     (const uint8_t*)msg_buf, (uint32_t)strlen(msg_buf), pid, ticks);
+    regs->eax = 0;
+}
+
+static void handle_klog_info(registers_t* regs) {
+    uint32_t user_ptr = regs->ebx;
+    if (!paging_user_range_ok(user_ptr, sizeof(nova_klog_info_t), true)) {
+        regs->eax = (uint32_t)-14; /* -EFAULT */
+        return;
+    }
+    uint64_t raw[5];
+    rust_klog_info(raw);
+    nova_klog_info_t info;
+    info.oldest_seq = raw[0];
+    info.newest_seq = raw[1];
+    info.total_logged = raw[2];
+    info.dropped_count = raw[3];
+    info.buffer_capacity = (uint32_t)(raw[4] & 0xFFFFFFFF);
+    info.entry_count = (uint32_t)(raw[4] >> 32);
+
+    memcpy((void*)user_ptr, &info, sizeof(info));
+    regs->eax = 0;
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -1951,6 +2069,18 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_FW_CTL:
             handle_fw_ctl(regs);
+            break;
+
+        case SYS_KLOG_READ:
+            handle_klog_read(regs);
+            break;
+
+        case SYS_KLOG_WRITE:
+            handle_klog_write(regs);
+            break;
+
+        case SYS_KLOG_INFO:
+            handle_klog_info(regs);
             break;
 
         case SYS_FB_INFO:

@@ -9,6 +9,7 @@
 #include "nova_rlimit_abi.h"
 #include "nova_mac_abi.h"
 #include "nova_fw_abi.h"
+#include "nova_klog_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -62,6 +63,9 @@
 #define SYS_WAIT_NONBLOCK 41
 #define SYS_EXEC_ENV 42
 #define SYS_EXEC_TRUSTED_ENV 43
+#define SYS_KLOG_READ   75
+#define SYS_KLOG_WRITE  76
+#define SYS_KLOG_INFO   77
 
 /* Phase 73: the largest environment a process may hand to a child at
  * exec time - mirrors MAX_EXEC_ENV / MAX_EXEC_ENV_BYTES in
@@ -160,6 +164,11 @@ int sys_mac_ctl(unsigned int op, unsigned int arg);
  * that changes it needs the MAC administrator. Return 0 or a negative errno. */
 int sys_fw_info(nova_fw_info_t* out);
 int sys_fw_ctl(nova_fw_req_t* req);
+
+/* Phase 89: structured, queryable kernel logging (see nova_klog_abi.h). */
+int sys_klog_read(nova_klog_read_t* req);
+int sys_klog_write(const nova_klog_write_t* req);
+int sys_klog_info(nova_klog_info_t* out);
 
 int sys_audio_open(nova_audio_open_t* req);
 int sys_audio_write(nova_audio_write_t* req);

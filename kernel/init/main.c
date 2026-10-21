@@ -69,6 +69,8 @@
  * strings, so a real, successful operation's own log line arriving
  * garbled by an unrelated, concurrent write reads as a false failure,
  * not evidence the operation itself did anything wrong. */
+extern uint64_t rust_klog_log_kernel_line(const uint8_t* line_ptr, uint32_t line_len, uint32_t ticks, uint32_t pid);
+
 void kernel_log(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -80,6 +82,8 @@ void kernel_log(const char* format, ...) {
     uint32_t flags = spinlock_acquire(&log_lock);
     serial_puts(buffer);
     spinlock_release(&log_lock, flags);
+
+    rust_klog_log_kernel_line((const uint8_t*)buffer, (uint32_t)strlen(buffer), timer_get_ticks(), 0);
 
     va_end(args);
 }
@@ -521,6 +525,15 @@ void kernel_late_init(void) {
      * any NIC); now that there is a filesystem, read its rules. */
     fw_load_config();
     fw_wire_selftest();
+
+    /* Phase 89: structured, queryable kernel logging subsystem */
+    {
+        extern uint32_t rust_klog_selftest(void);
+        uint32_t klog_res = rust_klog_selftest();
+        kernel_log("[ %s ] Kernel-side Rust structured logging self-test (ring-buffer, "
+                   "monotonic seq, severity filter, facility filter, wraparound gap detection): result=%d\n",
+                   klog_res == 0 ? "OK" : "FAIL", (int)klog_res);
+    }
 
     {
         bool reap_ok = process_selftest_reap_waits_for_the_exiting_cpu();

@@ -519,3 +519,17 @@ int sys_fw_info(nova_fw_info_t* out) {
 int sys_fw_ctl(nova_fw_req_t* req) {
     return fb_call1(NOVA_SYS_FW_CTL, (unsigned int)req);
 }
+
+/* Phase 89: structured, queryable kernel logging. */
+int sys_klog_read(nova_klog_read_t* req) {
+    return fb_call1(NOVA_SYS_KLOG_READ, (unsigned int)req);
+}
+
+int sys_klog_write(const nova_klog_write_t* req) {
+    return fb_call1(NOVA_SYS_KLOG_WRITE, (unsigned int)req);
+}
+
+int sys_klog_info(nova_klog_info_t* out) {
+    return fb_call1(NOVA_SYS_KLOG_INFO, (unsigned int)out);
+}
+

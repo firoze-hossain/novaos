@@ -23,6 +23,7 @@ CC="gcc -m32 -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -I$LIBC/
 nasm -f elf32 "$LIBC/crt0.asm" -o crt0.o
 $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
+$CC -c "$LIBC/string.c" -o string.o
 
 echo "Compiling novainit.rs (Phase 71 - a real service supervisor)..."
 # Same rustc-flavor detection as every other userland/*-rs/build.sh -
@@ -46,7 +47,7 @@ env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \
     novainit.rs
 
 ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
-    -o novainit.elf crt0.o novainit_main.o syscall.o stdlib.o \
+    -o novainit.elf crt0.o novainit_main.o syscall.o string.o stdlib.o \
     "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
 cp novainit.elf ../../tools/fixtures/NOVAINIT.ELF

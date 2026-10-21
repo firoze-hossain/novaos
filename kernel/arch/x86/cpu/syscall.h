@@ -641,6 +641,15 @@
 #define SYS_FW_INFO     73
 #define SYS_FW_CTL      74
 
+/* Phase 89: structured, queryable kernel logging subsystem (see nova_klog_abi.h).
+ * SYS_KLOG_READ queries the ring buffer with incremental seq, severity, and
+ * facility filters. SYS_KLOG_WRITE appends a structured log entry stamped with
+ * caller's true PID. SYS_KLOG_INFO queries buffer stats (oldest/newest seq,
+ * dropped count, capacity). */
+#define SYS_KLOG_READ   75
+#define SYS_KLOG_WRITE  76
+#define SYS_KLOG_INFO   77
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

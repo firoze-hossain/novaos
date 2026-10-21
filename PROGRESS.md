@@ -11042,7 +11042,41 @@ asked to; "is a port open" was the whole policy. Now `ip_send()` (outbound) and
 * A dev boot against the shared test disk polluted it and made two unrelated assertions
   (`ext2_write_readback`, the global scan) fail; the disk image is recreated before a real run.
 
-## Phase 89 and beyond
+## Phase 89: structured, queryable kernel logging subsystem (in Rust)
+
+From Month 4 ("Server & security core") of the NovaOS Build Plan: replaced the plain serial-port log stream with a real, timestamped, queryable, per-service log subsystem written fully in memory-safe `#![no_std]` Rust (`kernel/rust/klog.rs`).
+
+### What was built
+
+1. **Structured ABI (`userland/libc/include/nova_klog_abi.h`)**:
+   - `nova_klog_entry_t`: Sequence ID (`uint64_t`), boot timestamp ticks (`uint32_t`), pid (`uint32_t`), severity (`uint8_t` 0..7: EMERG through DEBUG), facility name (`char[16]`), and message text (`char[128]`).
+   - `nova_klog_read_t`: Query parameters supporting incremental streaming (`start_seq`), severity threshold filtering (`min_severity`), facility prefix matching (`filter_facility`), and output buffer limits.
+   - `nova_klog_write_t`: Write request allowing userland processes and service supervisors to emit structured log records.
+   - `nova_klog_info_t`: Telemetry structure returning capacity, total logged count, dropped entries count, and newest sequence number.
+
+2. **Kernel Ring-Buffer Subsystem in Rust (`kernel/rust/klog.rs`)**:
+   - Zero-heap allocation, static 256-entry circular buffer guarded by NovaOS's `SpinLock`.
+   - Monotonic 64-bit sequence numbering so consumers can stream logs without missing entries or re-reading duplicates.
+   - Overwrite accounting tracking dropped entries when buffer wraps.
+   - Filtering engine supporting severity levels, facility strings, and sequence offsets.
+   - C FFI entry points: `rust_klog_append`, `rust_klog_read`, `rust_klog_info`, `rust_klog_log_kernel_line`, and `rust_klog_selftest`.
+
+3. **Syscall Gateway (`kernel/arch/x86/cpu/syscall.c`, `syscall.h`)**:
+   - Added `SYS_KLOG_READ` (75), `SYS_KLOG_WRITE` (76), `SYS_KLOG_INFO` (77).
+   - Strict userspace pointer validation via `paging_user_range_ok()` defending against null, unmapped, kernel-straddling, or malicious addresses.
+   - Libc wrappers in `userland/libc/syscall.c` and `userland/libc/include/novasys.h`.
+
+4. **Integration with Kernel & Init**:
+   - `kernel/init/main.c`: `kernel_log()` automatically parses and copies every formatted log line into the structured ring buffer while preserving immediate serial output.
+   - `userland/novainit-rs/` (`ffi.rs`, `novainit.rs`): Init supervisor forwards service logging into `SYS_KLOG_WRITE` with facility `"novainit"`.
+
+5. **Verification**:
+   - Host Rust unit test suite (`tools/tests/run_klog_tests.sh`, `make klog-test`) with 4 thorough test cases for sequence ordering, overflow wrapping, filter predicates, and info reporting.
+   - Kernel boot self-test (`rust_klog_selftest()`).
+   - Ring-3 userspace conformance test (`userland/klogtest/klogtest.c` -> `KLOGTEST.ELF`) run during boot, validating info query, write/read roundtrip, severity thresholding, facility filtering, and hostile pointer error handling (EFAULT).
+   - All 198 boot assertions pass in `tools/python/test_runner.py`.
+
+## Phase 90 and beyond
 
 Immediate CI priority: continue using this phase's own full-
 register-state diagnostics - the "0x20"-as-pointer signature (a

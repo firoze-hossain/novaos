@@ -366,6 +366,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: RLIMTEST.ELF - the resource limits "
                     "conformance suite did not pass.\n");
 
+    /* Phase 89: structured, queryable kernel logging subsystem. KLOGTEST.ELF
+     * exercises SYS_KLOG_INFO, SYS_KLOG_WRITE, SYS_KLOG_READ, severity and
+     * facility filtering, incremental streaming, and hostile pointers from
+     * ring 3. Needs no delegated capability. */
+    static const char* const klog_all[] = {"KLOGTEST.ELF"};
+    int pid_klog = sys_exec("KLOGTEST.ELF", (const char**)klog_all, 1);
+    int code_klog = (pid_klog >= 0) ? sys_wait(pid_klog) : -1;
+    sys_write(pid_klog >= 0 && code_klog == 0
+                  ? "[sandbox] PASS: KLOGTEST.ELF (structured kernel logging "
+                    "conformance).\n"
+                  : "[sandbox] FAIL: KLOGTEST.ELF - the structured kernel logging "
+                    "conformance suite did not pass.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel
