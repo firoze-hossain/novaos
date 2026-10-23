@@ -29,6 +29,10 @@ typedef struct {
 #define PCI_SUBCLASS_NVME       0x08
 #define PCI_PROGIF_NVME         0x02
 
+#define PCI_CLASS_NETWORK       0x02
+#define PCI_SUBCLASS_ETHERNET   0x00
+#define PCI_SUBCLASS_NET_OTHER  0x80
+
 #define PCI_CLASS_SERIAL        0x0C
 #define PCI_SUBCLASS_USB        0x03
 #define PCI_PROGIF_UHCI         0x00

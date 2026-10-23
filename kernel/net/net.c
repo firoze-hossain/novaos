@@ -8,10 +8,11 @@
 #include "../drivers/net/ne2000.h"
 #include "../drivers/net/rtl8139.h"
 #include "../drivers/virtio/virtio_net.h"
+#include "../drivers/net/wifi.h"
 #include "../drivers/driver.h"
 #include "../include/kernel.h"
 
-typedef enum { NIC_NONE, NIC_VIRTIO_NET, NIC_RTL8139, NIC_NE2000 } active_nic_t;
+typedef enum { NIC_NONE, NIC_VIRTIO_NET, NIC_RTL8139, NIC_WIFI, NIC_NE2000 } active_nic_t;
 
 static active_nic_t active_nic = NIC_NONE;
 
@@ -66,11 +67,16 @@ void net_init(void) {
         if (rtl8139_is_present()) {
             active_nic = NIC_RTL8139;
         } else {
-            ne2000_init();
-            if (ne2000_is_present()) {
-                active_nic = NIC_NE2000;
+            wifi_init();
+            if (wifi_is_present()) {
+                active_nic = NIC_WIFI;
             } else {
-                active_nic = NIC_NONE;
+                ne2000_init();
+                if (ne2000_is_present()) {
+                    active_nic = NIC_NE2000;
+                } else {
+                    active_nic = NIC_NONE;
+                }
             }
         }
     }
@@ -78,7 +84,8 @@ void net_init(void) {
     if (active_nic != NIC_NONE) {
         const char* nic_name = active_nic == NIC_VIRTIO_NET ? "virtio-net"
                                 : active_nic == NIC_RTL8139  ? "RTL8139"
-                                                              : "NE2000";
+                                : active_nic == NIC_WIFI     ? "Wi-Fi (802.11)"
+                                                             : "NE2000";
         kernel_log("[ OK ] Network up (%s): IP %d.%d.%d.%d, gateway "
                    "%d.%d.%d.%d\n",
                    nic_name,
@@ -102,6 +109,8 @@ bool net_driver_send(const void* frame, uint16_t length) {
             return virtio_net_send(frame, length);
         case NIC_RTL8139:
             return rtl8139_send(frame, length);
+        case NIC_WIFI:
+            return wifi_send(frame, length);
         case NIC_NE2000:
             return ne2000_send(frame, length);
         default:
@@ -170,6 +179,8 @@ uint16_t net_driver_receive(void* buffer) {
              * icmp.c) already calls net_poll() in its own tight loop,
              * not just once per idle tick. */
             return rtl8139_receive(buffer);
+        case NIC_WIFI:
+            return wifi_receive(buffer);
         case NIC_NE2000:
             /* Phase 52: the same signal, the same reasoning, reused
              * rather than duplicated - safe because active_nic
@@ -196,6 +207,8 @@ const uint8_t* net_driver_mac_address(void) {
             return virtio_net_mac_address();
         case NIC_RTL8139:
             return rtl8139_mac_address();
+        case NIC_WIFI:
+            return wifi_mac_address();
         case NIC_NE2000:
             return ne2000_mac_address();
         default:

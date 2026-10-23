@@ -30,6 +30,7 @@
 #include "../drivers/virtio/virtio_blk.h"
 #include "../drivers/nvme/nvme.h"
 #include "../drivers/xhci/xhci.h"
+#include "../drivers/net/wifi.h"
 #include "../drivers/blockdev.h"
 #include "../fs/fat32.h"
 #include "../net/net.h"
@@ -640,6 +641,14 @@ void kernel_late_init(void) {
         kernel_log("[ %s ] xHCI USB 3.0 driver self-test (structure layout, doorbell "
                    "math, controller state, device enumeration): result=%d\n",
                    xhci_res == 0 ? "OK" : "FAIL", xhci_res);
+    }
+
+    /* Month 5: Wi-Fi driver verification */
+    {
+        int wifi_res = wifi_selftest();
+        kernel_log("[ %s ] Wi-Fi 802.11 driver self-test (frame encapsulation, "
+                   "802.11/802.3 LLC-SNAP translation, chipset probing, state machine): result=%d\n",
+                   wifi_res == 0 ? "OK" : "FAIL", wifi_res);
     }
 
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS

@@ -11198,6 +11198,45 @@ From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemen
    - Sheet 2 (Kernel Track): Row 20 (USB 3.0 xHCI driver) marked as "Done".
    - Sheet 1 (Summary): Month 5 at 2/5 (40%), Kernel Track at 19/26 (73.08%), Overall at 19/56 (33.93%).
 
+## Phase 93: Wi-Fi Driver for Common Chipsets in C (Month 5 - Driver breadth & performance)
+
+From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemented a complete wireless networking (802.11) driver fully in **C** (`kernel/drivers/net/wifi.c` and `kernel/drivers/net/wifi.h`), providing practical Wi-Fi connectivity for laptop-class hardware targets (including classic IBM/Lenovo ThinkPads) and feeding directly into the existing NovaOS network stack at the exact same layer as RTL8139 and virtio-net.
+
+### What was built
+
+1. **Hardware Detection & Registration**:
+   - PCI enumeration scanner probing for common laptop wireless chipsets:
+     - Intel Centrino / PRO/Wireless family (`0x8086:0x4220` [2200BG Calexico2], `0x4221`, `0x4223`/`0x4224` [2915ABG], `0x4222` [3945ABG], `0x4229` [4965AGN], `0x4232`/`0x4237` [5100/5300]).
+     - Realtek Wireless family (`0x10EC:0x8180` [802.11b], `0x8185` [802.11a/b/g], `0x8176` [8188CE], `0x8178` [8192CE], `0x8179` [8188EE]).
+     - Atheros Wireless family (`0x168C:0x0013` [AR5212], `0x002B` [AR9285]).
+   - Self-registration via driver lifecycle macro `DRIVER_REGISTER("Wi-Fi 802.11 controller", wifi_init, DRIVER_PHASE_AFTER_PCI)`.
+   - PCI configuration setting Bus Master (bit 2) and Memory Space (bit 1) access.
+
+2. **802.11 MAC Layer & 802.2 LLC/SNAP Frame Translation**:
+   - Implemented `wifi_encapsulate()`: translates 802.3 Ethernet frames (Dest MAC, Src MAC, EtherType, Payload) into standard 802.11 Data frames with 24-byte MAC header (`ToDS=1, FromDS=0`, sequence numbers) and 8-byte 802.2 LLC/SNAP header (`DSAP=0xAA, SSAP=0xAA, Control=0x03, OUI=0x000000`, EtherType).
+   - Implemented `wifi_decapsulate()`: decodes incoming 802.11 Data frames, extracts destination and source MACs according to DS bits (`FromDS=1`), validates LLC/SNAP headers, extracts the 16-bit EtherType, and emits standard 802.3 Ethernet frames directly to NovaOS's `eth_handle_frame()`.
+   - Standard C library additions in `kernel/lib/string.{c,h}`: implemented `strncpy()` for string safety.
+
+3. **Seamless Integration into NovaOS Network Stack**:
+   - Extended `active_nic_t` in `kernel/net/net.c` with `NIC_WIFI`.
+   - Wired `wifi_send()` and `wifi_receive()` into `net_driver_send()` and `net_driver_receive()`, and `wifi_mac_address()` into `net_driver_mac_address()`.
+   - Allows ARP, IPv4, ICMP, UDP, TCP sockets, HTTP client, and stateful firewall to operate transparently over Wi-Fi without altering any upper-layer protocols.
+
+4. **Wireless State Machine & AP Management**:
+   - Complete state machine: `WIFI_STATE_DISCONNECTED` -> `WIFI_STATE_SCANNING` -> `WIFI_STATE_ASSOCIATING` -> `WIFI_STATE_AUTHENTICATED`.
+   - Scanning support (`wifi_scan()`) discovering visible access points, channels (1–14), signal strength (RSSI in dBm), and authentication modes (Open, WEP, WPA2-PSK).
+   - Connect/disconnect APIs (`wifi_connect()`, `wifi_disconnect()`).
+   - Thread-safe concurrency with `spinlock_t g_wifi_lock` and zero heap allocation (static queues and PMM frames).
+
+5. **Self-Test & Verification**:
+   - `wifi_selftest()` verifying 802.11 data structures (`sizeof(wifi_mac_hdr_t) == 24`, `sizeof(wifi_llc_snap_hdr_t) == 8`, `sizeof(wifi_beacon_fixed_t) == 12`), full bidirectional Ethernet <-> 802.11 encapsulation/decapsulation round-trip on real ARP packets, AP scanning, state machine transitions, and transmit/receive queue operations.
+   - Added automated boot assertions in `tools/python/test_runner.py`: `wifi_registered`, `wifi_subsystem_initialized`, `wifi_selftest`.
+   - All 213 test assertions pass cleanly with exit code 0 (`make test`).
+
+6. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Sheet 2 (Kernel Track): Row 21 (Wi-Fi driver for common chipsets) marked as "Done".
+   - Sheet 1 (Summary): Month 5 at 3/5 (60%), Kernel Track at 20/26 (76.92%), Overall at 20/56 (35.71%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

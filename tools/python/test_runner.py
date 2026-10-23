@@ -327,6 +327,12 @@ ASSERTIONS: list[Assertion] = [
               "Month 5: a real USB device was enumerated on the xHCI root hub and device descriptor read via control transfer"),
     Assertion("xhci_selftest", r"xHCI USB 3\.0 driver self-test.*result=0",
               "Month 5: xHCI USB 3.0 driver self-test passed at boot, validating structure layout, doorbell math, controller state, and device enumeration"),
+    Assertion("wifi_registered", r"Driver .Wi-Fi 802\.11 controller. initializing",
+              "Month 5: the Wi-Fi driver ran via the self-registration mechanism"),
+    Assertion("wifi_subsystem_initialized", r"Wi-Fi 802\.11 subsystem initialized",
+              "Month 5: Wi-Fi 802.11 MAC layer, default SSID, and link parameters were initialized"),
+    Assertion("wifi_selftest", r"Wi-Fi 802\.11 driver self-test.*result=0",
+              "Month 5: Wi-Fi driver self-test passed at boot, validating 802.11/802.3 LLC-SNAP translation, frame encapsulation, state machine, and queue operation"),
     Assertion("net_irq_selftest",
               r"Kernel-side Rust net IRQ signal self-test.*"
               r"signal-then-check=pass",
