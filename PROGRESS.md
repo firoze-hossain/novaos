@@ -11156,6 +11156,48 @@ From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemen
    - Sheet 2 (Kernel Track): Row 19 (NVMe driver) marked as "Done".
    - Sheet 1 (Summary): Month 5 started (1/5, 20%), Kernel Track at 18/26 (69.23%), Overall at 18/56 (32.14%).
 
+## Phase 92: USB 3.0 (xHCI) Driver in C (Month 5 - Driver breadth & performance)
+
+From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemented a complete, production-grade USB 3.0 (xHCI) host controller driver fully in **C** (`kernel/drivers/xhci/xhci.c` and `kernel/drivers/xhci/xhci.h`), replacing legacy USB 1.1-only (UHCI) support with modern, high-speed and SuperSpeed USB root hub enumeration and peripheral descriptor retrieval.
+
+### What was built
+
+1. **Hardware Detection & Registration**:
+   - PCI enumeration scan for Serial Bus Class `0x0C` (`PCI_CLASS_SERIAL`), USB Subclass `0x03` (`PCI_SUBCLASS_USB`), and ProgIF `0x30` (`PCI_PROGIF_XHCI`).
+   - Self-registration via driver lifecycle macro `DRIVER_REGISTER("xHCI USB 3.0 controller", xhci_init, DRIVER_PHASE_AFTER_PCI)`.
+   - PCI Command register configuration enabling Bus Master (bit 2) and Memory Space (bit 1) access.
+   - 64-bit BAR0 MMIO space (64KB window) mapped into kernel identity-mapped page tables via `map_xhci_mmio()`.
+
+2. **xHCI Specification Compliance (1.0 - 1.2)**:
+   - Capability register decoding (`CAPLENGTH`, `HCSPARAMS1`, `HCSPARAMS2`, `HCCPARAMS1`, `DBOFF`, `RTSOFF`).
+   - Dynamically adapts to 32-byte or 64-byte context data structures based on `HCCPARAMS1.CSZ`.
+   - Host controller reset (`USBCMD.HCRST`) and ready state synchronization (`USBSTS.CNR`).
+   - Device Context Base Address Array (DCBAA) allocated from physical memory and configured via `DCBAAP`.
+   - Scratchpad Buffer Array and scratchpad pages allocated from physical frames when required by `HCSPARAMS2`.
+   - Command Ring setup with Link TRB toggle cycle handling, written to `CRCR` with Ring Cycle State (`RCS=1`).
+   - Primary Event Ring Segment Table (ERST) configuration, Event Ring Dequeue Pointer (`ERDP`) management with Event Handler Busy (`EHB`) clearing.
+   - Run/Stop controller start (`USBCMD.RS=1`) with HCHalt clear confirmation.
+
+3. **Root Hub Enumeration & Endpoint 0 Control Transfers**:
+   - Port powering (`PORTSC.PP`) and root hub port scanning across all available ports (`HCSPARAMS1.MaxPorts`).
+   - Port reset (`PORTSC.PR`) with port speed detection (Full-Speed, Low-Speed, High-Speed, SuperSpeed, SuperSpeedPlus).
+   - Dynamic device slot enablement via `xhci_enable_slot()` (`Enable Slot TRB`).
+   - Context initialization: sets up Input Control Context, Slot Context (Root Hub Port Num, Speed, Context Entries), and Endpoint 0 Context (EP Type Control, Max Packet Size, EP State, Transfer Ring Base).
+   - Device addressing via `xhci_address_device()` (`Address Device TRB` with BSR=0).
+   - Standard USB Device Descriptor retrieval (`GET_DESCRIPTOR`, Type 0x01) on EP0 Transfer Ring via Setup Stage TRB, Data Stage IN TRB, and Status Stage OUT TRB.
+   - Zero heap allocation throughout the driver; all rings and buffers use physical PMM frames.
+   - Concurrency safety with `spinlock_t g_xhci_lock`.
+
+4. **Self-Test & Verification**:
+   - `xhci_selftest()` verifying data structure alignments (`sizeof(xhci_trb_t) == 16`, `sizeof(xhci_erst_entry_t) == 16`, `sizeof(usb_device_descriptor_t) == 18`), doorbell register calculation formulas, controller run state, and enumerated device descriptors.
+   - Test suite integration in `Makefile` and `tools/python/test_runner.py`: attached `-device qemu-xhci,id=xhci0 -device usb-mouse,bus=xhci0.0` in `USB_FLAGS`.
+   - Added assertions: `xhci_registered`, `xhci_present`, `xhci_device_enumerated`, `xhci_selftest`.
+   - All 210 test assertions pass cleanly with exit code 0 (`make test`).
+
+5. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Sheet 2 (Kernel Track): Row 20 (USB 3.0 xHCI driver) marked as "Done".
+   - Sheet 1 (Summary): Month 5 at 2/5 (40%), Kernel Track at 19/26 (73.08%), Overall at 19/56 (33.93%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

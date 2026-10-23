@@ -94,7 +94,16 @@ AUDIO_FLAGS = [
     "-device",
     "AC97,audiodev=noaudio",
 ]
-USB_FLAGS = ["-device", "piix3-usb-uhci", "-device", "usb-kbd"]
+USB_FLAGS = [
+    "-device",
+    "piix3-usb-uhci",
+    "-device",
+    "usb-kbd",
+    "-device",
+    "qemu-xhci,id=xhci0",
+    "-device",
+    "usb-mouse,bus=xhci0.0",
+]
 
 # Phase 42: a small, dedicated disk image for kernel/drivers/virtio/
 # virtio_blk.c's own self-test - deliberately separate from disk.img
@@ -310,6 +319,14 @@ ASSERTIONS: list[Assertion] = [
               "Month 5: a 512-byte sector written via a real NVMe device read back byte-for-byte identical"),
     Assertion("nvme_selftest", r"NVMe driver self-test.*result=0",
               "Month 5: NVMe driver self-test passed at boot, validating register mappings, queue descriptors, and controller communication"),
+    Assertion("xhci_registered", r"Driver .xHCI USB 3\.0 controller. initializing",
+              "Month 5: the xHCI driver ran via the self-registration mechanism"),
+    Assertion("xhci_present", r"xHCI controller at PCI",
+              "Month 5: an xHCI USB 3.0 controller was found and initialized via PCI"),
+    Assertion("xhci_device_enumerated", r"USB 3\.0 device on port \d+: address=\d+ vendor=0x[0-9a-fA-F]+ device=0x[0-9a-fA-F]+",
+              "Month 5: a real USB device was enumerated on the xHCI root hub and device descriptor read via control transfer"),
+    Assertion("xhci_selftest", r"xHCI USB 3\.0 driver self-test.*result=0",
+              "Month 5: xHCI USB 3.0 driver self-test passed at boot, validating structure layout, doorbell math, controller state, and device enumeration"),
     Assertion("net_irq_selftest",
               r"Kernel-side Rust net IRQ signal self-test.*"
               r"signal-then-check=pass",

@@ -119,7 +119,7 @@ AUDIO_FLAGS = -audiodev none,id=noaudio -device AC97,audiodev=noaudio
 # with no external-connectivity dependency (unlike the DNS/TCP self-
 # tests), so it's held to the same "always attached, hard assertion"
 # standard as every other piece of hardware in this list.
-USB_FLAGS = -device piix3-usb-uhci -device usb-kbd
+USB_FLAGS = -device piix3-usb-uhci -device usb-kbd -device qemu-xhci,id=xhci0 -device usb-mouse,bus=xhci0.0
 
 # Directories
 KERNEL_DIR = kernel

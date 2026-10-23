@@ -29,6 +29,7 @@
 #include "../drivers/sound/ac97.h"
 #include "../drivers/virtio/virtio_blk.h"
 #include "../drivers/nvme/nvme.h"
+#include "../drivers/xhci/xhci.h"
 #include "../drivers/blockdev.h"
 #include "../fs/fat32.h"
 #include "../net/net.h"
@@ -631,6 +632,14 @@ void kernel_late_init(void) {
         kernel_log("[ %s ] NVMe driver self-test (structure layout, doorbell "
                    "calculations, command construction, read/write): result=%d\n",
                    nvme_res == 0 ? "OK" : "FAIL", nvme_res);
+    }
+
+    /* Month 5: xHCI USB 3.0 driver verification */
+    {
+        int xhci_res = xhci_selftest();
+        kernel_log("[ %s ] xHCI USB 3.0 driver self-test (structure layout, doorbell "
+                   "math, controller state, device enumeration): result=%d\n",
+                   xhci_res == 0 ? "OK" : "FAIL", xhci_res);
     }
 
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS

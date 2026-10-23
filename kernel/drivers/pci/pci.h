@@ -24,6 +24,18 @@ typedef struct {
     uint8_t header_type;
 } pci_device_t;
 
+/* Common PCI Class & Subclass definitions */
+#define PCI_CLASS_STORAGE       0x01
+#define PCI_SUBCLASS_NVME       0x08
+#define PCI_PROGIF_NVME         0x02
+
+#define PCI_CLASS_SERIAL        0x0C
+#define PCI_SUBCLASS_USB        0x03
+#define PCI_PROGIF_UHCI         0x00
+#define PCI_PROGIF_OHCI         0x10
+#define PCI_PROGIF_EHCI         0x20
+#define PCI_PROGIF_XHCI         0x30
+
 typedef void (*pci_enum_callback_t)(const pci_device_t* dev);
 
 uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function,
