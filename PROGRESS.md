@@ -11237,6 +11237,59 @@ From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemen
    - Sheet 2 (Kernel Track): Row 21 (Wi-Fi driver for common chipsets) marked as "Done".
    - Sheet 1 (Summary): Month 5 at 3/5 (60%), Kernel Track at 20/26 (76.92%), Overall at 20/56 (35.71%).
 
+## Phase 94: Per-Driver Locking Pass in Rust (Month 5 - Driver breadth & performance)
+
+From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: replaced the coarse, whole-filesystem stopgap lock (`vfs_lock` introduced in Phase 57) with fine-grained per-driver locking implemented fully in **Rust** (`kernel/rust/driver_locks.rs` and `kernel/drivers/driver_locks.h`). Scoped locks directly to each driver's and filesystem's own static state and scratch buffers following the `SpinLock<T>` pattern, enabling multiple CPU cores to genuinely work on different filesystems and drivers simultaneously without cross-driver contention.
+
+### What was built
+
+1. **Rust Fine-Grained Driver Lock Infrastructure (`kernel/rust/driver_locks.rs`)**:
+   - Built a comprehensive per-driver locking module in `#![no_std]` Rust with 12 discrete driver locks:
+     - `DRIVER_LOCK_FAT32` (0): Scoped to FAT32 filesystem structures, scratch cluster buffers (`cluster_buf`), and FAT sector cache.
+     - `DRIVER_LOCK_EXT2` (1): Scoped to ext2 filesystem structures, inode buffers, block buffers, and directory scans.
+     - `DRIVER_LOCK_ATA` (2): Scoped to ATA PIO primary controller registers and drive hardware state.
+     - `DRIVER_LOCK_BLOCKDEV` (3): Scoped to block device dispatch selection and partition offset telemetry.
+     - `DRIVER_LOCK_SERIAL` (4): Scoped to UART 16550 serial port output and logging registers.
+     - `DRIVER_LOCK_VGA` (5): Scoped to VGA text mode and graphics registers.
+     - `DRIVER_LOCK_KEYBOARD` (6): Scoped to PS/2 keyboard ring buffer and scan code decoding.
+     - `DRIVER_LOCK_MOUSE` (7): Scoped to PS/2 mouse packet state and tracking.
+     - `DRIVER_LOCK_NVME` (8): Scoped to NVMe submission/completion queues and doorbells.
+     - `DRIVER_LOCK_XHCI` (9): Scoped to xHCI command ring, transfer rings, and port status.
+     - `DRIVER_LOCK_WIFI` (10): Scoped to 802.11 MAC framing, frame queues, and adapter state.
+     - `DRIVER_LOCK_RTC` (11): Scoped to CMOS RTC register access.
+   - Core API:
+     - `rust_driver_lock_acquire(driver_id)`: Disables interrupts on current CPU, saves EFLAGS, and spin-locks atomic flag with lock contention metrics.
+     - `rust_driver_lock_release(driver_id, flags)`: Unlocks atomic flag and restores caller's interrupt state.
+     - `rust_driver_lock_try_acquire(driver_id, out_flags)`: Non-blocking acquisition attempt.
+     - `rust_driver_lock_is_locked(driver_id)`: Inspection of lock holding state.
+     - Dedicated fast-path C-compatible entry points: `rust_fat32_lock_acquire/release`, `rust_ext2_lock_acquire/release`, `rust_ata_lock_acquire/release`, `rust_blockdev_lock_acquire/release`, `rust_serial_lock_acquire/release`, `rust_vga_lock_acquire/release`.
+
+2. **Removal of Coarse VFS Lock & Decoupling of Drivers (`kernel/fs/vfs.c`)**:
+   - Completely retired Phase 57's coarse `static spinlock_t vfs_lock` and `spinlock_init(&vfs_lock)`.
+   - Removed global serialization around `vfs_read_file()`, `vfs_read_file_range()`, `vfs_write_file()`, and `vfs_delete_file()`. Multiple cores can now concurrently read and write different filesystems (e.g. Core 0 servicing FAT32 while Core 1 executes from ext2).
+
+3. **Per-Driver State Scoping & Partition Offset Isolation**:
+   - **FAT32** (`kernel/fs/fat32.c`): Individual lock acquisition scoped strictly around FAT32 static buffers (`cluster_buf`, `found_entry`, `fat_sector_buf`) across `fat32_list_root()`, `fat32_read_file()`, `fat32_read_file_range()`, `fat32_write_file()`, and `fat32_delete_file()`.
+   - **ext2** (`kernel/fs/ext2.c`): Replaced reliance on `blockdev`'s global mutable `partition_offset` with ext2's private `partition_offset` using `blockdev_read_sectors_absolute()` and `blockdev_write_sectors_absolute()`. Ext2 operations never clobber FAT32's blockdev partition offset, eliminating multi-core race conditions.
+   - **ATA** (`kernel/drivers/ata/ata.c`): Wrapped `ata_read_sectors()`, `ata_write_sectors()`, and `ata_set_partition_offset()` in `rust_ata_lock` to protect hardware PIO register accesses across cores.
+   - **Blockdev** (`kernel/drivers/blockdev.c`): Protected device selection (`blockdev_select()`) and partition offset querying with `rust_blockdev_lock`.
+   - **Serial** (`kernel/drivers/serial/serial.c`): Wrapped `serial_printf()` in `rust_serial_lock` to prevent garbled interleaved character output across SMP cores.
+
+4. **Self-Test & Conformance Verification**:
+   - Implemented `rust_driver_locks_selftest()` in `kernel/rust/driver_locks.rs` validating:
+     - Basic acquire/release cycle.
+     - Concurrent driver independence: proving FAT32 and ext2 locks can be acquired simultaneously on different contexts without mutual contention.
+     - Try-acquire semantics on contested vs uncontested locks.
+     - Nested interrupt state preservation across 3 levels (`FAT32 -> BLOCKDEV -> ATA`).
+     - Cumulative acquisitions, contention events, and try-fail counters.
+   - Boot-time self-test hooked into `kernel/init/main.c`.
+   - Boot assertion added to `tools/python/test_runner.py`: `driver_locks_selftest`.
+   - Full automated test suite passes 100%: 214 of 214 assertions pass (`make test`).
+
+5. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Sheet 2 (Kernel Track): Row 22 (Per-driver locking pass) marked as "Done".
+   - Sheet 1 (Summary): Month 5 at 4/5 (80%), Kernel Track at 21/26 (80.77%), Overall at 21/56 (37.50%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

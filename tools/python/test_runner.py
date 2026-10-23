@@ -333,6 +333,9 @@ ASSERTIONS: list[Assertion] = [
               "Month 5: Wi-Fi 802.11 MAC layer, default SSID, and link parameters were initialized"),
     Assertion("wifi_selftest", r"Wi-Fi 802\.11 driver self-test.*result=0",
               "Month 5: Wi-Fi driver self-test passed at boot, validating 802.11/802.3 LLC-SNAP translation, frame encapsulation, state machine, and queue operation"),
+    Assertion("driver_locks_selftest",
+              r"Kernel-side Rust per-driver locking self-test.*result=0",
+              "Month 5: fine-grained per-driver locking in Rust replaces coarse filesystem locks"),
     Assertion("net_irq_selftest",
               r"Kernel-side Rust net IRQ signal self-test.*"
               r"signal-then-check=pass",

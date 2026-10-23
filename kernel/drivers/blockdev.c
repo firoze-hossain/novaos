@@ -2,6 +2,7 @@
  * blockdev.c - see blockdev.h for the full design and rationale.
  */
 #include "blockdev.h"
+#include "driver_locks.h"
 #include "ata/ata.h"
 #include "virtio/virtio_blk.h"
 #include "nvme/nvme.h"
@@ -10,19 +11,29 @@ static blockdev_id_t active_device = BLOCKDEV_ATA;
 static uint32_t partition_offset = 0;
 
 void blockdev_select(blockdev_id_t device) {
+    uint32_t flags = rust_blockdev_lock_acquire();
     active_device = device;
+    rust_blockdev_lock_release(flags);
 }
 
 blockdev_id_t blockdev_current(void) {
-    return active_device;
+    uint32_t flags = rust_blockdev_lock_acquire();
+    blockdev_id_t dev = active_device;
+    rust_blockdev_lock_release(flags);
+    return dev;
 }
 
 void blockdev_set_partition_offset(uint32_t offset_lba) {
+    uint32_t flags = rust_blockdev_lock_acquire();
     partition_offset = offset_lba;
+    rust_blockdev_lock_release(flags);
 }
 
 uint32_t blockdev_get_partition_offset(void) {
-    return partition_offset;
+    uint32_t flags = rust_blockdev_lock_acquire();
+    uint32_t off = partition_offset;
+    rust_blockdev_lock_release(flags);
+    return off;
 }
 
 bool blockdev_is_present(void) {
@@ -89,12 +100,18 @@ static bool dispatch_write(uint32_t lba, uint8_t sector_count,
 }
 
 bool blockdev_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
-    return dispatch_read(lba + partition_offset, sector_count, buffer);
+    uint32_t flags = rust_blockdev_lock_acquire();
+    uint32_t target_lba = lba + partition_offset;
+    rust_blockdev_lock_release(flags);
+    return dispatch_read(target_lba, sector_count, buffer);
 }
 
 bool blockdev_write_sectors(uint32_t lba, uint8_t sector_count,
                              const void* buffer) {
-    return dispatch_write(lba + partition_offset, sector_count, buffer);
+    uint32_t flags = rust_blockdev_lock_acquire();
+    uint32_t target_lba = lba + partition_offset;
+    rust_blockdev_lock_release(flags);
+    return dispatch_write(target_lba, sector_count, buffer);
 }
 
 bool blockdev_read_sectors_absolute(uint32_t lba, uint8_t sector_count,

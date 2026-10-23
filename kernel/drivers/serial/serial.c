@@ -9,6 +9,7 @@
  * runners alike.
  */
 #include "serial.h"
+#include "../driver_locks.h"
 #include "../../arch/x86/io.h"
 #include "../../lib/stdio.h"
 #include <stdarg.h>
@@ -44,6 +45,7 @@ void serial_puts(const char* str) {
 }
 
 void serial_printf(const char* format, ...) {
+    uint32_t flags = rust_serial_lock_acquire();
     va_list args;
     va_start(args, format);
 
@@ -52,4 +54,5 @@ void serial_printf(const char* format, ...) {
     serial_puts(buffer);
 
     va_end(args);
+    rust_serial_lock_release(flags);
 }

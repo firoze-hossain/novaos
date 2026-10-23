@@ -3,6 +3,7 @@
  */
 #include "fat32.h"
 #include "../drivers/blockdev.h"
+#include "../drivers/driver_locks.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -366,16 +367,21 @@ static bool walk_root(const uint8_t want_name[11],
 }
 
 void fat32_list_root(fat32_list_callback_t callback) {
+    uint32_t flags = rust_fat32_lock_acquire();
     blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
+        rust_fat32_lock_release(flags);
         return;
     }
     walk_root(NULL, callback);
+    rust_fat32_lock_release(flags);
 }
 
 int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
+    uint32_t flags = rust_fat32_lock_acquire();
     blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
+        rust_fat32_lock_release(flags);
         return -1;
     }
 
@@ -383,6 +389,7 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
     to_fat_8_3(filename, want_name);
 
     if (!walk_root(want_name, NULL)) {
+        rust_fat32_lock_release(flags);
         return -1;
     }
 
@@ -412,6 +419,7 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
         cluster = fat_next_cluster(cluster);
     }
 
+    rust_fat32_lock_release(flags);
     return (int)total_copied;
 }
 
@@ -420,8 +428,10 @@ int fat32_read_file(const char* filename, void* buf, uint32_t buf_size) {
  * skipping to the cluster containing `offset` and starting mid-cluster. */
 int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
                           uint32_t len) {
+    uint32_t flags = rust_fat32_lock_acquire();
     blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
+        rust_fat32_lock_release(flags);
         return -1;
     }
 
@@ -429,11 +439,13 @@ int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
     to_fat_8_3(filename, want_name);
 
     if (!walk_root(want_name, NULL)) {
+        rust_fat32_lock_release(flags);
         return -1;
     }
 
     uint32_t file_size = found_entry.file_size;
     if (offset >= file_size || len == 0) {
+        rust_fat32_lock_release(flags);
         return 0; /* the file exists; there is just nothing (more) to read */
     }
     uint32_t remaining = file_size - offset;
@@ -454,6 +466,7 @@ int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
         skip--;
     }
     if (cluster >= FAT32_END_OF_CHAIN) {
+        rust_fat32_lock_release(flags);
         return 0; /* the chain ends before the size in the directory entry
                      says it should - a damaged file; report end of data
                      rather than read garbage */
@@ -479,6 +492,7 @@ int fat32_read_file_range(const char* filename, uint32_t offset, void* buf,
         cluster = fat_next_cluster(cluster);
     }
 
+    rust_fat32_lock_release(flags);
     return (int)total_copied;
 }
 
@@ -582,8 +596,10 @@ static bool find_free_slot(uint32_t* out_cluster, uint32_t* out_offset) {
 }
 
 bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
+    uint32_t flags = rust_fat32_lock_acquire();
     blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
+        rust_fat32_lock_release(flags);
         return false;
     }
 
@@ -593,6 +609,7 @@ bool fat32_write_file(const char* filename, const void* data, uint32_t size) {
     uint32_t existing_cluster, existing_offset;
     if (find_existing_entry_location(raw_name, &existing_cluster,
                                       &existing_offset)) {
+        rust_fat32_lock_release(flags);
         return false; /* already exists - no overwrite; delete first -
                           not part of any transaction below, since
                           nothing has been written yet at this point */
@@ -694,12 +711,18 @@ done:
      * addition to the operation's own logical result, for this
      * function to report success. See journal.rs's own header comment
      * on why checkpoint is attempted even when durability failed. */
-    return rust_journal_commit() && result;
+    {
+        bool commit_ok = rust_journal_commit() && result;
+        rust_fat32_lock_release(flags);
+        return commit_ok;
+    }
 }
 
 bool fat32_delete_file(const char* filename) {
+    uint32_t flags = rust_fat32_lock_acquire();
     blockdev_set_partition_offset(partition_offset);
     if (!mounted) {
+        rust_fat32_lock_release(flags);
         return false;
     }
 
@@ -708,6 +731,7 @@ bool fat32_delete_file(const char* filename) {
 
     uint32_t dir_cluster, dir_offset;
     if (!find_existing_entry_location(raw_name, &dir_cluster, &dir_offset)) {
+        rust_fat32_lock_release(flags);
         return false; /* not found - nothing written yet, nothing to
                           journal */
     }
@@ -744,5 +768,9 @@ bool fat32_delete_file(const char* filename) {
     result = true;
 
 done:
-    return rust_journal_commit() && result;
+    {
+        bool commit_ok = rust_journal_commit() && result;
+        rust_fat32_lock_release(flags);
+        return commit_ok;
+    }
 }

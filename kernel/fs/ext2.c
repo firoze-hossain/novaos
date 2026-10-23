@@ -3,6 +3,7 @@
  */
 #include "ext2.h"
 #include "../drivers/blockdev.h"
+#include "../drivers/driver_locks.h"
 #include "../lib/string.h"
 #include "../include/kernel.h"
 
@@ -111,8 +112,8 @@ bool ext2_is_mounted(void) {
 
 static bool read_block(uint32_t block_num, void* buffer) {
     uint32_t sectors_per_block = block_size / 512;
-    uint32_t lba = block_num * sectors_per_block;
-    return blockdev_read_sectors(lba, (uint8_t)sectors_per_block, buffer);
+    uint32_t lba = partition_offset + block_num * sectors_per_block;
+    return blockdev_read_sectors_absolute(lba, (uint8_t)sectors_per_block, buffer);
 }
 
 static bool read_inode(uint32_t inode_num, ext2_inode_t* out) {
@@ -153,8 +154,8 @@ static bool read_inode(uint32_t inode_num, ext2_inode_t* out) {
 
 static bool write_block(uint32_t block_num, const void* buffer) {
     uint32_t sectors_per_block = block_size / 512;
-    uint32_t lba = block_num * sectors_per_block;
-    return blockdev_write_sectors(lba, (uint8_t)sectors_per_block, buffer);
+    uint32_t lba = partition_offset + block_num * sectors_per_block;
+    return blockdev_write_sectors_absolute(lba, (uint8_t)sectors_per_block, buffer);
 }
 
 static bool read_bgd0(ext2_bgd_t* out) {
@@ -181,7 +182,7 @@ static bool write_superblock(void) {
     uint8_t sb_sector_buf[1024];
     memset(sb_sector_buf, 0, sizeof(sb_sector_buf));
     memcpy(sb_sector_buf, &sb, sizeof(sb));
-    return blockdev_write_sectors(2, 2, sb_sector_buf);
+    return blockdev_write_sectors_absolute(partition_offset + 2, 2, sb_sector_buf);
 }
 
 /* Finds a free bit in the bitmap block, marks it used, and writes the
@@ -483,13 +484,12 @@ static bool find_in_root(const char* filename, uint32_t* out_inode) {
 }
 
 bool ext2_init(void) {
-    blockdev_set_partition_offset(partition_offset);
     mounted = false;
 
     /* The superblock always lives at byte offset 1024 regardless of
      * block size - LBA 2, 2 sectors (1024 bytes / 512). */
     uint8_t sb_buf[1024];
-    if (!blockdev_read_sectors(2, 2, sb_buf)) {
+    if (!blockdev_read_sectors_absolute(partition_offset + 2, 2, sb_buf)) {
         return false;
     }
     memcpy(&sb, sb_buf, sizeof(sb));
@@ -521,48 +521,59 @@ bool ext2_init(void) {
 }
 
 int ext2_read_file(const char* filename, void* buf, uint32_t buf_size) {
-    blockdev_set_partition_offset(partition_offset);
+    uint32_t flags = rust_ext2_lock_acquire();
     if (!mounted) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
     uint32_t inode_num;
     if (!find_in_root(filename, &inode_num)) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
     ext2_inode_t inode;
     if (!read_inode(inode_num, &inode)) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
-    return (int)read_inode_data(&inode, buf, buf_size);
+    int res = (int)read_inode_data(&inode, buf, buf_size);
+    rust_ext2_lock_release(flags);
+    return res;
 }
 
 /* Phase 73: see ext2.h. */
 int ext2_read_file_range(const char* filename, uint32_t offset, void* buf,
                          uint32_t len) {
-    blockdev_set_partition_offset(partition_offset);
+    uint32_t flags = rust_ext2_lock_acquire();
     if (!mounted) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
     uint32_t inode_num;
     if (!find_in_root(filename, &inode_num)) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
     ext2_inode_t inode;
     if (!read_inode(inode_num, &inode)) {
+        rust_ext2_lock_release(flags);
         return -1;
     }
 
-    return (int)read_inode_data_at(&inode, offset, buf, len);
+    int res = (int)read_inode_data_at(&inode, offset, buf, len);
+    rust_ext2_lock_release(flags);
+    return res;
 }
 
 bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
-    blockdev_set_partition_offset(partition_offset);
+    uint32_t flags = rust_ext2_lock_acquire();
     if (!mounted) {
+        rust_ext2_lock_release(flags);
         return false;
     }
 
@@ -570,6 +581,7 @@ bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
     if (find_in_root(filename, &existing_inode)) {
         kernel_log("[FAULT] ext2_write_file: '%s' already exists "
                    "(create-only - see ext2.h)\n", filename);
+        rust_ext2_lock_release(flags);
         return false;
     }
 
@@ -582,6 +594,7 @@ bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
                    "exceeding this driver's 12-direct-block limit (no "
                    "indirect-block allocation yet)\n", filename,
                    (int)blocks_needed);
+        rust_ext2_lock_release(flags);
         return false;
     }
 
@@ -598,6 +611,7 @@ bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
         uint32_t block_num = alloc_block();
         if (block_num == 0) {
             kernel_log("[FAULT] ext2_write_file: out of free blocks\n");
+            rust_ext2_lock_release(flags);
             return false; /* the blocks already allocated this call are
                               now leaked - see PROGRESS.md */
         }
@@ -610,6 +624,7 @@ bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
         }
         if (!write_block(block_num, block_buf)) {
             kernel_log("[FAULT] ext2_write_file: disk write failed\n");
+            rust_ext2_lock_release(flags);
             return false;
         }
         src += chunk;
@@ -619,21 +634,25 @@ bool ext2_write_file(const char* filename, const void* data, uint32_t size) {
     uint32_t inode_num = alloc_inode();
     if (inode_num == 0) {
         kernel_log("[FAULT] ext2_write_file: out of free inodes\n");
+        rust_ext2_lock_release(flags);
         return false;
     }
     if (!write_inode(inode_num, &inode)) {
         kernel_log("[FAULT] ext2_write_file: failed to write inode\n");
+        rust_ext2_lock_release(flags);
         return false;
     }
 
     if (!insert_dirent(filename, inode_num)) {
         kernel_log("[FAULT] ext2_write_file: no room in the root "
                    "directory for '%s'\n", filename);
+        rust_ext2_lock_release(flags);
         return false;
     }
 
     kernel_log("[ OK ] ext2_write_file: created '%s' (%d bytes, inode "
                "%d, %d block(s))\n", filename, (int)size, (int)inode_num,
                (int)blocks_needed);
+    rust_ext2_lock_release(flags);
     return true;
 }

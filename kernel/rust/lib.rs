@@ -53,6 +53,7 @@ mod dynlink;
 mod growtable;
 mod klog;
 mod pkgrepo;
+mod driver_locks;
 
 use core::panic::PanicInfo;
 

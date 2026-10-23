@@ -2,6 +2,7 @@
  * ata.c - ATA PIO driver, primary bus, master device only
  */
 #include "ata.h"
+#include "../driver_locks.h"
 #include "../../arch/x86/io.h"
 #include "../../include/kernel.h"
 
@@ -127,13 +128,16 @@ bool ata_is_present(void) {
 static uint32_t partition_offset = 0;
 
 void ata_set_partition_offset(uint32_t offset_lba) {
+    uint32_t flags = rust_ata_lock_acquire();
     partition_offset = offset_lba;
+    rust_ata_lock_release(flags);
 }
 
 bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
     if (!drive_present || sector_count == 0) {
         return false;
     }
+    uint32_t flags = rust_ata_lock_acquire();
     lba += partition_offset;
 
     uint16_t* buf16 = (uint16_t*)buffer;
@@ -151,6 +155,7 @@ bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
         wait_busy_clear();
         if (!wait_drq_or_error()) {
             kernel_log("[FAULT] ATA read error at LBA %d\n", (int)(lba + s));
+            rust_ata_lock_release(flags);
             return false;
         }
         for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
@@ -158,6 +163,7 @@ bool ata_read_sectors(uint32_t lba, uint8_t sector_count, void* buffer) {
         }
     }
 
+    rust_ata_lock_release(flags);
     return true;
 }
 
@@ -165,6 +171,7 @@ bool ata_write_sectors(uint32_t lba, uint8_t sector_count, const void* buffer) {
     if (!drive_present || sector_count == 0) {
         return false;
     }
+    uint32_t flags = rust_ata_lock_acquire();
     lba += partition_offset;
 
     const uint16_t* buf16 = (const uint16_t*)buffer;
@@ -182,6 +189,7 @@ bool ata_write_sectors(uint32_t lba, uint8_t sector_count, const void* buffer) {
         wait_busy_clear();
         if (!wait_drq_or_error()) {
             kernel_log("[FAULT] ATA write error at LBA %d\n", (int)(lba + s));
+            rust_ata_lock_release(flags);
             return false;
         }
         for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) {
@@ -197,5 +205,6 @@ bool ata_write_sectors(uint32_t lba, uint8_t sector_count, const void* buffer) {
     outb(REG_COMMAND, CMD_FLUSH_CACHE);
     wait_busy_clear();
 
+    rust_ata_lock_release(flags);
     return true;
 }

@@ -31,6 +31,7 @@
 #include "../drivers/nvme/nvme.h"
 #include "../drivers/xhci/xhci.h"
 #include "../drivers/net/wifi.h"
+#include "../drivers/driver_locks.h"
 #include "../drivers/blockdev.h"
 #include "../fs/fat32.h"
 #include "../net/net.h"
@@ -649,6 +650,14 @@ void kernel_late_init(void) {
         kernel_log("[ %s ] Wi-Fi 802.11 driver self-test (frame encapsulation, "
                    "802.11/802.3 LLC-SNAP translation, chipset probing, state machine): result=%d\n",
                    wifi_res == 0 ? "OK" : "FAIL", wifi_res);
+    }
+
+    /* Month 5: Per-driver locking pass in Rust */
+    {
+        int lock_res = rust_driver_locks_selftest();
+        kernel_log("[ %s ] Kernel-side Rust per-driver locking self-test (fine-grained "
+                   "FAT32/ext2/ATA/device locks, contention tracking, interrupt safety, independent concurrency): result=%d\n",
+                   lock_res == 0 ? "OK" : "FAIL", lock_res);
     }
 
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS
