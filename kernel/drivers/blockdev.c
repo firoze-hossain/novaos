@@ -4,6 +4,7 @@
 #include "blockdev.h"
 #include "ata/ata.h"
 #include "virtio/virtio_blk.h"
+#include "nvme/nvme.h"
 
 static blockdev_id_t active_device = BLOCKDEV_ATA;
 static uint32_t partition_offset = 0;
@@ -30,6 +31,8 @@ bool blockdev_is_present(void) {
             return ata_is_present();
         case BLOCKDEV_VIRTIO_BLK:
             return virtio_blk_is_present();
+        case BLOCKDEV_NVME:
+            return nvme_is_present();
         default:
             return false;
     }
@@ -56,6 +59,8 @@ static bool dispatch_read(uint32_t lba, uint8_t sector_count, void* buffer) {
             }
             return true;
         }
+        case BLOCKDEV_NVME:
+            return nvme_read_sectors((uint64_t)lba, sector_count, buffer);
         default:
             return false;
     }
@@ -76,6 +81,8 @@ static bool dispatch_write(uint32_t lba, uint8_t sector_count,
             }
             return true;
         }
+        case BLOCKDEV_NVME:
+            return nvme_write_sectors((uint64_t)lba, sector_count, buffer);
         default:
             return false;
     }

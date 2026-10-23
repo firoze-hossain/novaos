@@ -28,6 +28,7 @@
 #include "../drivers/pci/pci.h"
 #include "../drivers/sound/ac97.h"
 #include "../drivers/virtio/virtio_blk.h"
+#include "../drivers/nvme/nvme.h"
 #include "../drivers/blockdev.h"
 #include "../fs/fat32.h"
 #include "../net/net.h"
@@ -622,6 +623,14 @@ void kernel_late_init(void) {
                        "read=%d matches=%d\n", (int)wrote, (int)read,
                        (int)matches);
         }
+    }
+
+    /* Month 5: NVMe driver verification */
+    {
+        int nvme_res = nvme_selftest();
+        kernel_log("[ %s ] NVMe driver self-test (structure layout, doorbell "
+                   "calculations, command construction, read/write): result=%d\n",
+                   nvme_res == 0 ? "OK" : "FAIL", nvme_res);
     }
 
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS
@@ -1351,6 +1360,54 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                        "read_ok=%d write_ok=%d remounted=%d\n",
                        (int)mounted, (int)read_ok, (int)write_ok,
                        (int)remounted);
+        }
+    }
+
+    /* Month 5: demonstrate NVMe block device VFS integration if an NVMe disk is attached */
+    if (nvme_is_present()) {
+        blockdev_id_t saved_device = blockdev_current();
+        uint32_t saved_offset = blockdev_get_partition_offset();
+
+        blockdev_select(BLOCKDEV_NVME);
+        blockdev_set_partition_offset(0);
+        fat32_set_partition_offset(0);
+        bool mounted = fat32_init();
+
+        bool read_ok = false;
+        static char nvme_read_buf[128];
+        if (mounted) {
+            int n = fat32_read_file("NVMETEST.TXT", nvme_read_buf, sizeof(nvme_read_buf));
+            static const char expected[] =
+                "Hello from a real FAT32 filesystem mounted through NVMe!\n";
+            read_ok = (n == (int)sizeof(expected) - 1) &&
+                      (memcmp(nvme_read_buf, expected, (size_t)n) == 0);
+        }
+
+        bool write_ok = false;
+        if (mounted) {
+            static const char new_content[] =
+                "Written through NVMe, read back through NVMe.\n";
+            bool wrote = fat32_write_file("NVMENEW.TXT", new_content, sizeof(new_content) - 1);
+            static char readback_buf[128];
+            int n2 = wrote ? fat32_read_file("NVMENEW.TXT", readback_buf, sizeof(readback_buf)) : -1;
+            write_ok = wrote && (n2 == (int)sizeof(new_content) - 1) &&
+                       (memcmp(readback_buf, new_content, (size_t)n2) == 0);
+        }
+
+        /* Restore original blockdev & partition offset */
+        blockdev_select(saved_device);
+        blockdev_set_partition_offset(saved_offset);
+        fat32_set_partition_offset(saved_offset);
+        bool remounted = fat32_init();
+
+        if (mounted && read_ok && write_ok && remounted) {
+            kernel_log("[ OK ] NVME VFS MOUNT OK: a real FAT32 filesystem was "
+                       "mounted through NVMe, an existing file read back correctly, "
+                       "a new file written and read back correctly, and the "
+                       "original ATA-backed mount was correctly restored afterward\n");
+        } else {
+            kernel_log("[FAULT] NVME VFS MOUNT: mounted=%d read_ok=%d write_ok=%d remounted=%d\n",
+                       (int)mounted, (int)read_ok, (int)write_ok, (int)remounted);
         }
     }
 

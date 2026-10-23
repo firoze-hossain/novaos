@@ -36,6 +36,7 @@
 typedef enum {
     BLOCKDEV_ATA,
     BLOCKDEV_VIRTIO_BLK,
+    BLOCKDEV_NVME,
 } blockdev_id_t;
 
 /* 512 bytes, the standard sector size both backends this abstraction

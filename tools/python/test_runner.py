@@ -128,6 +128,15 @@ VIRTIO_FAT32_TEST_CONTENT = (
     b"Hello from a real FAT32 filesystem mounted through virtio-blk!\n"
 )
 
+# Month 5: dedicated test disk image for kernel/drivers/nvme/nvme.c
+DEFAULT_NVME_DISK = REPO_ROOT / "build" / "nvme-test.img"
+NVME_TEST_DISK_SIZE_BYTES = 16 * 1024 * 1024
+NVME_FAT32_TEST_FILENAME = "NVMETEST.TXT"
+NVME_FAT32_TEST_CONTENT = (
+    b"Hello from a real FAT32 filesystem mounted through NVMe!\n"
+)
+
+
 
 @dataclass
 class Assertion:
@@ -293,6 +302,14 @@ ASSERTIONS: list[Assertion] = [
     Assertion("virtio_blk_write_readback", r"VIRTIO-BLK WRITE\.READBACK OK",
               "a 512-byte sector written via a real virtio-blk device (real "
               "hardware DMA, not just the layout math) read back identical"),
+    Assertion("nvme_registered", r"Driver .nvme. initializing",
+              "Month 5: the NVMe driver ran via the self-registration mechanism"),
+    Assertion("nvme_present", r"nvme at PCI",
+              "Month 5: an NVMe controller was found and initialized via PCI"),
+    Assertion("nvme_write_readback", r"NVME WRITE\.READBACK OK",
+              "Month 5: a 512-byte sector written via a real NVMe device read back byte-for-byte identical"),
+    Assertion("nvme_selftest", r"NVMe driver self-test.*result=0",
+              "Month 5: NVMe driver self-test passed at boot, validating register mappings, queue descriptors, and controller communication"),
     Assertion("net_irq_selftest",
               r"Kernel-side Rust net IRQ signal self-test.*"
               r"signal-then-check=pass",
@@ -356,6 +373,10 @@ ASSERTIONS: list[Assertion] = [
               "read back correctly, and the original ATA-backed mount "
               "restored afterward - proven by every test after this one "
               "in the suite (shell launch, fork, exec) still passing"),
+    Assertion("nvme_vfs_mount", r"NVME VFS MOUNT OK",
+              "Month 5: a real FAT32 filesystem was mounted through NVMe via "
+              "the blockdev abstraction, an existing file read, a new file written, "
+              "and original mount restored"),
     Assertion("sha256_selftest",
               r"Kernel-side Rust SHA-256 self-test.*empty-string=pass.*"
               r"abc=pass.*multi-block=pass",
@@ -811,12 +832,37 @@ def ensure_virtio_test_disk(path: Path) -> None:
         )
 
 
+def ensure_nvme_test_disk(path: Path) -> None:
+    """Creates (or recreates) the dedicated NVMe test disk image
+    as a real, mountable FAT32 filesystem."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        with open(path, "wb") as f:
+            f.truncate(NVME_TEST_DISK_SIZE_BYTES)
+
+        subprocess.run(["mformat", "-i", str(path), "-F", "::"],
+                        check=True, capture_output=True)
+
+        test_file = tmp / NVME_FAT32_TEST_FILENAME
+        test_file.write_bytes(NVME_FAT32_TEST_CONTENT)
+        subprocess.run(
+            ["mcopy", "-i", str(path), str(test_file),
+             f"::{NVME_FAT32_TEST_FILENAME}"],
+            check=True, capture_output=True,
+        )
+
+
 def boot_and_capture(
     iso_path: Path,
     disk_path: Path,
     log_path: Path,
     timeout_seconds: int,
     virtio_disk_path: Path,
+    nvme_disk_path: Path = DEFAULT_NVME_DISK,
     virgl: bool = False,
 ) -> None:
     """Boots NovaOS headlessly under QEMU, capturing serial output to
@@ -839,17 +885,13 @@ def boot_and_capture(
     virtio_flags = [
         "-drive", f"file={virtio_disk_path},if=none,id=vblk0",
         "-device", "virtio-blk-pci,drive=vblk0",
-        # Phase 80: kernel/drivers/virtiogpu/virtiogpu.c's own real
-        # virtio-gpu 2D driver needs a real virtio-gpu-pci device
-        # present to find at all - added alongside the existing
-        # default VGA device (QEMU allows more than one display
-        # device at once; this doesn't replace or conflict with the
-        # default device kernel/drivers/video/vbe.c's own Bochs DISPI
-        # direct-negotiation path already finds and uses).
-        # Phase 82: with --virgl the same device in its GL-capable form,
-        # which offers the VIRGL feature (the PCI ids are identical, so
-        # the driver finds it the same way and every 2D path still runs).
         "-device", "virtio-gpu-gl-pci" if virgl else "virtio-gpu-pci",
+    ]
+
+    ensure_nvme_test_disk(nvme_disk_path)
+    nvme_flags = [
+        "-drive", f"file={nvme_disk_path},format=raw,if=none,id=nvme0",
+        "-device", "nvme,drive=nvme0,serial=novanvme0",
     ]
 
     cmd = (
@@ -861,6 +903,7 @@ def boot_and_capture(
         + AUDIO_FLAGS
         + USB_FLAGS
         + virtio_flags
+        + nvme_flags
         + ["-cdrom", str(iso_path),
            # virgl executes OpenGL on the host, so it needs a GL-capable
            # display: gtk,gl=on (needs $DISPLAY - tools/tests/
@@ -1029,6 +1072,10 @@ def main() -> int:
                          help="path to the dedicated virtio-blk test disk "
                               "image (created fresh each run; default: "
                               "%(default)s)")
+    parser.add_argument("--nvme-disk", type=Path, default=DEFAULT_NVME_DISK,
+                         help="path to the dedicated NVMe test disk "
+                              "image (created fresh each run; default: "
+                              "%(default)s)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--virgl", action="store_true",
                          help="Phase 82: boot against a virgl-capable "
@@ -1044,7 +1091,8 @@ def main() -> int:
 
     if args.boot:
         boot_and_capture(args.iso, args.disk, args.log, args.timeout,
-                          args.virtio_disk, virgl=args.virgl)
+                          args.virtio_disk, nvme_disk_path=args.nvme_disk,
+                          virgl=args.virgl)
 
     ok = run_checks(args.log)
     return 0 if ok else 1

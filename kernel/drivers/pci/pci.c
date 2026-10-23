@@ -33,6 +33,18 @@ uint8_t pci_config_read8(uint8_t bus, uint8_t device, uint8_t function,
     return (uint8_t)((value >> ((offset & 3) * 8)) & 0xFF);
 }
 
+void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function,
+                        uint8_t offset, uint32_t value) {
+    outl(PCI_CONFIG_ADDRESS, config_address(bus, device, function, offset));
+    outl(PCI_CONFIG_DATA, value);
+}
+
+void pci_config_write16(uint8_t bus, uint8_t device, uint8_t function,
+                        uint8_t offset, uint16_t value) {
+    outl(PCI_CONFIG_ADDRESS, config_address(bus, device, function, offset));
+    outw((uint16_t)(PCI_CONFIG_DATA + (offset & 2)), value);
+}
+
 static bool probe_function(uint8_t bus, uint8_t device, uint8_t function,
                             pci_device_t* out) {
     uint16_t vendor_id = pci_config_read16(bus, device, function, 0x00);
@@ -96,6 +108,7 @@ const char* pci_class_name(uint8_t class_code, uint8_t subclass) {
         case 0x01:
             if (subclass == 0x01) return "IDE controller";
             if (subclass == 0x06) return "SATA controller";
+            if (subclass == 0x08) return "NVMe controller";
             return "Storage controller";
         case 0x02:
             if (subclass == 0x00) return "Ethernet controller";

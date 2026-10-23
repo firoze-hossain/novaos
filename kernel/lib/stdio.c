@@ -28,6 +28,14 @@ int vsnprintf(char* buffer, size_t size, const char* format, va_list args) {
                 }
                 break;
             }
+            case 'u': {
+                unsigned int val = va_arg(args, unsigned int);
+                utoa(val, temp, 10);
+                for (char* s = temp; *s && pos < size - 1; s++) {
+                    buffer[pos++] = *s;
+                }
+                break;
+            }
             case 'x': {
                 int val = va_arg(args, int);
                 itoa(val, temp, 16);

@@ -11116,6 +11116,46 @@ From Month 4 ("Server & security core") of the NovaOS Build Plan: built the serv
    - Updated Sheet 2 (Kernel Track): Row 16 (Stateful firewall), Row 17 (Structured kernel logging), and Row 18 (Package repository network protocol support) marked as "Done".
    - Updated Sheet 1 (Summary): Month 4 completed (4/4, 100%), Kernel Track at 17/26 (65.38%), Overall at 17/56 (30.36%).
 
+## Phase 91: NVMe Driver in C (Month 5 - Driver breadth & performance)
+
+From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: implemented a complete, production-grade NVMe (Non-Volatile Memory Express) SSD storage driver fully in **C** (`kernel/drivers/nvme/nvme.c` and `kernel/drivers/nvme/nvme.h`), matching the existing virtio-blk driver's "expose a block device to the VFS" shape and integrating with `kernel/drivers/blockdev.c` (`BLOCKDEV_NVME`).
+
+### What was built
+
+1. **Hardware Detection & Registration**:
+   - PCI scan for Mass Storage Class `0x01`, Subclass `0x08` (`PCI_SUBCLASS_NVME`), ProgIF `0x02` (`PCI_PROGIF_NVME`).
+   - Self-registration via driver lifecycle macro `DRIVER_REGISTER("nvme", nvme_init, DRIVER_PHASE_AFTER_PCI)`.
+   - PCI Command register setup enabling Bus Mastering (bit 2) and Memory Space (bit 1) via `pci_config_write16()`.
+   - 64-bit BAR0 MMIO mapping through `paging_map_page()` to identity-mapped kernel virtual address space.
+
+2. **NVMe Specification Compliance (1.0 - 1.4)**:
+   - Controller reset (`CC.EN = 0`) and synchronization with `CSTS.RDY`.
+   - Capability inspection (`NVME_REG_CAP`) extracting Doorbell Stride (`DSTRD`) and calculating per-queue doorbells (`0x1000 + (2y + x) * (4 << DSTRD)`).
+   - Admin Queue configuration via `AQA` (64 entries), `ASQ`, and `ACQ`.
+   - Controller enable (`CC.EN = 1`) with NVM command set, 4KB memory page size, Round Robin arbitration, 64-byte SQEs, and 16-byte CQEs.
+   - Admin command submissions:
+     - `NVME_ADMIN_OPC_IDENTIFY` (CNS=1) retrieving Controller identification (serial number and model name).
+     - `NVME_ADMIN_OPC_IDENTIFY` (CNS=0, NSID=1) retrieving Namespace 1 capacity and LBA format size.
+     - `NVME_ADMIN_OPC_CREATE_IO_CQ` creating physically contiguous I/O Completion Queue 1 (QID 1, size 64).
+     - `NVME_ADMIN_OPC_CREATE_IO_SQ` creating physically contiguous I/O Submission Queue 1 (QID 1, size 64).
+
+3. **Block Device Abstraction & VFS Integration**:
+   - Registered `BLOCKDEV_NVME` in `kernel/drivers/blockdev.h` and dispatched in `kernel/drivers/blockdev.c`.
+   - Sector read/write functions: `nvme_read_sector()`, `nvme_write_sector()`, `nvme_read_sectors()`, `nvme_write_sectors()`.
+   - Multi-sector chunking through 4096-byte staging DMA buffer allocated from PMM frames with zero heap allocation.
+   - Concurrency safety guaranteed via `spinlock_t g_nvme_lock` on all I/O command submissions.
+   - Volatile queue entry pointers (`volatile nvme_sqe_t*`, `volatile nvme_cqe_t*`) and hardware memory fences (`mfence`, `pause`) preventing compiler reordering and register caching across poll loops.
+
+4. **Self-Test & Verification**:
+   - `nvme_selftest()` verifying data structure alignments (`sizeof(nvme_sqe_t) == 64`, `sizeof(nvme_cqe_t) == 16`, `sizeof(nvme_id_ctrl_t) == 4096`, `sizeof(nvme_id_ns_t) == 4096`), doorbell formula offsets, and raw sector write/readback roundtrip.
+   - VFS mount test in `kernel/init/main.c`: mounts FAT32 on NVMe blockdev, reads `NVMETEST.TXT`, creates and writes `NVMENEW.TXT`, verifies contents, and restores original ATA mount.
+   - Test suite integration in `tools/python/test_runner.py`: creates 16MB FAT32 NVMe raw disk, launches QEMU with `-drive file=...,format=raw,if=none,id=nvme0 -device nvme,drive=nvme0,serial=novanvme0`, asserting `nvme_registered`, `nvme_present`, `nvme_write_readback`, `nvme_selftest`, and `nvme_vfs_mount`.
+   - All 206 test assertions pass with exit code 0 (`make test`).
+
+5. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Sheet 2 (Kernel Track): Row 19 (NVMe driver) marked as "Done".
+   - Sheet 1 (Summary): Month 5 started (1/5, 20%), Kernel Track at 18/26 (69.23%), Overall at 18/56 (32.14%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-
