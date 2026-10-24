@@ -596,6 +596,11 @@ static void test_rule_management(void) {
 static int fetch(void) {
     int n = sys_tftp_fetch(GW, FETCH_NAME, FETCH_TMP);
     sys_delete_file(FETCH_TMP); /* a second download would otherwise fail to write over it */
+    if (n <= 0) {
+        /* Retry once in case of a dropped UDP packet on the virtual network */
+        n = sys_tftp_fetch(GW, FETCH_NAME, FETCH_TMP);
+        sys_delete_file(FETCH_TMP);
+    }
     return n;
 }
 

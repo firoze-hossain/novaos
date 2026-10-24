@@ -664,6 +664,12 @@
  * SYS_CRASHDUMP_CTL queries status, retrieves crash records, triggers exports, and clears exported records. */
 #define SYS_CRASHDUMP_CTL 80
 
+/* Month 6 / Phase 98: Full kernel security audit helper prototypes */
+struct process;
+bool process_has_capability(const struct process* p, const char* filename);
+bool process_has_host_capability(const struct process* p, uint32_t ip);
+bool is_user_ptr_valid(const struct process* p, uint32_t addr, uint32_t len, bool for_write);
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

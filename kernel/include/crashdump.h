@@ -11,8 +11,7 @@
 #ifndef NOVA_CRASHDUMP_H
 #define NOVA_CRASHDUMP_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "types.h"
 
 #define SYS_CRASHDUMP_CTL 80
 

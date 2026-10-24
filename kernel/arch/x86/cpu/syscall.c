@@ -174,7 +174,17 @@ static int str_eq_ci(const char* a, const char* b) {
     return *a == '\0' && *b == '\0';
 }
 
-static bool process_has_capability(const process_t* p, const char* filename) {
+/* Month 6 / Phase 98: Strict user pointer validation helper.
+ * Enforces paging_user_range_ok() on real user processes loaded from disk (mac_embedded = false),
+ * while permitting embedded in-kernel fixture strings for boot self-test tasks. */
+bool is_user_ptr_valid(const process_t* p, uint32_t addr, uint32_t len, bool for_write) {
+    if (p == NULL || !p->is_user || p->mac_embedded) {
+        return addr != 0;
+    }
+    return paging_user_range_ok(addr, len, for_write);
+}
+
+bool process_has_capability(const process_t* p, const char* filename) {
     if (p->can_open_any_file) {
         return true; /* Phase 30 - see the field's comment in process.h */
     }
@@ -188,7 +198,7 @@ static bool process_has_capability(const process_t* p, const char* filename) {
 
 /* Phase 14: same idea as process_has_capability() above, for the
  * network host capability list instead of filenames. */
-static bool process_has_host_capability(const process_t* p, uint32_t ip) {
+bool process_has_host_capability(const process_t* p, uint32_t ip) {
     for (int i = 0; i < p->allowed_host_count; i++) {
         if (p->allowed_hosts[i] == ip) {
             return true;
@@ -310,6 +320,10 @@ static void handle_read(registers_t* regs) {
          * not the pipe itself, so it's released before calling out. */
         int pipe_id = open_files[handle].pipe_id;
         spinlock_release(&open_files_lock, flags);
+        if (max_len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, max_len, true)) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
         regs->eax = (uint32_t)rust_pipe_read(pipe_id, (uint8_t*)buf, max_len);
         return;
     }
@@ -324,6 +338,10 @@ static void handle_read(registers_t* regs) {
          * through this one shared path. */
         int conn_id = open_files[handle].pipe_id;
         spinlock_release(&open_files_lock, flags);
+        if (max_len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, max_len, true)) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
         regs->eax = (uint32_t)rust_tcp_recv(conn_id, (uint8_t*)buf, max_len);
         return;
     }
@@ -336,6 +354,10 @@ static void handle_read(registers_t* regs) {
          * on an unconnected UDP socket should have. */
         int sock_id = open_files[handle].pipe_id;
         spinlock_release(&open_files_lock, flags);
+        if (max_len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, max_len, true)) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
         regs->eax = (uint32_t)rust_udp_recv(sock_id, (uint8_t*)buf, max_len);
         return;
     }
@@ -364,6 +386,11 @@ static void handle_read(registers_t* regs) {
      * existence probe. */
     uint32_t want = (max_len < sizeof(read_scratch)) ? max_len
                                                      : (uint32_t)sizeof(read_scratch);
+    if (want > 0 && !is_user_ptr_valid(p, (uint32_t)buf, want, true)) {
+        spinlock_release(&open_files_lock, flags);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     int got = vfs_read_file_range(open_files[handle].filename,
                                   open_files[handle].offset, read_scratch,
                                   want);
@@ -385,6 +412,11 @@ static void handle_write_handle(registers_t* regs) {
     int handle = (int)regs->ebx;
     const void* buf = (const void*)regs->ecx;
     uint32_t len = regs->edx;
+
+    if (len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, len, false)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     uint32_t flags = spinlock_acquire(&open_files_lock);
 
@@ -489,6 +521,11 @@ static void handle_sudo(registers_t* regs) {
 
 static void handle_shutdown(registers_t* regs) {
     process_t* p = process_current();
+    if (p != NULL && p->uid != 0) {
+        kernel_log("[SECURITY] pid %d denied SYS_SHUTDOWN - requires root (uid 0)\n", p->pid);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     kernel_log("[SYSCALL] pid %d SYS_SHUTDOWN - attempting a real ACPI "
                "power-off\n", p ? p->pid : -1);
 
@@ -505,6 +542,11 @@ static void handle_shutdown(registers_t* regs) {
 static void handle_pipe(registers_t* regs) {
     process_t* p = process_current();
     int* out = (int*)regs->ebx; /* {read_handle, write_handle} */
+
+    if (!is_user_ptr_valid(p, (uint32_t)out, 2 * sizeof(int), true)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (p == NULL) {
         regs->eax = (uint32_t)-1;
@@ -663,6 +705,12 @@ static void list_files_callback(const char* name, uint32_t size,
 static void handle_list_files(registers_t* regs) {
     char* buf = (char*)regs->ebx;
     int buf_size = (int)regs->ecx;
+    process_t* p = process_current();
+
+    if (buf == NULL || buf_size <= 0 || !is_user_ptr_valid(p, (uint32_t)buf, (uint32_t)buf_size, true)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (!vfs_is_mounted()) {
         regs->eax = (uint32_t)-1;
@@ -689,6 +737,11 @@ static void handle_list_files(registers_t* regs) {
 
 static void handle_rtc_read(registers_t* regs) {
     rtc_time_t* out = (rtc_time_t*)regs->ebx;
+    process_t* p = process_current();
+    if (out == NULL || !is_user_ptr_valid(p, (uint32_t)out, sizeof(rtc_time_t), true)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     rtc_read(out);
     regs->eax = 0;
 }
@@ -717,6 +770,12 @@ static void lspci_callback(const pci_device_t* dev) {
 static void handle_lspci(registers_t* regs) {
     char* buf = (char*)regs->ebx;
     int buf_size = (int)regs->ecx;
+    process_t* p = process_current();
+
+    if (buf == NULL || buf_size <= 0 || !is_user_ptr_valid(p, (uint32_t)buf, (uint32_t)buf_size, true)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     lspci_staging_len = 0;
     pci_enumerate(lspci_callback);
@@ -755,6 +814,11 @@ static void handle_write_file(registers_t* regs) {
     }
     const void* data = (const void*)regs->ecx;
     uint32_t size = regs->edx;
+
+    if (size > 0 && !is_user_ptr_valid(p, (uint32_t)data, size, false)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (p == NULL || !p->can_open_any_file) {
         kernel_log("[SECURITY] pid %d denied SYS_WRITE_FILE('%s') - "
@@ -1290,6 +1354,11 @@ static void handle_net_send(registers_t* regs) {
     uint16_t dest_port = (uint16_t)regs->ecx;
     const char* message = (const char*)regs->edx;
 
+    if (!is_user_ptr_valid(p, (uint32_t)message, 1, false)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
     if (p == NULL || !process_has_host_capability(p, dest_ip)) {
         kernel_log("[SECURITY] pid %d denied SYS_NET_SEND to %d.%d.%d.%d - "
                    "not in its capability list\n",
@@ -1477,6 +1546,13 @@ static void handle_exec_trusted_env(registers_t* regs) {
 static void handle_dns_resolve(registers_t* regs) {
     const char* hostname = (const char*)regs->ebx;
     uint32_t* out_ip = (uint32_t*)regs->ecx;
+    process_t* p = process_current();
+
+    if (!is_user_ptr_valid(p, (uint32_t)hostname, 1, false) ||
+        out_ip == NULL || !is_user_ptr_valid(p, (uint32_t)out_ip, sizeof(uint32_t), true)) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     bool ok = dns_resolve(hostname, NET_DNS_SERVER_IP, out_ip);
     kernel_log("[SYSCALL] SYS_DNS_RESOLVE('%s') -> %s\n", hostname,
@@ -1882,6 +1958,13 @@ static void handle_sendto(registers_t* regs) {
     const nova_udp_addr_t* addr = (const nova_udp_addr_t*)regs->ecx;
     const uint8_t* buf = (const uint8_t*)regs->edx;
     uint32_t len = regs->esi;
+
+    if (!is_user_ptr_valid(p, (uint32_t)addr, sizeof(nova_udp_addr_t), false) ||
+        (len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, len, false))) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
     uint32_t dest_ip = addr->ip;
     uint16_t dest_port = addr->port;
     if (!mac_net_allowed(p, MAC_NET_SEND, dest_ip, dest_port)) { /* Phase 87 */
@@ -1912,9 +1995,17 @@ static void handle_recvfrom(registers_t* regs) {
         regs->eax = (uint32_t)-1;
         return;
     }
+    process_t* p = process_current();
     uint8_t* buf = (uint8_t*)regs->ecx;
     uint32_t max_len = regs->edx;
     nova_udp_addr_t* out_addr = (nova_udp_addr_t*)regs->esi;
+
+    if ((out_addr != NULL && !is_user_ptr_valid(p, (uint32_t)out_addr, sizeof(nova_udp_addr_t), true)) ||
+        (max_len > 0 && !is_user_ptr_valid(p, (uint32_t)buf, max_len, true))) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
     uint32_t src_ip = 0;
     uint16_t src_port = 0;
     int n = rust_udp_recvfrom(sock_id, buf, max_len, &src_ip, &src_port);
@@ -1938,8 +2029,12 @@ void syscall_handler(registers_t* regs) {
     switch (regs->eax) {
         case SYS_WRITE: {
             const char* str = (const char*)regs->ebx;
-            vga_puts(str);
             process_t* p = process_current();
+            if (!is_user_ptr_valid(p, (uint32_t)str, 1, false)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
+            vga_puts(str);
             kernel_log("[SYSCALL] SYS_WRITE from pid %d ('%s')\n",
                        p != NULL ? p->pid : -1, str);
             break;

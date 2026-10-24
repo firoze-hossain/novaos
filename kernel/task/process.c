@@ -2240,6 +2240,7 @@ int process_fork(registers_t* parent_regs) {
                                   comment on process_t's uid/gid */
     child->gid = parent->gid;
     mac_inherit_fork(child, parent); /* Phase 87: same domain */
+    child->mac_embedded = parent->mac_embedded;
     if (!rlimit_commit_spawn(child, parent)) { /* Phase 86 */
         kernel_log("[ .. ] rlimit: pid %d '%s' lost a race for the last "
                    "place in its process quota\n", parent->pid, parent->name);

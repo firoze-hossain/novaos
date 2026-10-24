@@ -319,6 +319,7 @@ void mac_inherit_fork(process_t* child, const process_t* parent) {
         child->mac_stack[i] = parent->mac_stack[i];
     }
     child->mac_n = parent->mac_n;
+    child->mac_embedded = parent->mac_embedded;
 }
 
 int mac_sys_info(uint32_t user_ptr) {

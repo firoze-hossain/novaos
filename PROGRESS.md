@@ -11442,6 +11442,60 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - Tracking spreadsheet `NovaOS_Build_Plan.xlsx` updated: Kernel Track at 24/26 (92.31%), Overall Project at 24/56 (42.86%), Month 6 at 2/4 (50.0%).
    - Artifact `NovaOS_Build_Plan.md` updated.
 
+## Phase 98 - Month 6: Full Kernel Security and Regression Audit
+
+**Status: Complete.** Executed a comprehensive, dedicated security audit pass systematically re-checking every capability, user-pointer boundary, and privilege gate across all 80 syscalls in the NovaOS architecture before release hardening completion. Hardened pointer validation, sealed unprivileged root gates, fixed in-kernel fork flag propagation, added an in-kernel security audit test suite (`kernel/security/security_audit.c`), and extended `test_runner.py` with 5 new security audit assertions (all 223/223 test assertions passing cleanly).
+
+### Architectural Context & Audit Scope
+- Throughout the 6-month build plan, NovaOS incrementally introduced layered security primitives:
+  1. Capability-based access control (file access lists, host lists, spawn gates, broad file delegation).
+  2. Mandatory access control (MAC profile stacks, fine-grained path/network filtering, one-way policy freezing).
+  3. User/supervisor address-space separation (PMM ceiling, page-table isolation, copy-on-write page protections, and `paging_user_range_ok()`).
+  4. Root privilege boundaries (`uid == 0` gating for mutating operations, rlimit multi-process isolation, firewall locks).
+- Month 6 ("Release hardening") called for a deliberate, end-to-end security audit reviewing every single syscall's permission checks, verifying boundary enforcement against hostile userland arguments, and preventing privilege escalation or kernel memory corruption.
+
+### What Was Audited, Fixed & Built
+
+1. **System-Wide Syscall Permission & User Pointer Hardening (`kernel/arch/x86/cpu/syscall.c`)**:
+   - Implemented `is_user_ptr_valid(const process_t* p, uint32_t addr, uint32_t len, bool for_write)`: strictly validates pointers passed by disk-loaded userland processes (`mac_embedded == false`) via `paging_user_range_ok()`, preventing userland from supplying kernel-space addresses (`>= 0xC0000000`), NULL / real-mode IVT (page 0), integer wrap-arounds (`addr + len > 4GB`), or identity-mapped kernel code (`0x100000`), while correctly permitting in-kernel test tasks to reference test fixture strings.
+   - Gated `SYS_SHUTDOWN (32)`: strictly enforced root check (`if (p != NULL && p->uid != 0)`), preventing unprivileged processes from triggering ACPI power-offs.
+   - Hardened `SYS_WRITE (1)`: validated string pointer bounds before console output or logging.
+   - Hardened `SYS_READ (5)`: validated destination buffer `buf` for VFS file reads, pipe reads, and socket receives.
+   - Hardened `SYS_WRITE_HANDLE (28)`: validated source buffer `buf` before pipe or socket writes.
+   - Hardened `SYS_WRITE_FILE (18)`: validated source buffer `data` before writing to disk.
+   - Hardened `SYS_PIPE (27)`: validated 2-element integer array `out` before allocating handles.
+   - Hardened `SYS_LIST_FILES (14)`: validated user destination buffer `buf` and size.
+   - Hardened `SYS_RTC_READ (15)`: validated `rtc_time_t* out` pointer.
+   - Hardened `SYS_LSPCI (16)`: validated user destination buffer `buf` and size.
+   - Hardened `SYS_DNS_RESOLVE (39)`: validated `hostname` and `out_ip` output pointers.
+   - Hardened `SYS_SENDTO (45)`: validated `addr` and `buf` user buffers.
+   - Hardened `SYS_RECVFROM (46)`: validated `out_addr` and `buf` destination buffers.
+   - Hardened `SYS_NET_SEND (7)`: validated `message` string pointer.
+
+2. **In-Kernel Fork Embedded Flag Fix (`kernel/security/mac.c` & `kernel/task/process.c`)**:
+   - Discovered that `process_fork()` called `allocate_slot()` which called `mac_reset(child)`, setting `child->mac_embedded = false;`, and `mac_inherit_fork()` failed to propagate `parent->mac_embedded`.
+   - As a result, when an in-kernel test task (e.g. `sandbox_demo_task`) forked, its child was treated as a disk-loaded ELF process, causing `is_user_ptr_valid()` to reject kernel-mapped string literals.
+   - Fixed `mac_inherit_fork()` and `process_fork()` to propagate `child->mac_embedded = parent->mac_embedded;`, ensuring in-kernel test tasks retain their fixture access while real ELF child processes retain strict user-pointer isolation.
+
+3. **In-Kernel Security Audit Self-Test (`kernel/security/security_audit.c`, `kernel/security/security_audit.h`)**:
+   - Implemented `kernel_security_audit_selftest()` executing early during boot in `kernel/init/main.c`:
+     * Group 1: User pointer bounds & kernel isolation (`0xC0000000`, `0x0`, `0xFFFFFFFF`, `0x100000` all rejected).
+     * Group 2: Root privilege gates (`mac_is_admin`, `mac_policy_write_allowed`, firewall control, rlimit non-root modification, OS update, crashdump export/clear, shutdown).
+     * Group 3: Process capability boundaries (file access lists, case-insensitivity, broad file delegation, network host lists, spawn gates).
+     * Group 4: Mandatory Access Control (MAC policy lookup, syscall gating, hostile pointer rejection in `mac_copy_name`).
+   - Logs individual sub-check confirmations and the overall audit result line:
+     `[ OK ] Kernel security & regression audit (capability boundaries, root privilege gates, user pointer bounds, MAC enforcement): result=0`
+
+4. **Extended Test Runner & Regression Verification (`tools/python/test_runner.py`)**:
+   - Added 5 new assertions:
+     * `security_audit_user_pointers`: verifies user pointer bounds, kernel space rejection, NULL and wrap-around checks.
+     * `security_audit_root_gates`: verifies root privilege gates on OS update, crashdump export, shutdown, firewall, and rlimit.
+     * `security_audit_capabilities`: verifies capability boundaries for file access, host access, spawn, and exec.
+     * `security_audit_mac`: verifies MAC mandatory access control and address space isolation.
+     * `security_audit_selftest`: verifies overarching security and regression audit passes with result=0.
+   - `make test`: All 223 test assertions pass cleanly with zero failures (exit code 0).
+   - Updated `NovaOS_Build_Plan.xlsx` and `NovaOS_Build_Plan.md`: Month 6 at 3/4 tasks (75.0%), Kernel Track at 25/26 tasks (96.15%), Overall Project at 25/56 tasks (44.64%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

@@ -1590,6 +1590,13 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         int exp_res = rust_crashdump_export_selftest();
         kernel_log("[ %s ] Crash dump auto-export self-test (CRASHDMP.TXT/DAT file generation, format, key-value parsing): result=%d\n",
                    exp_res == 0 ? "OK" : "FAIL", exp_res);
+
+        /* Month 6 / Phase 98: Full kernel security and regression audit self-test */
+        extern int kernel_security_audit_selftest(void);
+        int audit_res = kernel_security_audit_selftest();
+        kernel_log("[ %s ] Kernel security & regression audit (capability boundaries, "
+                   "root privilege gates, user pointer bounds, MAC enforcement): result=%d\n",
+                   audit_res == 0 ? "OK" : "FAIL", audit_res);
     }
 
     /* Phase 50: kernel/rust/sha256.rs's own self-test - verifies this
