@@ -91,6 +91,7 @@ static void cmd_help(void) {
     vga_puts("  whoami    - show the configured username\n");
     vga_puts("  lspci     - list detected PCI devices\n");
     vga_puts("  beep      - play a short tone through AC97 audio\n");
+    vga_puts("  crash     - display the last exported crash dump report\n");
     vga_puts("  run PATH [args...] - load and run a real ELF32 "
               "executable, wait for it to exit\n");
     vga_puts("  reboot    - restart the machine\n");
@@ -722,6 +723,17 @@ static void cmd_reboot(void) {
     }
 }
 
+static void cmd_crash(void) {
+    static char buf[2048];
+    int n = vfs_read_file("CRASHDMP.TXT", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = '\0';
+        vga_puts(buf);
+    } else {
+        vga_puts("No crash dump report found on disk (system healthy).\n");
+    }
+}
+
 static void dispatch(char* line) {
     if (line[0] == '\0') {
         return;
@@ -773,6 +785,8 @@ static void dispatch(char* line) {
         cmd_lspci();
     } else if (strcmp(line, "beep") == 0) {
         cmd_beep();
+    } else if (strcmp(line, "crash") == 0 || strcmp(line, "crashreport") == 0) {
+        cmd_crash();
     } else if (strncmp(line, "run ", 4) == 0) {
         cmd_run(line + 4);
     } else if (strncmp(line, "echo ", 5) == 0) {

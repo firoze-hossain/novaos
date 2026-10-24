@@ -1584,6 +1584,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                        (result & 2) ? "FAIL" : "pass",
                        (result & 4) ? "FAIL" : "pass");
         }
+
+        /* Month 6 / Phase 97: Crash dump auto-export self-test */
+        extern int rust_crashdump_export_selftest(void);
+        int exp_res = rust_crashdump_export_selftest();
+        kernel_log("[ %s ] Crash dump auto-export self-test (CRASHDMP.TXT/DAT file generation, format, key-value parsing): result=%d\n",
+                   exp_res == 0 ? "OK" : "FAIL", exp_res);
     }
 
     /* Phase 50: kernel/rust/sha256.rs's own self-test - verifies this

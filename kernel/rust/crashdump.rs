@@ -129,6 +129,26 @@ extern "C" {
     /// same cross-FFI representation.
     fn blockdev_current() -> i32;
     fn timer_get_ticks() -> u32;
+    fn vfs_write_file(filename: *const u8, data: *const u8, size: u32) -> bool;
+    fn vfs_read_file(filename: *const u8, buf: *mut u8, buf_size: u32) -> i32;
+    fn vfs_delete_file(filename: *const u8) -> bool;
+    fn vfs_is_mounted() -> bool;
+    fn rust_journal_begin();
+    fn rust_journal_commit() -> bool;
+    fn kernel_log(fmt: *const u8, ...);
+}
+
+pub const CRASH_EXPORT_FILE: &[u8] = b"CRASHDMP.TXT\0";
+pub const CRASH_EXPORT_BIN_FILE: &[u8] = b"CRASHDMP.DAT\0";
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct NovaCrashdumpStatus {
+    pub has_crash: u32,
+    pub exported: u32,
+    pub ticks: u32,
+    pub file_size: u32,
+    pub filename: [u8; 16],
 }
 
 const SECTOR_SIZE: usize = 512;
@@ -288,6 +308,7 @@ impl FaultRegs {
 /// was, so C can format it directly with `%s` - see
 /// `rust_crashdump_write_panic`'s own doc comment on truncation.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CrashReport {
     pub ticks: u32,
     pub reason: [u8; REASON_BYTES],
@@ -335,6 +356,11 @@ impl CrashState {
 }
 
 static mut CRASH: CrashState = CrashState::new();
+
+/// Cached copy of the latest reported crash for userland query and auto-export.
+static mut LATEST_REPORT: Option<CrashReport> = None;
+static mut AUTO_EXPORTED: bool = false;
+static mut EXPORT_FILE_SIZE: u32 = 0;
 
 /// Purely for the self-test's own scratch-sector rotation (see
 /// `rust_crashdump_selftest`) - identical role to kernel/rust/
@@ -611,6 +637,299 @@ pub unsafe extern "C" fn rust_crashdump_write_panic(
     write_record_at(cs.crash_start_lba, &record)
 }
 
+struct BufferWriter<'a> {
+    buf: &'a mut [u8],
+    len: usize,
+}
+
+impl<'a> BufferWriter<'a> {
+    fn new(buf: &'a mut [u8]) -> Self {
+        BufferWriter { buf, len: 0 }
+    }
+
+    fn write_byte(&mut self, b: u8) {
+        if self.len < self.buf.len() {
+            self.buf[self.len] = b;
+            self.len += 1;
+        }
+    }
+
+    fn write_str(&mut self, s: &[u8]) {
+        for &b in s {
+            self.write_byte(b);
+        }
+    }
+
+    fn write_u32_dec(&mut self, mut v: u32) {
+        if v == 0 {
+            self.write_byte(b'0');
+            return;
+        }
+        let mut tmp = [0u8; 10];
+        let mut n = 0;
+        while v > 0 {
+            tmp[n] = b'0' + (v % 10) as u8;
+            v /= 10;
+            n += 1;
+        }
+        for i in (0..n).rev() {
+            self.write_byte(tmp[i]);
+        }
+    }
+
+    fn write_u32_hex(&mut self, v: u32) {
+        self.write_str(b"0x");
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for i in (0..8).rev() {
+            let nibble = ((v >> (i * 4)) & 0xF) as usize;
+            self.write_byte(HEX[nibble]);
+        }
+    }
+}
+
+fn vector_name(vec: u32) -> &'static [u8] {
+    match vec {
+        0 => b"Divide Error",
+        1 => b"Debug Exception",
+        3 => b"Breakpoint",
+        6 => b"Invalid Opcode",
+        8 => b"Double Fault",
+        13 => b"General Protection Fault",
+        14 => b"Page Fault",
+        _ => b"Hardware Exception",
+    }
+}
+
+fn format_crash_report(report: &CrashReport, out_buf: &mut [u8]) -> usize {
+    let mut w = BufferWriter::new(out_buf);
+
+    w.write_str(b"================================================================================\n");
+    w.write_str(b"NovaOS Crash Dump Report\n");
+    w.write_str(b"================================================================================\n\n");
+
+    w.write_str(b"Status: Unhandled Kernel Exception / Panic\n");
+    w.write_str(b"Timestamp: ");
+    w.write_u32_dec(report.ticks);
+    w.write_str(b" ticks\n\n");
+
+    w.write_str(b"Panic Reason:\n  ");
+    let mut r_len = 0;
+    while r_len < report.reason.len() && report.reason[r_len] != 0 {
+        r_len += 1;
+    }
+    w.write_str(&report.reason[..r_len]);
+    w.write_str(b"\n\n");
+
+    w.write_str(b"Fault Information:\n");
+    if report.has_regs != 0 {
+        w.write_str(b"  Exception Vector: ");
+        w.write_u32_dec(report.regs.int_no);
+        w.write_str(b" (");
+        w.write_str(vector_name(report.regs.int_no));
+        w.write_str(b")\n");
+        w.write_str(b"  Error Code:       ");
+        w.write_u32_hex(report.regs.err_code);
+        w.write_str(b"\n");
+        w.write_str(b"  Faulting EIP:     ");
+        w.write_u32_hex(report.regs.eip);
+        w.write_str(b"  CS: ");
+        w.write_u32_hex(report.regs.cs);
+        w.write_str(b"\n");
+        w.write_str(b"  EFLAGS:           ");
+        w.write_u32_hex(report.regs.eflags);
+        w.write_str(b"\n\n");
+
+        w.write_str(b"CPU Registers:\n");
+        w.write_str(b"  EAX: "); w.write_u32_hex(report.regs.eax);
+        w.write_str(b"  EBX: "); w.write_u32_hex(report.regs.ebx);
+        w.write_str(b"  ECX: "); w.write_u32_hex(report.regs.ecx);
+        w.write_str(b"  EDX: "); w.write_u32_hex(report.regs.edx);
+        w.write_str(b"\n");
+        w.write_str(b"  ESI: "); w.write_u32_hex(report.regs.esi);
+        w.write_str(b"  EDI: "); w.write_u32_hex(report.regs.edi);
+        w.write_str(b"  EBP: "); w.write_u32_hex(report.regs.ebp);
+        w.write_str(b"  ESP: "); w.write_u32_hex(report.regs.useresp);
+        w.write_str(b"\n");
+        w.write_str(b"  DS:  "); w.write_u32_hex(report.regs.ds);
+        w.write_str(b"  SS:  "); w.write_u32_hex(report.regs.ss);
+        w.write_str(b"\n\n");
+    } else {
+        w.write_str(b"  (Software-detected panic, no hardware register snapshot)\n\n");
+    }
+
+    if report.has_fault_addr != 0 {
+        w.write_str(b"Faulting Address (CR2):\n  ");
+        w.write_u32_hex(report.fault_addr);
+        w.write_str(b"\n\n");
+    }
+
+    let stack_count = (report.stack_count as usize).min(MAX_STACK_FRAMES);
+    w.write_str(b"Call Stack Trace (");
+    w.write_u32_dec(stack_count as u32);
+    w.write_str(b" frames):\n");
+    for i in 0..stack_count {
+        w.write_str(b"  [");
+        w.write_u32_dec(i as u32);
+        w.write_str(b"] ");
+        w.write_u32_hex(report.stack[i]);
+        w.write_str(b"\n");
+    }
+    w.write_str(b"\n");
+
+    w.write_str(b"[CRASH_METADATA]\n");
+    w.write_str(b"MAGIC=NOVACRASH\n");
+    w.write_str(b"VERSION=1\n");
+    w.write_str(b"TICKS=");
+    w.write_u32_dec(report.ticks);
+    w.write_str(b"\nREASON=");
+    w.write_str(&report.reason[..r_len]);
+    w.write_str(b"\nHAS_REGS=");
+    w.write_u32_dec(report.has_regs);
+    w.write_str(b"\n");
+    if report.has_regs != 0 {
+        w.write_str(b"INT_NO="); w.write_u32_dec(report.regs.int_no); w.write_str(b"\n");
+        w.write_str(b"ERR_CODE="); w.write_u32_hex(report.regs.err_code); w.write_str(b"\n");
+        w.write_str(b"EIP="); w.write_u32_hex(report.regs.eip); w.write_str(b"\n");
+        w.write_str(b"EAX="); w.write_u32_hex(report.regs.eax); w.write_str(b"\n");
+        w.write_str(b"EBX="); w.write_u32_hex(report.regs.ebx); w.write_str(b"\n");
+        w.write_str(b"ECX="); w.write_u32_hex(report.regs.ecx); w.write_str(b"\n");
+        w.write_str(b"EDX="); w.write_u32_hex(report.regs.edx); w.write_str(b"\n");
+        w.write_str(b"ESI="); w.write_u32_hex(report.regs.esi); w.write_str(b"\n");
+        w.write_str(b"EDI="); w.write_u32_hex(report.regs.edi); w.write_str(b"\n");
+        w.write_str(b"EBP="); w.write_u32_hex(report.regs.ebp); w.write_str(b"\n");
+        w.write_str(b"ESP="); w.write_u32_hex(report.regs.useresp); w.write_str(b"\n");
+    }
+    if report.has_fault_addr != 0 {
+        w.write_str(b"CR2="); w.write_u32_hex(report.fault_addr); w.write_str(b"\n");
+    }
+    w.write_str(b"STACK_COUNT=");
+    w.write_u32_dec(stack_count as u32);
+    w.write_str(b"\n");
+    for i in 0..stack_count {
+        w.write_str(b"STACK_");
+        w.write_u32_dec(i as u32);
+        w.write_str(b"=");
+        w.write_u32_hex(report.stack[i]);
+        w.write_str(b"\n");
+    }
+    w.write_str(b"END_METADATA=1\n");
+
+    w.len
+}
+
+fn export_crash_report(report: &CrashReport) -> i32 {
+    unsafe {
+        if !vfs_is_mounted() {
+            return -2;
+        }
+
+        let mut text_buf = [0u8; 2048];
+        let text_len = format_crash_report(report, &mut text_buf);
+        if text_len == 0 {
+            return -1;
+        }
+
+        rust_journal_begin();
+
+        vfs_delete_file(CRASH_EXPORT_FILE.as_ptr());
+        let ok_txt = vfs_write_file(
+            CRASH_EXPORT_FILE.as_ptr(),
+            text_buf.as_ptr(),
+            text_len as u32,
+        );
+
+        vfs_delete_file(CRASH_EXPORT_BIN_FILE.as_ptr());
+        let bin_ptr = report as *const CrashReport as *const u8;
+        let bin_len = core::mem::size_of::<CrashReport>() as u32;
+        let ok_bin = vfs_write_file(
+            CRASH_EXPORT_BIN_FILE.as_ptr(),
+            bin_ptr,
+            bin_len,
+        );
+
+        let commit_ok = rust_journal_commit();
+        if ok_txt && ok_bin && commit_ok {
+            AUTO_EXPORTED = true;
+            EXPORT_FILE_SIZE = text_len as u32;
+            LATEST_REPORT = Some(*report);
+            kernel_log(
+                b"[ OK ] Crash dump auto-export: exported pending crash record to CRASHDMP.TXT (%d bytes) and CRASHDMP.DAT\n\0".as_ptr(),
+                text_len as i32,
+            );
+            0
+        } else {
+            -3
+        }
+    }
+}
+
+/// Automatically exports a detected crash report to well-known files on FAT32.
+#[no_mangle]
+pub extern "C" fn rust_crashdump_auto_export(report_ptr: *const CrashReport) -> i32 {
+    if report_ptr.is_null() {
+        return -1;
+    }
+    let report = unsafe { &*report_ptr };
+    export_crash_report(report)
+}
+
+/// Queries current crash dump and export status.
+#[no_mangle]
+pub extern "C" fn rust_crashdump_get_status(out: *mut NovaCrashdumpStatus) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        let (has_crash, ticks) = match &LATEST_REPORT {
+            Some(r) => (1u32, r.ticks),
+            None => (0u32, 0u32),
+        };
+        let mut fname = [0u8; 16];
+        let name = b"CRASHDMP.TXT";
+        fname[..name.len()].copy_from_slice(name);
+
+        let st = NovaCrashdumpStatus {
+            has_crash,
+            exported: if AUTO_EXPORTED { 1 } else { 0 },
+            ticks,
+            file_size: EXPORT_FILE_SIZE,
+            filename: fname,
+        };
+        core::ptr::write_unaligned(out, st);
+        0
+    }
+}
+
+/// Retrieves the cached in-memory crash report struct.
+#[no_mangle]
+pub extern "C" fn rust_crashdump_get_report(out: *mut CrashReport) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        if let Some(r) = &LATEST_REPORT {
+            core::ptr::write_unaligned(out, *r);
+            0
+        } else {
+            -1
+        }
+    }
+}
+
+/// Clears exported crash dump files from disk.
+#[no_mangle]
+pub extern "C" fn rust_crashdump_clear_exported() -> i32 {
+    unsafe {
+        rust_journal_begin();
+        vfs_delete_file(CRASH_EXPORT_FILE.as_ptr());
+        vfs_delete_file(CRASH_EXPORT_BIN_FILE.as_ptr());
+        rust_journal_commit();
+        AUTO_EXPORTED = false;
+        EXPORT_FILE_SIZE = 0;
+        0
+    }
+}
+
 /// Real boot-time check - see this file's header comment, step 4.
 /// Called once from kernel/fs/vfs.c's vfs_init(). Safe (one 1-sector
 /// read, usually followed by nothing else) to call even when nothing
@@ -625,7 +944,11 @@ pub unsafe extern "C" fn rust_crashdump_check_and_report(out: *mut CrashReport) 
         return -1;
     }
     let report = &mut *out;
-    read_and_decode_at(cs.crash_start_lba, Some(report))
+    let res = read_and_decode_at(cs.crash_start_lba, Some(report));
+    if res == 1 {
+        LATEST_REPORT = Some(*report);
+    }
+    res
 }
 
 /// Ring-0 self-test, called from kernel_main() the same way every
@@ -747,6 +1070,124 @@ pub extern "C" fn rust_crashdump_selftest() -> i32 {
         && report_c.stack[1] == 0xA000;
     if !part_c_ok {
         code |= 4;
+    }
+
+    code
+}
+
+/// In-kernel self-test for the crash dump auto-export subsystem:
+/// Exercises formatting, transactional file creation, content verification,
+/// binary dump round-trip, status reporting, and in-memory retrieval.
+#[no_mangle]
+pub extern "C" fn rust_crashdump_export_selftest() -> i32 {
+    let regs = FaultRegs {
+        ds: 0x10,
+        edi: 0x0100_0000,
+        esi: 0x0200_0000,
+        ebp: 0x0300_0000,
+        esp_dummy: 0,
+        ebx: 0x0400_0000,
+        edx: 0x0500_0000,
+        ecx: 0x0600_0000,
+        eax: 0x1122_3344,
+        int_no: 14,
+        err_code: 0x2,
+        eip: 0x8048_1234,
+        cs: 0x08,
+        eflags: 0x0202,
+        useresp: 0x0700_0000,
+        ss: 0x10,
+    };
+    let reason = b"selftest: synthetic page fault crash export";
+    let mut reason_buf = [0u8; REASON_BYTES];
+    reason_buf[..reason.len()].copy_from_slice(reason);
+
+    let stack: [u32; MAX_STACK_FRAMES] = [
+        0x8048_1000, 0x8048_2000, 0x8048_3000, 0, 0, 0, 0, 0,
+    ];
+
+    let test_report = CrashReport {
+        ticks: 0x54321,
+        reason: reason_buf,
+        has_regs: 1,
+        regs,
+        has_fault_addr: 1,
+        fault_addr: 0x014A_B000,
+        stack,
+        stack_count: 3,
+    };
+
+    let mut code = 0i32;
+
+    // Check 1: Auto-export succeeds to VFS
+    let rc = rust_crashdump_auto_export(&test_report);
+    if rc != 0 {
+        code |= 1 << 0;
+    }
+
+    // Check 2: CRASHDMP.TXT is readable and contains expected sections and hex values
+    let mut read_buf = [0u8; 2048];
+    let n = unsafe {
+        vfs_read_file(
+            CRASH_EXPORT_FILE.as_ptr(),
+            read_buf.as_mut_ptr(),
+            read_buf.len() as u32,
+        )
+    };
+    if n <= 0 {
+        code |= 1 << 1;
+    } else {
+        let content = &read_buf[..n as usize];
+        let has_magic = content.windows(15).any(|w| w == b"MAGIC=NOVACRASH");
+        let has_reason = content.windows(reason.len()).any(|w| w == reason);
+        let has_eax = content.windows(10).any(|w| w == b"0x11223344");
+        let has_eip = content.windows(10).any(|w| w == b"0x80481234");
+        let has_cr2 = content.windows(10).any(|w| w == b"0x014ab000");
+
+        if !has_magic || !has_reason || !has_eax || !has_eip || !has_cr2 {
+            code |= 1 << 2;
+        }
+    }
+
+    // Check 3: CRASHDMP.DAT is readable and matches the CrashReport binary layout
+    let mut bin_buf = [0u8; core::mem::size_of::<CrashReport>()];
+    let n_bin = unsafe {
+        vfs_read_file(
+            CRASH_EXPORT_BIN_FILE.as_ptr(),
+            bin_buf.as_mut_ptr(),
+            bin_buf.len() as u32,
+        )
+    };
+    if n_bin != core::mem::size_of::<CrashReport>() as i32 {
+        code |= 1 << 3;
+    } else {
+        let decoded = unsafe { core::ptr::read_unaligned(bin_buf.as_ptr() as *const CrashReport) };
+        if decoded.ticks != 0x54321
+            || decoded.regs.eax != 0x1122_3344
+            || decoded.fault_addr != 0x014A_B000
+        {
+            code |= 1 << 4;
+        }
+    }
+
+    // Check 4: Status query reports active exported status
+    let mut status = NovaCrashdumpStatus {
+        has_crash: 0,
+        exported: 0,
+        ticks: 0,
+        file_size: 0,
+        filename: [0u8; 16],
+    };
+    let st_rc = rust_crashdump_get_status(&mut status);
+    if st_rc != 0 || status.has_crash != 1 || status.exported != 1 || status.file_size == 0 {
+        code |= 1 << 5;
+    }
+
+    // Check 5: In-memory report retrieval returns identical data
+    let mut retrieved = CrashReport::zeroed();
+    let get_rc = rust_crashdump_get_report(&mut retrieved);
+    if get_rc != 0 || retrieved.ticks != 0x54321 || retrieved.regs.eip != 0x8048_1234 {
+        code |= 1 << 6;
     }
 
     code

@@ -11383,6 +11383,65 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - `make test` passes with all 217 assertions green (exit code 0).
    - Updated `NovaOS_Build_Plan.xlsx` and `NovaOS_Build_Plan.md`: Month 6 first milestone complete (23/56 total tasks, 23/26 Kernel Track).
 
+## Phase 97 - Month 6: Crash-Dump Auto-Export Hooks Feeding User-Facing Crash Reporter (Pure Rust)
+
+**Status: Complete.** Built an automated, journaled crash-dump export engine in pure Rust (`kernel/rust/crashdump.rs`) that detects pending crash dumps saved on raw disk partition 4 during boot, formats and extracts them into user-accessible files on FAT32 (`/CRASHDMP.TXT` and `/CRASHDMP.DAT`), exposes control and retrieval through syscall `SYS_CRASHDUMP_CTL (80)`, and adds a userland shell command `crash` to inspect panic logs directly from user space.
+
+### Architectural Context & Problem
+- In Phase 54, NovaOS introduced a raw disk partition (partition 4) dedicated to persisting panic records (`CrashReport`) across reboots without relying on an active filesystem. While resilient against corruption, panic records remained sequestered on the hidden partition, invisible to userland processes and normal file inspection utilities.
+- Month 6 ("Release hardening") connects this raw kernel-level recorder to user-facing crash reporting by:
+  1. Reordering filesystem initialization so FAT32 is mounted before the pending-crash check runs, enabling VFS writes during boot.
+  2. Automatically extracting pending crash records and formatting them into human-readable text (`CRASHDMP.TXT`) containing formatted panic headers, exception vectors, register snapshots (EAX..ESP, EIP, CS, EFLAGS, SS, DS), CR2 fault addresses, call stack backtraces, and structured key-value metadata blocks (`[CRASH_METADATA]`).
+  3. Writing the exact raw binary struct to `CRASHDMP.DAT` so diagnostic tools can parse identical machine-readable records.
+  4. Performing all filesystem writes inside write-ahead journal transactions (`rust_journal_begin()` ... `rust_journal_commit()`) with delete-before-write semantics to preserve FAT32 crash consistency.
+  5. Providing ring-3 access via `SYS_CRASHDUMP_CTL` (syscall 80) and a convenient userland `crash` shell command.
+
+### What Was Built
+
+1. **Structured Crash Report Formatter (`format_crash_report`)**:
+   - Implemented `#![no_std]` zero-allocation text formatting helper `BufferWriter` in `kernel/rust/crashdump.rs` supporting byte strings, decimal formatting, and 8-digit hexadecimal formatting.
+   - Formats complete crash dump records including:
+     - Header banner: `=== NovaOS Kernel Crash Report ===`
+     - Uptime ticks and reason string.
+     - Exception vector name lookup (e.g. `Vector: 14 (Page Fault)`, `Vector: 13 (General Protection Fault)`).
+     - Full CPU register dump: `EAX=0x... EBX=0x... ECX=0x... EDX=0x... ESI=0x... EDI=0x... EBP=0x... ESP=0x... EIP=0x... CS=0x... EFLAGS=0x... SS=0x... DS=0x...`.
+     - Faulting address (`CR2`) for memory exceptions.
+     - Call stack frames backtrace.
+     - Machine-parseable metadata block `[CRASH_METADATA]` with `TICKS=`, `REASON=`, `INT_NO=`, `ERR_CODE=`, `EIP=`, and `FAULT_ADDR=`.
+
+2. **Boot-Time Auto-Export Engine (`export_crash_report` & `rust_crashdump_auto_export`)**:
+   - Reordered `vfs_init()` (`kernel/fs/vfs.c`) so `fat32_init()` mounts partition 0 before the partition 4 crash check executes.
+   - Boot-time pending crash hook automatically invokes `rust_crashdump_auto_export(&report)` upon finding a valid crash record on partition 4.
+   - Atomically deletes existing export files and writes new `/CRASHDMP.TXT` and `/CRASHDMP.DAT` within write-ahead journal transactions (`rust_journal_begin()` and `rust_journal_commit()`).
+   - Caches the latest crash report and status metadata (`NovaCrashdumpStatus`) in memory.
+
+3. **Syscall ABI Interface (`SYS_CRASHDUMP_CTL 80`)**:
+   - Added syscall 80 in `kernel/arch/x86/cpu/syscall.h`, `kernel/include/crashdump.h`, and `userland/libc/include/novasys.h`.
+   - Operations:
+     - `CRASHDUMP_OP_STATUS (1)`: queries crash status (`has_crash`, `exported`, `ticks`, `file_size`, `filename`).
+     - `CRASHDUMP_OP_GET (2)`: copies in-memory `crash_report_t` struct to userland buffer.
+     - `CRASHDUMP_OP_EXPORT (3)`: forces on-demand re-export to FAT32 (root only, `uid == 0`).
+     - `CRASHDUMP_OP_CLEAR (4)`: removes `/CRASHDMP.TXT` and `/CRASHDMP.DAT` from FAT32 via journaled deletion and clears memory cache (root only, `uid == 0`).
+   - Paging range validation via `paging_user_range_ok()` ensures ring-3 pointer safety.
+
+4. **Userland Shell Integration (`userland/shell/shell.c`)**:
+   - Added `crash` and `crashreport` command to the userland shell.
+   - Reads `/CRASHDMP.TXT` via `vfs_read_file()` and prints the formatted crash report to VGA text console, or notifies the user if no crash record is found.
+
+5. **In-Kernel Self-Test (`rust_crashdump_export_selftest`)**:
+   - Automated boot-time self-test verifying 5 critical operations:
+     1. Synthetic crash report generation and auto-export to FAT32 inside journal transactions.
+     2. Verification that `/CRASHDMP.TXT` exists and correctly formats magic headers, reason strings, hex registers, EIP, and CR2.
+     3. Binary struct round-trip: verifies `/CRASHDMP.DAT` byte size and validates decoded field values (`ticks`, `eax`, `fault_addr`).
+     4. Status query validation: verifies `rust_crashdump_get_status()` accurately returns `has_crash=1`, `exported=1`, and positive file size.
+     5. Memory report retrieval: verifies `rust_crashdump_get_report()` accurately returns the stored `CrashReport`.
+
+6. **Verification & Regression Suite**:
+   - Added `crashdump_auto_export_selftest` assertion (`Crash dump auto-export self-test.*result=0`) in `tools/python/test_runner.py`.
+   - `make test` executed successfully: all 218 test assertions pass (exit code 0).
+   - Tracking spreadsheet `NovaOS_Build_Plan.xlsx` updated: Kernel Track at 24/26 (92.31%), Overall Project at 24/56 (42.86%), Month 6 at 2/4 (50.0%).
+   - Artifact `NovaOS_Build_Plan.md` updated.
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

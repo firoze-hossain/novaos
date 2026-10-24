@@ -46,6 +46,7 @@
 #include "../../../userland/libc/include/nova_klog_abi.h"
 #include "../../../userland/libc/include/nova_pkgrepo_abi.h"
 #include "../../include/atomic_update.h"
+#include "../../include/crashdump.h"
 #include "../../drivers/timer/timer.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -1170,6 +1171,69 @@ static void handle_os_update(registers_t* regs) {
     regs->eax = (uint32_t)NOVA_UPDATE_ERR_INVALID_OP;
 }
 
+/* Month 6 / Phase 97: Crash dump auto-export control & retrieval */
+static void handle_crashdump_ctl(registers_t* regs) {
+    int op = (int)regs->ebx;
+    uint32_t arg_ptr = regs->ecx;
+
+    if (op == CRASHDUMP_OP_STATUS) {
+        if (!paging_user_range_ok(arg_ptr, sizeof(nova_crashdump_status_t), true)) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
+        nova_crashdump_status_t st;
+        int rc = rust_crashdump_get_status(&st);
+        if (rc == 0) {
+            memcpy((void*)arg_ptr, &st, sizeof(st));
+            regs->eax = 0;
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    if (op == CRASHDUMP_OP_GET) {
+        if (!paging_user_range_ok(arg_ptr, sizeof(crash_report_t), true)) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
+        crash_report_t r;
+        int rc = rust_crashdump_get_report(&r);
+        if (rc == 0) {
+            memcpy((void*)arg_ptr, &r, sizeof(r));
+            regs->eax = 0;
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    /* Mutating operations require root (uid 0) */
+    process_t* cur = process_current();
+    if (cur != NULL && cur->uid != 0) {
+        regs->eax = (uint32_t)-2;
+        return;
+    }
+
+    if (op == CRASHDUMP_OP_EXPORT) {
+        crash_report_t r;
+        int rc = rust_crashdump_get_report(&r);
+        if (rc == 0) {
+            regs->eax = (uint32_t)rust_crashdump_auto_export(&r);
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    if (op == CRASHDUMP_OP_CLEAR) {
+        regs->eax = (uint32_t)rust_crashdump_clear_exported();
+        return;
+    }
+
+    regs->eax = (uint32_t)-1;
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2163,6 +2227,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_OS_UPDATE:
             handle_os_update(regs);
+            break;
+
+        case SYS_CRASHDUMP_CTL:
+            handle_crashdump_ctl(regs);
             break;
 
         case SYS_FB_INFO:

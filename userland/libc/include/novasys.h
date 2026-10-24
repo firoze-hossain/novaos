@@ -69,6 +69,22 @@
 #define SYS_KLOG_INFO   77
 #define SYS_PKGREPO_CTL 78
 #define SYS_OS_UPDATE   79
+#define SYS_CRASHDUMP_CTL 80
+
+#define CRASHDUMP_OP_STATUS 1
+#define CRASHDUMP_OP_GET    2
+#define CRASHDUMP_OP_EXPORT 3
+#define CRASHDUMP_OP_CLEAR  4
+
+typedef struct __attribute__((packed)) {
+    unsigned int has_crash;
+    unsigned int exported;
+    unsigned int ticks;
+    unsigned int file_size;
+    char         filename[16];
+} nova_crashdump_status_t;
+
+int sys_crashdump_ctl(int op, void* arg);
 
 #define NOVA_UPDATE_OP_STATUS           1
 #define NOVA_UPDATE_OP_STAGE_AND_APPLY  2

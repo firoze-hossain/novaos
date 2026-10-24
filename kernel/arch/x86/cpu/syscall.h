@@ -660,6 +660,10 @@
  * boot slot via FAT32 write-ahead journal transactions, confirms health, and triggers rollback. */
 #define SYS_OS_UPDATE   79
 
+/* Month 6 / Phase 97: Crash dump auto-export hooks (see crashdump.h).
+ * SYS_CRASHDUMP_CTL queries status, retrieves crash records, triggers exports, and clears exported records. */
+#define SYS_CRASHDUMP_CTL 80
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall

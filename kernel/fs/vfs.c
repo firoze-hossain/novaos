@@ -77,6 +77,7 @@ typedef struct {
 extern void rust_crashdump_configure(uint32_t crash_start_lba,
                                       uint32_t crash_len_sectors);
 extern int rust_crashdump_check_and_report(crash_report_t* out);
+extern int rust_crashdump_auto_export(const crash_report_t* report);
 
 /* Formats and logs a crash_report_t found by rust_crashdump_check_and_
  * report() - split across several kernel_log() calls rather than one,
@@ -190,6 +191,19 @@ void vfs_init(void) {
          * as every panic did before this phase (see kernel/rust/
          * crashdump.rs's own rust_crashdump_write_panic() doc
          * comment). */
+        fat32_set_partition_offset(table.partitions[0].start_lba);
+        fat32_init();
+
+        if (table.count > 1) {
+            ext2_set_partition_offset(table.partitions[1].start_lba);
+            ext2_init();
+        }
+
+        /* Phase 54 & Month 6: a fourth partition, when present, is this
+         * kernel's dedicated crash-dump region. Configured and checked here
+         * immediately after mounting FAT32 so that any pending crash record
+         * is reported to console and auto-exported to CRASHDMP.TXT/DAT for
+         * user-facing crash reporter applications. */
         if (table.count > 3) {
             rust_crashdump_configure(table.partitions[3].start_lba,
                                       table.partitions[3].sector_count);
@@ -197,6 +211,7 @@ void vfs_init(void) {
             int found = rust_crashdump_check_and_report(&report);
             if (found > 0) {
                 report_crash_dump(&report);
+                rust_crashdump_auto_export(&report);
             } else if (found == 0) {
                 kernel_log("[ OK ] Crash dump: none pending (clean "
                            "shutdown, or already reported)\n");
@@ -204,14 +219,6 @@ void vfs_init(void) {
                 kernel_log("[FAULT] Crash dump: check failed (I/O error "
                            "reading the crash-dump region)\n");
             }
-        }
-
-        fat32_set_partition_offset(table.partitions[0].start_lba);
-        fat32_init();
-
-        if (table.count > 1) {
-            ext2_set_partition_offset(table.partitions[1].start_lba);
-            ext2_init();
         }
     } else {
         /* No plausible partition table - fall back to whole-disk FAT32

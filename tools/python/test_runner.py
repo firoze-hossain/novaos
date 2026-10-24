@@ -190,6 +190,9 @@ ASSERTIONS: list[Assertion] = [
               "register snapshot round-trips correctly too - ran for "
               "real against the genuinely configured fourth partition "
               "and passed"),
+    Assertion("crashdump_auto_export_selftest",
+              r"Crash dump auto-export self-test.*result=0",
+              "Month 6: crash-dump auto-export verified (CRASHDMP.TXT/DAT file generation, format, key-value parsing)"),
     Assertion("ext2_mounted", r"ext2 mounted: block_size=4096",
               "the ext2 partition was found and mounted"),
     Assertion("ext2_file_read", r"EXT2 FILE READ OK: EXT2TEST\.TXT",
