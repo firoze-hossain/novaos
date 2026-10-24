@@ -11330,6 +11330,59 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - Sheet 2 (Kernel Track): Row 23 (SMP scaling validation) marked as "Done".
    - Sheet 1 (Summary): Month 5 at 5/5 (100% complete!), Kernel Track at 22/26 (84.62%), Overall Project at 22/56 (39.29%).
 
+## Phase 96 - Month 6: Atomic OS Update Mechanism (A/B Boot Slots, Package Signing, Journaled Rollback)
+
+**Status: Complete.** Implemented a power-loss safe, atomic A/B OS update and rollback engine in pure Rust (`kernel/rust/atomic_update.rs`) built directly upon NovaOS's cryptographic package signing infrastructure (`kernel/rust/pkgsign_core.rs`), write-ahead physical block journaling on FAT32 (`kernel/rust/journal.rs`), GRUB dual boot slot configurations, and early kernel boot hooks.
+
+### What Was Built
+
+1. **Dual Boot Slots & Persistent State (`BootSlotConfig`)**:
+   - Implemented 128-byte packed persistent record stored in `/BOOTSLOT.DAT` on FAT32, protected by an Adler-32 checksum (`update_checksum()` / `is_valid()`).
+   - Tracks active slot (`SLOT_A = 0`, `SLOT_B = 1`), fallback slot, slot operational state (`NORMAL = 0`, `TESTING = 1`, `ROLLED_BACK = 2`), remaining boot attempt countdown (`boot_attempts`, default 3), version strings, and SHA-256 binary digests for both Slot A (`/NOVAOS.BIN`) and Slot B (`/NOVAOS_B.BIN`).
+
+2. **Cryptographic Package Verification (`verify_update_package`)**:
+   - Reuses `pkgsign_core::compute_signature` to validate signed OS update archives formatted with the 128-byte package header (`NVPK` / `NVUP` magic).
+   - Validates header integrity, payload SHA-256 hash, and performs constant-time HMAC-SHA256 signature verification to prevent timing side-channels. Unsigned, corrupt, or tampered packages are strictly rejected before any disk writes occur.
+
+3. **Transactional Apply via Write-Ahead Journaling**:
+   - Updates target the inactive secondary slot (targeting Slot B when running on Slot A, or Slot A when on Slot B).
+   - Writes the new OS image and commits the updated `BOOTSLOT.DAT` (marked as `SLOT_STATE_TESTING` with 3 boot attempts) inside an atomic `rust_journal_begin()` ... `rust_journal_commit()` transaction. If power fails or an I/O error occurs mid-write, the existing boot slot and kernel binary remain completely untouched.
+
+4. **Bootloader Integration & Kernel Boot Hooks**:
+   - Updated `tools/grub.cfg` with dual boot menu entries: "NovaOS (Slot A - Primary)" and "NovaOS (Slot B - Staged Update)".
+   - Added `rust_os_update_boot_hook()` executed during early kernel initialization (`kernel/init/main.c`):
+     - If the system boots into a slot under `SLOT_STATE_TESTING`, decrements the remaining attempt counter.
+     - If boot attempts are exhausted without health confirmation, triggers an automatic failsafe rollback to `fallback_slot` and marks the slot as `SLOT_STATE_ROLLED_BACK`.
+   - Provided `rust_os_update_confirm_healthy()` to permanently promote a tested slot to `SLOT_STATE_NORMAL`.
+   - Provided `rust_os_update_rollback()` for manual admin rollbacks.
+
+5. **Syscall ABI Interface (`SYS_OS_UPDATE 79`)**:
+   - Added syscall `SYS_OS_UPDATE 79` in `kernel/arch/x86/cpu/syscall.h` and `userland/libc/include/novasys.h`.
+   - Supported operations:
+     - `NOVA_UPDATE_OP_STATUS (0)`: queries active slot, fallback slot, state, versions, and remaining attempts.
+     - `NOVA_UPDATE_OP_APPLY (1)`: root-only (`uid == 0`) staged atomic apply of signed package.
+     - `NOVA_UPDATE_OP_CONFIRM (2)`: root-only confirmation of running slot as healthy.
+     - `NOVA_UPDATE_OP_ROLLBACK (3)`: root-only manual rollback to fallback slot.
+   - Enforced ring-3 user memory validation via `paging_user_range_ok()`.
+
+6. **In-Kernel Self-Test (`rust_os_update_selftest`)**:
+   - 10-phase automated test verifying:
+     1. `BootSlotConfig` default initialization, serialization, and Adler-32 checksum integrity.
+     2. Valid package synthesis, HMAC-SHA256 signing, and successful verification.
+     3. Tampered payload bit-flip rejection.
+     4. Tampered manifest/version header rejection.
+     5. Invalid package magic rejection.
+     6. Transactional secondary slot apply and state transition to `TESTING`.
+     7. Boot attempt decrement countdown.
+     8. Failsafe auto-rollback to Slot A upon retry exhaustion.
+     9. Slot health confirmation committing to `NORMAL`.
+     10. Manual rollback and clean normal state restoration.
+
+7. **Verification & Regression Testing**:
+   - Added automated boot assertions `atomic_os_update_status` and `atomic_os_update_selftest` in `tools/python/test_runner.py`.
+   - `make test` passes with all 217 assertions green (exit code 0).
+   - Updated `NovaOS_Build_Plan.xlsx` and `NovaOS_Build_Plan.md`: Month 6 first milestone complete (23/56 total tasks, 23/26 Kernel Track).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

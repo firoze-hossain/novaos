@@ -48,6 +48,7 @@
 #include "../../userland/shell/firstrun.h"
 #include "../lib/string.h"
 #include "../lib/stdio.h"
+#include "../include/atomic_update.h"
 #include <stdarg.h>
 
 /* kernel_log() is the one logging function every subsystem uses. It
@@ -672,6 +673,25 @@ void kernel_late_init(void) {
         kernel_log("[ %s ] Kernel-side Rust per-driver locking self-test (fine-grained "
                    "FAT32/ext2/ATA/device locks, contention tracking, interrupt safety, independent concurrency): result=%d\n",
                    lock_res == 0 ? "OK" : "FAIL", lock_res);
+    }
+
+    /* Month 6: Atomic OS update mechanism (safe apply, A/B boot slots, package signing, journal hooks) */
+    {
+        rust_os_update_init();
+        rust_os_update_boot_hook();
+
+        nova_update_status_t status;
+        rust_os_update_get_status(&status);
+        kernel_log("[ OK ] Atomic OS update: running on Slot %c (version %s, status: %s, boot attempts left: %d)\n",
+                   status.active_slot == 0 ? 'A' : 'B',
+                   status.active_slot == 0 ? status.slot_a_version : status.slot_b_version,
+                   status.slot_state == 0 ? "NORMAL" : (status.slot_state == 1 ? "TESTING" : "ROLLED_BACK"),
+                   (int)status.boot_attempts);
+
+        int update_res = rust_os_update_selftest();
+        kernel_log("[ %s ] Atomic OS update self-test (dual boot slots, package signature verification, "
+                   "FAT32 journal transactions, boot retry countdown & auto-rollback): result=%d\n",
+                   update_res == 0 ? "OK" : "FAIL", update_res);
     }
 
     /* Self-test: resolve a real hostname via QEMU SLIRP's built-in DNS

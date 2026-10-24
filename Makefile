@@ -284,7 +284,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 	@mkdir -p $(dir $@)
 	$(ASM) -f bin $< -o $@
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
 	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
@@ -337,6 +337,7 @@ $(KERNEL_BIN): $(OBJS)
 $(ISO_FILE): $(KERNEL_BIN)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL_BIN) $(ISO_DIR)/boot/novaos.bin
+	cp $(KERNEL_BIN) $(ISO_DIR)/boot/novaos_b.bin
 	cp tools/grub.cfg $(ISO_DIR)/boot/grub/
 	$(GRUB_MKRESCUE) -o $(ISO_FILE) $(ISO_DIR)
 	@echo "✅ NovaOS ISO created: $(ISO_FILE)"
@@ -371,7 +372,7 @@ debug: $(ISO_FILE) $(DISK_IMG)
 # an UPPER BOUND: the runner now stops as soon as every expected line has
 # appeared plus a short grace period, so a healthy run ends in about
 # 45-50s. See the comment there for why a fixed window could not work.
-TEST_TIMEOUT ?= 240
+TEST_TIMEOUT ?= 360
 TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)

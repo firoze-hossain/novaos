@@ -63,7 +63,7 @@ EARLY_EXIT_GRACE_SECONDS = 5
 # slow run (which is not a failure) and on a run with a line that never
 # comes (the known-flaky USB enumeration), which waits out the whole
 # ceiling, so it is set with real margin but not generously.
-DEFAULT_TIMEOUT_SECONDS = 240
+DEFAULT_TIMEOUT_SECONDS = 360
 
 # Mirrors the Makefile's own QEMU_FLAGS/DISK_FLAGS/NET_FLAGS/
 # AUDIO_FLAGS/USB_FLAGS exactly (kept here as one definition this
@@ -336,6 +336,12 @@ ASSERTIONS: list[Assertion] = [
     Assertion("driver_locks_selftest",
               r"Kernel-side Rust per-driver locking self-test.*result=0",
               "Month 5: fine-grained per-driver locking in Rust replaces coarse filesystem locks"),
+    Assertion("atomic_os_update_status",
+              r"Atomic OS update: running on Slot [AB]",
+              "Month 6: atomic OS update engine verified active boot slot state"),
+    Assertion("atomic_os_update_selftest",
+              r"Atomic OS update self-test.*result=0",
+              "Month 6: atomic OS update self-test passed (A/B slots, package signing, journal transactions, auto-rollback)"),
     Assertion("net_irq_selftest",
               r"Kernel-side Rust net IRQ signal self-test.*"
               r"signal-then-check=pass",

@@ -45,6 +45,7 @@
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../../../userland/libc/include/nova_klog_abi.h"
 #include "../../../userland/libc/include/nova_pkgrepo_abi.h"
+#include "../../include/atomic_update.h"
 #include "../../drivers/timer/timer.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -1117,6 +1118,58 @@ static void handle_pkgrepo_ctl(registers_t* regs) {
     regs->eax = (uint32_t)rust_pkgrepo_ctl(cmd, arg);
 }
 
+/* Month 6 / Phase 96: Atomic OS update mechanism. */
+static void handle_os_update(registers_t* regs) {
+    int op = (int)regs->ebx;
+    uint32_t arg_ptr = regs->ecx;
+    uint32_t arg_len = regs->edx;
+
+    if (op == NOVA_UPDATE_OP_STATUS) {
+        if (!paging_user_range_ok(arg_ptr, sizeof(nova_update_status_t), true)) {
+            regs->eax = (uint32_t)NOVA_UPDATE_ERR_FAULT;
+            return;
+        }
+        nova_update_status_t status;
+        int rc = rust_os_update_get_status(&status);
+        if (rc == 0) {
+            memcpy((void*)arg_ptr, &status, sizeof(status));
+            regs->eax = 0;
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    /* Mutating operations require root (uid 0) */
+    process_t* cur = process_current();
+    if (cur != NULL && cur->uid != 0) {
+        regs->eax = (uint32_t)NOVA_UPDATE_ERR_PERM;
+        return;
+    }
+
+    if (op == NOVA_UPDATE_OP_STAGE_AND_APPLY) {
+        if (arg_len < 128 || arg_len > 16 * 1024 * 1024 ||
+            !paging_user_range_ok(arg_ptr, arg_len, false)) {
+            regs->eax = (uint32_t)NOVA_UPDATE_ERR_FAULT;
+            return;
+        }
+        regs->eax = (uint32_t)rust_os_update_apply_package((const void*)arg_ptr, arg_len);
+        return;
+    }
+
+    if (op == NOVA_UPDATE_OP_CONFIRM) {
+        regs->eax = (uint32_t)rust_os_update_confirm_healthy();
+        return;
+    }
+
+    if (op == NOVA_UPDATE_OP_ROLLBACK) {
+        regs->eax = (uint32_t)rust_os_update_rollback();
+        return;
+    }
+
+    regs->eax = (uint32_t)NOVA_UPDATE_ERR_INVALID_OP;
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2106,6 +2159,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_PKGREPO_CTL:
             handle_pkgrepo_ctl(regs);
+            break;
+
+        case SYS_OS_UPDATE:
+            handle_os_update(regs);
             break;
 
         case SYS_FB_INFO:

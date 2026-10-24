@@ -54,6 +54,7 @@ mod growtable;
 mod klog;
 mod pkgrepo;
 mod driver_locks;
+mod atomic_update;
 
 use core::panic::PanicInfo;
 

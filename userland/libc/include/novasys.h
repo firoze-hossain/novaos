@@ -68,6 +68,33 @@
 #define SYS_KLOG_WRITE  76
 #define SYS_KLOG_INFO   77
 #define SYS_PKGREPO_CTL 78
+#define SYS_OS_UPDATE   79
+
+#define NOVA_UPDATE_OP_STATUS           1
+#define NOVA_UPDATE_OP_STAGE_AND_APPLY  2
+#define NOVA_UPDATE_OP_CONFIRM          3
+#define NOVA_UPDATE_OP_ROLLBACK         4
+
+#define NOVA_UPDATE_OK               0
+#define NOVA_UPDATE_ERR_INVALID_OP  -1
+#define NOVA_UPDATE_ERR_BAD_HEADER  -2
+#define NOVA_UPDATE_ERR_BAD_SIG     -3
+#define NOVA_UPDATE_ERR_IO          -4
+#define NOVA_UPDATE_ERR_JOURNAL     -5
+#define NOVA_UPDATE_ERR_PERM        -6
+#define NOVA_UPDATE_ERR_FAULT       -7
+
+typedef struct __attribute__((packed)) {
+    unsigned char active_slot;
+    unsigned char fallback_slot;
+    unsigned char slot_state;
+    unsigned char boot_attempts;
+    char          slot_a_version[16];
+    char          slot_b_version[16];
+    int           last_error;
+} nova_update_status_t;
+
+int sys_os_update(int op, void* arg, unsigned int arg_size);
 
 /* Phase 73: the largest environment a process may hand to a child at
  * exec time - mirrors MAX_EXEC_ENV / MAX_EXEC_ENV_BYTES in

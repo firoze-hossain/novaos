@@ -655,6 +655,11 @@
  * (start, stop, status). */
 #define SYS_PKGREPO_CTL 78
 
+/* Month 6 / Phase 96: Atomic OS update mechanism (see atomic_update.h).
+ * SYS_OS_UPDATE queries boot slot status, applies signed update packages to the secondary
+ * boot slot via FAT32 write-ahead journal transactions, confirms health, and triggers rollback. */
+#define SYS_OS_UPDATE   79
+
 /* Installs the int 0x80 gate with DPL=3 (required for ring-3 code to
  * invoke it via the INT instruction at all - the CPU checks CPL <= gate
  * DPL for software interrupts) and points it at the dedicated syscall
