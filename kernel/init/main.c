@@ -1597,6 +1597,13 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         kernel_log("[ %s ] Kernel security & regression audit (capability boundaries, "
                    "root privilege gates, user pointer bounds, MAC enforcement): result=%d\n",
                    audit_res == 0 ? "OK" : "FAIL", audit_res);
+
+        /* Month 6 / Phase 99: On-disk partitioning and formatting engine self-test */
+        extern int rust_disk_installer_selftest(void);
+        int installer_res = rust_disk_installer_selftest();
+        if (installer_res != 0) {
+            kernel_log("[FAULT] Disk installer self-test failed: result=%d\n", installer_res);
+        }
     }
 
     /* Phase 50: kernel/rust/sha256.rs's own self-test - verifies this

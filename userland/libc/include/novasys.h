@@ -70,6 +70,52 @@
 #define SYS_PKGREPO_CTL 78
 #define SYS_OS_UPDATE   79
 #define SYS_CRASHDUMP_CTL 80
+#define SYS_DISK_INSTALL  81
+
+#define DISK_INSTALL_OP_QUERY     1
+#define DISK_INSTALL_OP_DRY_RUN   2
+#define DISK_INSTALL_OP_FORMAT    3
+#define DISK_INSTALL_OP_SELFTEST  4
+
+#define DISK_INSTALL_OK                    0
+#define DISK_INSTALL_ERR_INVALID_PARAM   (-1)
+#define DISK_INSTALL_ERR_DISK_TOO_SMALL  (-2)
+#define DISK_INSTALL_ERR_DEVICE_NOT_FOUND (-3)
+#define DISK_INSTALL_ERR_IO_WRITE        (-4)
+#define DISK_INSTALL_ERR_IO_READ         (-5)
+#define DISK_INSTALL_ERR_PERMISSION      (-6)
+#define DISK_INSTALL_ERR_VERIFY_FAIL     (-7)
+
+typedef struct __attribute__((packed)) {
+    int          target_device;    /* 0 = ATA, 1 = VirtIO-Blk, 2 = NVMe */
+    unsigned int total_sectors;    /* 0 = auto/default (102MiB = 208,896 sectors) */
+    unsigned int part1_mb;         /* FAT32 size in MB (0 = default 64) */
+    unsigned int part2_mb;         /* ext2 size in MB (0 = default 32) */
+    unsigned int part3_mb;         /* Journal size in MB (0 = default 4) */
+    unsigned int part4_mb;         /* Crashdump size in MB (0 = default 1) */
+    unsigned int dry_run;          /* 1 = validate only, 0 = live write */
+    unsigned int format_fat32;     /* 1 = format FAT32, 0 = partition table only */
+    unsigned int format_ext2;      /* 1 = format ext2, 0 = skip */
+} nova_disk_layout_config_t;
+
+typedef struct __attribute__((packed)) {
+    int          status;           /* 0 on success, < 0 on error */
+    int          target_device;
+    unsigned int total_sectors;
+    unsigned int part1_start_lba;
+    unsigned int part1_sectors;
+    unsigned int part2_start_lba;
+    unsigned int part2_sectors;
+    unsigned int part3_start_lba;
+    unsigned int part3_sectors;
+    unsigned int part4_start_lba;
+    unsigned int part4_sectors;
+    unsigned int fat_size_sectors;
+    unsigned int total_clusters;
+    unsigned int sectors_written;
+} nova_disk_install_summary_t;
+
+int sys_disk_install(int op, void* arg1, void* arg2);
 
 #define CRASHDUMP_OP_STATUS 1
 #define CRASHDUMP_OP_GET    2

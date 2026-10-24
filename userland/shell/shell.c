@@ -27,6 +27,7 @@
 #include "../../kernel/drivers/rtc/rtc.h"
 #include "../../kernel/drivers/pci/pci.h"
 #include "../../kernel/drivers/sound/ac97.h"
+#include "../../kernel/include/disk_installer.h"
 #include "firstrun.h"
 #include "../../kernel/task/process.h"
 #include "../../kernel/lib/string.h"
@@ -734,6 +735,43 @@ static void cmd_crash(void) {
     }
 }
 
+static void cmd_fdisk(const char* arg) {
+    if (strcmp(arg, "test") == 0 || strcmp(arg, "--selftest") == 0) {
+        int res = rust_disk_installer_selftest();
+        vga_printf("Disk installer self-test: %s (result=%d)\n",
+                   res == 0 ? "PASSED" : "FAILED", res);
+        return;
+    }
+
+    nova_disk_layout_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.target_device = 0;
+    cfg.dry_run = 1;
+    cfg.format_fat32 = 1;
+    cfg.format_ext2 = 1;
+
+    nova_disk_install_summary_t summary;
+    memset(&summary, 0, sizeof(summary));
+
+    int rc = rust_disk_installer_format(&cfg, &summary);
+    if (rc != 0) {
+        vga_printf("fdisk: query failed (rc=%d)\n", rc);
+        return;
+    }
+
+    vga_puts("NovaOS On-Disk Partition Layout:\n");
+    vga_printf("  Part 1 (FAT32 Boot): start LBA %u, %u sectors (%u MB)\n",
+               summary.part1_start_lba, summary.part1_sectors, summary.part1_sectors / 2048);
+    vga_printf("  Part 2 (ext2 Data):  start LBA %u, %u sectors (%u MB)\n",
+               summary.part2_start_lba, summary.part2_sectors, summary.part2_sectors / 2048);
+    vga_printf("  Part 3 (Journal):    start LBA %u, %u sectors (%u MB)\n",
+               summary.part3_start_lba, summary.part3_sectors, summary.part3_sectors / 2048);
+    vga_printf("  Part 4 (Crash Dump): start LBA %u, %u sectors (%u MB)\n",
+               summary.part4_start_lba, summary.part4_sectors, summary.part4_sectors / 2048);
+    vga_printf("  Total: %u sectors (%u MB), FAT size: %u sectors, clusters: %u\n",
+               summary.total_sectors, summary.total_sectors / 2048, summary.fat_size_sectors, summary.total_clusters);
+}
+
 static void dispatch(char* line) {
     if (line[0] == '\0') {
         return;
@@ -787,6 +825,12 @@ static void dispatch(char* line) {
         cmd_beep();
     } else if (strcmp(line, "crash") == 0 || strcmp(line, "crashreport") == 0) {
         cmd_crash();
+    } else if (strcmp(line, "fdisk") == 0 || strcmp(line, "install") == 0) {
+        cmd_fdisk("");
+    } else if (strncmp(line, "fdisk ", 6) == 0) {
+        cmd_fdisk(line + 6);
+    } else if (strncmp(line, "install ", 8) == 0) {
+        cmd_fdisk(line + 8);
     } else if (strncmp(line, "run ", 4) == 0) {
         cmd_run(line + 4);
     } else if (strncmp(line, "echo ", 5) == 0) {

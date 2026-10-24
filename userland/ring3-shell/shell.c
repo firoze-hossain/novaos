@@ -221,6 +221,7 @@ static void cmd_help(void) {
     printf("  nslookup HOST   - resolve a hostname via DNS (Rust, Phase 60)\n");
     printf("  tftp IP REMOTE [LOCAL] - fetch a file over TFTP (Rust, Phase 60)\n");
     printf("  update          - check & stage OS update from RozeHub / GitHub (Rust)\n");
+    printf("  fdisk           - show on-disk partitioning and filesystem geometry (Rust)\n");
     printf("  help            - show this message\n");
     printf("\n");
     printf("Not yet available here: store (the full compositor +\n");
@@ -484,6 +485,30 @@ static void cmd_update(int argc, char* argv[]) {
     if (exit_code != 0) {
         printf("update: finished with exit code %d\n", exit_code);
     }
+}
+
+/* Month 6 / Phase 99: on-disk partitioning and formatting engine query */
+static void cmd_fdisk(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    nova_disk_install_summary_t summary;
+    memset(&summary, 0, sizeof(summary));
+    int rc = sys_disk_install(DISK_INSTALL_OP_QUERY, (void*)0, &summary);
+    if (rc != 0) {
+        printf("fdisk: query failed (rc=%d)\n", rc);
+        return;
+    }
+    printf("NovaOS On-Disk Partition Layout:\n");
+    printf("  Part 1 (FAT32 Boot): start LBA %u, %u sectors (%u MB)\n",
+           summary.part1_start_lba, summary.part1_sectors, summary.part1_sectors / 2048);
+    printf("  Part 2 (ext2 Data):  start LBA %u, %u sectors (%u MB)\n",
+           summary.part2_start_lba, summary.part2_sectors, summary.part2_sectors / 2048);
+    printf("  Part 3 (Journal):    start LBA %u, %u sectors (%u MB)\n",
+           summary.part3_start_lba, summary.part3_sectors, summary.part3_sectors / 2048);
+    printf("  Part 4 (Crash Dump): start LBA %u, %u sectors (%u MB)\n",
+           summary.part4_start_lba, summary.part4_sectors, summary.part4_sectors / 2048);
+    printf("  Total: %u sectors (%u MB), FAT size: %u sectors, clusters: %u\n",
+           summary.total_sectors, summary.total_sectors / 2048, summary.fat_size_sectors, summary.total_clusters);
 }
 
 /* Phase 59: echo is now a real, separate ring-3 ELF32 program too
@@ -958,6 +983,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_tftp(argc2, tokens);
         } else if (strcmp(tokens[0], "update") == 0) {
             cmd_update(argc2, tokens);
+        } else if (strcmp(tokens[0], "fdisk") == 0 || strcmp(tokens[0], "install") == 0) {
+            cmd_fdisk(argc2, tokens);
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

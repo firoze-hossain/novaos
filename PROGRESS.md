@@ -11496,6 +11496,91 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - `make test`: All 223 test assertions pass cleanly with zero failures (exit code 0).
    - Updated `NovaOS_Build_Plan.xlsx` and `NovaOS_Build_Plan.md`: Month 6 at 3/4 tasks (75.0%), Kernel Track at 25/26 tasks (96.15%), Overall Project at 25/56 tasks (44.64%).
 
+## Phase 99 - Month 6: On-Disk Partitioning and Formatting Engine Backing Installer
+
+**Status: Complete.** Built a pure Rust on-disk partitioning and formatting engine (`kernel/rust/disk_installer.rs`) implementing genuine disk-writing and structure synthesis logic backing the NovaOS installer. Implements full MBR partition table synthesis (with 1MiB LBA 2048 alignment and CHS mapping across 4 primary partitions), compliant FAT32 Boot Sector & BPB formatting (512B sectors, 4096B clusters, 32 reserved sectors, 2 FAT tables, FSInfo with lead/struct/trail signatures, root directory cluster 2), ext2 filesystem formatting (superblock at byte 1024, block group descriptors, bitmaps, root inode, and directory block), and clean initialization of dedicated write-ahead journal and crash dump regions. Exposed via `SYS_DISK_INSTALL` (81), userland shell `fdisk` and `install` commands, and validated by comprehensive boot self-tests (224/224 automated assertions passing cleanly). With this phase, **the Kernel Track is 100.0% Complete (26/26 tasks)** and Month 6 is 100.0% Complete (4/4 tasks).
+
+### Architectural Overview & Motivation
+- Prior to this phase, NovaOS disk images were partitioned and formatted exclusively on the build host using external utilities (`parted`, `mformat`, `mcopy`, `mkfs.ext2`) in `tools/build-disk-image.sh`.
+- To enable NovaOS to install itself to bare-metal hard drives, secondary disks, NVMe, or VirtIO block devices, an in-kernel, self-contained partitioning and formatting engine was required.
+- Building on the existing FAT32 driver, write-ahead journaling (`journal.rs`), crash dump recorder (`crashdump.rs`), and the unified block device abstraction (`blockdev.c`), this engine directly synthesizes on-disk filesystem structures in pure `#![no_std]` Rust with zero heap allocation.
+
+### Implementation Details
+
+1. **MBR Partition Table Engine (`kernel/rust/disk_installer.rs`)**:
+   - Synthesizes sector 0 with standard Master Boot Record structure:
+     * 446-byte bootstrap code header.
+     * 4 primary partition table entries (16 bytes each at offsets 446, 462, 478, 494):
+       - **Partition 1 (FAT32 Boot/System)**: Active/Bootable (`0x80`), type `0x0C` (FAT32 LBA), starts at LBA 2048 (1MiB alignment), default size 64MiB (131,072 sectors).
+       - **Partition 2 (ext2 Data)**: Inactive (`0x00`), type `0x83` (Linux native), starts at LBA 133,120, default size 32MiB (65,536 sectors).
+       - **Partition 3 (FAT32 Journal)**: Inactive (`0x00`), type `0x83`, starts at LBA 198,656, size 4MiB (8,192 sectors).
+       - **Partition 4 (Crash Dump)**: Inactive (`0x00`), type `0x83`, starts at LBA 206,848, size 1MiB (2,048 sectors).
+     * MBR boot signature `0x55, 0xAA` at bytes 510-511.
+   - Computes legacy BIOS CHS addresses via `lba_to_chs()` mapping cylinder, head, and sector fields.
+   - Implements structural parser and verification routine `verify_mbr_table()` validating partition entry plausibility, bounds, non-overlap, and signature conformity.
+
+2. **FAT32 Filesystem Formatter**:
+   - Synthesizes `Fat32BootSector` (BPB) at sector 0 of Partition 1 (LBA 2048):
+     * `bytes_per_sector`: 512, `sectors_per_cluster`: 8 (4096-byte clusters), `reserved_sectors`: 32.
+     * `num_fats`: 2, `media_descriptor`: 0xF8 (Fixed disk), `sectors_per_track`: 63, `num_heads`: 255.
+     * `hidden_sectors`: 2048, `total_sectors_32`: partition sector count.
+     * Dynamically calculates `fat_size_32` sectors based on cluster count.
+     * Sets `root_cluster`: 2, `fs_info_sector`: 1, `backup_boot_sector`: 6.
+     * Sets volume ID `0x20261024`, volume label `"NOVAOS BOOT"`, and FS type `"FAT32   "`.
+     * Boot signature `0x55, 0xAA`.
+   - Synthesizes `Fat32FsInfo` at sector 1 and backup at sector 7:
+     * Lead signature `0x41615252` ("RRaA"), structure signature `0x61417272` ("rrAa"), and trail signature `0xAA550000`.
+     * Free cluster count and next free cluster hint (3).
+   - Synthesizes File Allocation Tables:
+     * FAT1 (LBA `part1_start + 32`): Sector 0 contains Cluster 0 (`0x0FFFFFF8`), Cluster 1 (`0x0FFFFFFF`), and Root Directory Cluster 2 EOF (`0x0FFFFFFF`). Remaining entries zeroed.
+     * FAT2 (LBA `part1_start + 32 + fat_size_sectors`): Mirror of FAT1.
+   - Synthesizes Root Directory Cluster (cluster 2): initializes initial volume label directory entry with attribute `FAT_ATTR_VOLUME_ID` (0x08) and zeroed slack.
+
+3. **ext2 Filesystem Formatter**:
+   - Generates `Ext2Superblock` at byte offset 1024 (LBA `part2_start + 2`):
+     * Magic `0xEF53` (`EXT2_MAGIC`), revision 1 (`EXT2_DYNAMIC_REV`), inode size 128.
+     * 1024-byte block size (`log_block_size = 0`), 8192 blocks per group.
+     * Sets `first_data_block = 1`, `first_ino = 11`, `state = 1` (cleanly unmounted).
+   - Generates Block Group Descriptor (block 2) with pointers to block bitmap (block 3), inode bitmap (block 4), and inode table (block 5).
+   - Generates Root Inode (inode 2) with directory mode `0x41ED` (0755), 1024 bytes size, 2 blocks allocated, and `block[0]` pointing to block 37.
+   - Formats Root Directory Data Block (block 37) with standard `.` and `..` directory entries.
+
+4. **Journal & Crash Dump Region Initialization**:
+   - Partition 3 (Journal): Clears descriptor sector at LBA 0 of partition 3 (`magic = 0`).
+   - Partition 4 (Crash Dump): Clears header sector at LBA 0 of partition 4 (`magic = 0`).
+
+5. **Block Device Dispatch, Privilege Gating & Syscall Integration**:
+   - Added `SYS_DISK_INSTALL` (81) in `kernel/arch/x86/cpu/syscall.h`, `syscall.c`, and `userland/libc/include/novasys.h`.
+   - Operations:
+     * `DISK_INSTALL_OP_QUERY (1)`: Queries target device geometry and partition table summary.
+     * `DISK_INSTALL_OP_DRY_RUN (2)`: Validates partition geometry and synthesizes structures in memory without touching physical media.
+     * `DISK_INSTALL_OP_FORMAT (3)`: Executes live on-disk partitioning and formatting. Gated strictly on root privileges (`uid == 0`).
+     * `DISK_INSTALL_OP_SELFTEST (4)`: Executes in-kernel self-test suite.
+   - User pointers strictly validated using `is_user_ptr_valid()`.
+   - Supports device targeting across `BLOCKDEV_ATA`, `BLOCKDEV_VIRTIO_BLK`, and `BLOCKDEV_NVME`.
+   - Automatically preserves and restores active device and partition offset upon operation completion.
+
+6. **Shell Commands (`fdisk` & `install`)**:
+   - Added `fdisk` and `install` commands in `userland/ring3-shell/shell.c` and `userland/shell/shell.c`.
+   - Allows users to inspect on-disk partition layouts, sector boundaries, cluster sizing, and run installer diagnostics.
+
+7. **Verification & Regression Suite**:
+   - Added `rust_disk_installer_selftest()` executing during boot in `kernel/init/main.c`:
+     * Verifies partition arithmetic matching `tools/build-disk-image.sh` (2048 sector alignment, 64MB FAT32, 32MB ext2, 4MB journal, 1MB crashdump).
+     * Verifies MBR synthesis, 0x55AA boot signature, and partition round-trip parsing with NovaOS MBR parser.
+     * Verifies FAT32 BPB layout, sectors per cluster, reserved sectors, media byte, and volume label.
+     * Verifies FSInfo signatures (`RRaA`, `rrAa`, `0xAA550000`) and cluster hints.
+     * Verifies FAT table entries (cluster 0, 1, 2 markers).
+     * Verifies ext2 superblock magic (`0xEF53`), block group descriptor, root inode, and directory block entries.
+     * Verifies dry-run formatting pipeline and non-destructive scratch block device I/O.
+   - Added `disk_installer_selftest` assertion in `tools/python/test_runner.py`.
+   - `make test` executed successfully: all 224 test assertions passed cleanly (0 failures).
+   - Tracking spreadsheet `NovaOS_Build_Plan.xlsx` updated:
+     * **Kernel Track: 26/26 tasks completed (100.0%)**.
+     * **Month 6: 4/4 tasks completed (100.0%)**.
+     * **Overall Project: 26/56 tasks completed (46.43%)**.
+   - Artifact `NovaOS_Build_Plan.md` updated.
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

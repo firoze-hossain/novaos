@@ -55,6 +55,7 @@ mod klog;
 mod pkgrepo;
 mod driver_locks;
 mod atomic_update;
+mod disk_installer;
 
 use core::panic::PanicInfo;
 

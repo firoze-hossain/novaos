@@ -543,3 +543,14 @@ int sys_pkgrepo_ctl(uint32_t cmd, void* arg) {
     return r;
 }
 
+/* Month 6 / Phase 99: On-disk partitioning and formatting engine backing installer */
+int sys_disk_install(int op, void* arg1, void* arg2) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(SYS_DISK_INSTALL), "b"(op), "c"((uint32_t)arg1), "d"((uint32_t)arg2)
+                      : "memory");
+    return r;
+}
+
+

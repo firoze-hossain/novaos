@@ -47,6 +47,7 @@
 #include "../../../userland/libc/include/nova_pkgrepo_abi.h"
 #include "../../include/atomic_update.h"
 #include "../../include/crashdump.h"
+#include "../../include/disk_installer.h"
 #include "../../drivers/timer/timer.h"
 #include "../mm/paging.h"
 #include "../../drivers/mouse/ps2mouse.h"
@@ -1298,6 +1299,86 @@ static void handle_crashdump_ctl(registers_t* regs) {
     regs->eax = (uint32_t)-1;
 }
 
+/* Month 6 / Phase 99: On-disk partitioning & formatting engine backing installer */
+static void handle_disk_install(registers_t* regs) {
+    int op = (int)regs->ebx;
+    process_t* cur = process_current();
+
+    if (op == DISK_INSTALL_OP_QUERY) {
+        int target_dev = (int)regs->ecx;
+        uint32_t out_ptr = regs->edx;
+        if (!is_user_ptr_valid(cur, out_ptr, sizeof(nova_disk_install_summary_t), true)) {
+            regs->eax = (uint32_t)DISK_INSTALL_ERR_INVALID_PARAM;
+            return;
+        }
+        nova_disk_install_summary_t summary;
+        int rc = rust_disk_installer_query(target_dev, &summary);
+        if (rc == 0) {
+            memcpy((void*)out_ptr, &summary, sizeof(summary));
+            regs->eax = 0;
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    if (op == DISK_INSTALL_OP_DRY_RUN) {
+        uint32_t cfg_ptr = regs->ecx;
+        uint32_t out_ptr = regs->edx;
+        if (!is_user_ptr_valid(cur, cfg_ptr, sizeof(nova_disk_layout_config_t), false)) {
+            regs->eax = (uint32_t)DISK_INSTALL_ERR_INVALID_PARAM;
+            return;
+        }
+        nova_disk_layout_config_t cfg;
+        memcpy(&cfg, (const void*)cfg_ptr, sizeof(cfg));
+        cfg.dry_run = 1;
+
+        nova_disk_install_summary_t summary;
+        int rc = rust_disk_installer_format(&cfg, &summary);
+        if (out_ptr != 0) {
+            if (is_user_ptr_valid(cur, out_ptr, sizeof(nova_disk_install_summary_t), true)) {
+                memcpy((void*)out_ptr, &summary, sizeof(summary));
+            }
+        }
+        regs->eax = (uint32_t)rc;
+        return;
+    }
+
+    if (op == DISK_INSTALL_OP_FORMAT) {
+        /* Mutating disk operation strictly requires root (uid 0) */
+        if (cur != NULL && cur->uid != 0) {
+            regs->eax = (uint32_t)DISK_INSTALL_ERR_PERMISSION;
+            return;
+        }
+
+        uint32_t cfg_ptr = regs->ecx;
+        uint32_t out_ptr = regs->edx;
+        if (!is_user_ptr_valid(cur, cfg_ptr, sizeof(nova_disk_layout_config_t), false)) {
+            regs->eax = (uint32_t)DISK_INSTALL_ERR_INVALID_PARAM;
+            return;
+        }
+        nova_disk_layout_config_t cfg;
+        memcpy(&cfg, (const void*)cfg_ptr, sizeof(cfg));
+
+        nova_disk_install_summary_t summary;
+        int rc = rust_disk_installer_format(&cfg, &summary);
+        if (out_ptr != 0) {
+            if (is_user_ptr_valid(cur, out_ptr, sizeof(nova_disk_install_summary_t), true)) {
+                memcpy((void*)out_ptr, &summary, sizeof(summary));
+            }
+        }
+        regs->eax = (uint32_t)rc;
+        return;
+    }
+
+    if (op == DISK_INSTALL_OP_SELFTEST) {
+        regs->eax = (uint32_t)rust_disk_installer_selftest();
+        return;
+    }
+
+    regs->eax = (uint32_t)DISK_INSTALL_ERR_INVALID_PARAM;
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2326,6 +2407,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_CRASHDUMP_CTL:
             handle_crashdump_ctl(regs);
+            break;
+
+        case SYS_DISK_INSTALL:
+            handle_disk_install(regs);
             break;
 
         case SYS_FB_INFO:

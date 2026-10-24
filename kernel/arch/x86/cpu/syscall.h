@@ -664,6 +664,11 @@
  * SYS_CRASHDUMP_CTL queries status, retrieves crash records, triggers exports, and clears exported records. */
 #define SYS_CRASHDUMP_CTL 80
 
+/* Month 6 / Phase 99: On-disk partitioning and formatting engine backing installer (see disk_installer.h).
+ * SYS_DISK_INSTALL queries disk layout, performs dry-run validation, executes live disk partitioning and
+ * formatting, and triggers self-tests. Live formatting requires root (uid 0). */
+#define SYS_DISK_INSTALL  81
+
 /* Month 6 / Phase 98: Full kernel security audit helper prototypes */
 struct process;
 bool process_has_capability(const struct process* p, const char* filename);
