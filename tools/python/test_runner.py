@@ -261,6 +261,9 @@ ASSERTIONS: list[Assertion] = [
               "a real, libc-linked C program ran to completion with its expected exit code"),
     Assertion("sys_exec_real_c_program", r"SYS_EXEC loaded and ran a real C program",
               "SYS_EXEC correctly loaded and ran a full C program, not just a toy"),
+    Assertion("ui_design_system_selftest",
+              r"\[wm-selftest\] PASS: shared UI design system invariants hold",
+              "Month 1 Prep: shared UI design system invariants hold (colors, spacing, typography, widgets, drawing)"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

@@ -36,6 +36,9 @@
 #![no_std]
 #![no_main]
 
+extern crate ui;
+use ui::prelude::*;
+
 mod ffi;
 
 use core::panic::PanicInfo;
@@ -121,24 +124,11 @@ fn point_in_rect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
 /// can't `#include` a kernel-private header - see this file's own
 /// module doc comment on "no new kernel-side GUI logic," which cuts
 /// both ways: nothing kernel-private gets exposed to ring-3 either).
-const DIGIT_FONT: [[u8; 7]; 10] = [
-    [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E], // 0
-    [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E], // 1
-    [0x0E, 0x11, 0x01, 0x0E, 0x10, 0x10, 0x1F], // 2
-    [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E], // 3
-    [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02], // 4
-    [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E], // 5
-    [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E], // 6
-    [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08], // 7
-    [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E], // 8
-    [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C], // 9
-];
-
 fn draw_digit(x: i32, y: i32, digit: u8, color: u8) {
     if digit == 0 || digit > 9 {
         return;
     }
-    let rows = &DIGIT_FONT[digit as usize];
+    let rows = ui::typography::get_glyph(b'0' + digit);
     for (row, bits) in rows.iter().enumerate() {
         for col in 0..5 {
             if bits & (0x10 >> col) != 0 {
@@ -388,16 +378,28 @@ impl Wm {
     }
 
     fn render(&self) {
-        unsafe { ffi::sys_gfx_fill_rect(0, 0, SCREEN_W, DESKTOP_H, 1) }; // desktop: blue
+        let palette = Theme::Dark.palette();
+        let desktop_bg = palette.desktop_bg.to_vga_index();
 
+        unsafe { ffi::sys_gfx_fill_rect(0, 0, SCREEN_W, DESKTOP_H, desktop_bg) };
+
+        let topmost = self.z_order[MAX_WINDOWS - 1];
         for i in 0..MAX_WINDOWS {
-            let w = &self.windows[self.z_order[i]];
+            let win_idx = self.z_order[i];
+            let w = &self.windows[win_idx];
+            let is_active = win_idx == topmost;
+            let (tb_color, border_col) = if is_active {
+                (w.titlebar_color, palette.border_focused.to_vga_index())
+            } else {
+                (w.titlebar_color, palette.border_normal.to_vga_index())
+            };
+
             unsafe {
                 ffi::sys_gfx_fill_rect(w.x, w.y + TITLEBAR_H, w.w, w.h - TITLEBAR_H, w.body_color);
-                ffi::sys_gfx_fill_rect(w.x, w.y, w.w, TITLEBAR_H, w.titlebar_color);
+                ffi::sys_gfx_fill_rect(w.x, w.y, w.w, TITLEBAR_H, tb_color);
             }
-            draw_rect_outline(w.x, w.y, w.w, w.h, 15);
-            draw_digit(w.x + 3, w.y + 1, w.label, 15);
+            draw_rect_outline(w.x, w.y, w.w, w.h, border_col);
+            draw_digit(w.x + 3, w.y + 1, w.label, palette.text_primary.to_vga_index());
         }
 
         self.render_taskbar();
@@ -405,18 +407,19 @@ impl Wm {
     }
 
     fn render_taskbar(&self) {
-        unsafe { ffi::sys_gfx_fill_rect(0, DESKTOP_H, SCREEN_W, TASKBAR_H, 8) }; // dark gray bar
+        let palette = Theme::Dark.palette();
+        let taskbar_bg = palette.taskbar_bg.to_vga_index();
+        let taskbar_active = palette.taskbar_item_active.to_vga_index();
+        let taskbar_inactive = palette.taskbar_item_inactive.to_vga_index();
+
+        unsafe { ffi::sys_gfx_fill_rect(0, DESKTOP_H, SCREEN_W, TASKBAR_H, taskbar_bg) };
         let button_w = SCREEN_W / MAX_WINDOWS as i32;
         let topmost = self.z_order[MAX_WINDOWS - 1];
         for i in 0..MAX_WINDOWS {
             let bx = i as i32 * button_w;
-            // The focused (topmost) window's own taskbar button is
-            // drawn lighter than the rest - real, if minimal, visual
-            // feedback for "this one's active," not just a plain,
-            // undifferentiated row of identical buttons.
-            let bg = if i == topmost { 7 } else { 8 };
+            let bg = if i == topmost { taskbar_active } else { taskbar_inactive };
             unsafe { ffi::sys_gfx_fill_rect(bx + 1, DESKTOP_H + 1, button_w - 2, TASKBAR_H - 2, bg) };
-            draw_digit(bx + button_w / 2 - 2, DESKTOP_H + 2, self.windows[i].label, 0);
+            draw_digit(bx + button_w / 2 - 2, DESKTOP_H + 2, self.windows[i].label, palette.text_primary.to_vga_index());
         }
     }
 }
@@ -445,6 +448,15 @@ fn run_selftest() -> i32 {
     let mut wm = Wm::new();
 
     unsafe { ffi::sys_write(b"[wm-selftest] starting\n\0".as_ptr()) };
+
+    // Case 0: Verify shared UI design system invariants
+    let ds_code = ui::run_design_system_selftest();
+    if ds_code == 0 {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: shared UI design system invariants hold\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: UI design system invariants\n\0".as_ptr()) };
+        code |= 32;
+    }
 
     // Case 1: dragging window 0 by its titlebar actually moves it,
     // and moving the cursor there and pressing raises it to the

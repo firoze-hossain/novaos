@@ -13,6 +13,7 @@ iso/
 *.map
 *.sym
 *.d
+*.rlib
 
 # ---- Toolchain / cross-compiler (built locally by setup scripts) ----
 toolchain/

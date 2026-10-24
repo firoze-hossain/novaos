@@ -30,17 +30,27 @@ echo "Compiling wm.rs (Phase 70 - a real, interactive ring-3 window manager)..."
 RUSTC_CMD="${RUSTC:-rustc}"
 BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
 
+UI_DIR="../ui-rs"
+if [ ! -f "$UI_DIR/libui.rlib" ]; then
+    echo "Building userland/ui-rs (NovaOS Design System)..."
+    "$UI_DIR/build.sh"
+fi
+
 env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \
     --target "$RUST_SYSROOT/i686-novaos.json" \
     --crate-type bin -C panic=abort -C opt-level=2 \
     --emit obj=wm_main.o \
+    -L "$LIBRUST" \
+    -L "$UI_DIR" \
     --extern core="$LIBRUST/libcore.rlib" \
     --extern compiler_builtins="$LIBRUST/libcompiler_builtins.rlib" \
+    --extern ui="$UI_DIR/libui.rlib" \
     -C link-dead-code=no \
     wm.rs
 
 ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
     -o wm.elf crt0.o wm_main.o syscall.o string.o stdlib.o \
+    "$UI_DIR/libui.rlib" \
     "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
 cp wm.elf ../../tools/fixtures/WM.ELF
