@@ -158,6 +158,7 @@ ASM_OBJS = $(patsubst %.asm, $(BUILD_DIR)/%.o, $(ASM_SOURCES))
 # compiler_builtins) are added directly to OBJS below, so ld's normal
 # kernel link step picks them up exactly like any other .o - no
 # separate link pass, no special-casing in the final $(LD) invocation.
+RUSTC ?= rustc
 RUST_SYSROOT_DIR = tools/rust-sysroot
 RUST_TARGET_JSON = $(RUST_SYSROOT_DIR)/i686-novaos.json
 RUST_LIB_DIR = $(RUST_SYSROOT_DIR)/sysroot/lib/rustlib/i686-novaos/lib
@@ -286,12 +287,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 
 $(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs kernel/rust/disk_installer.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
-	if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then \
-	    RUSTC_CMD="rustc +nightly"; BOOTSTRAP_ENV=""; \
-	else \
-	    RUSTC_CMD="rustc"; BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"; \
-	fi; \
-	env $$BOOTSTRAP_ENV $$RUSTC_CMD --edition 2021 -Z unstable-options --target $(RUST_TARGET_JSON) \
+	env RUSTC_BOOTSTRAP=1 $(RUSTC) --edition 2021 -Z unstable-options --target $(RUST_TARGET_JSON) \
 	    --crate-type lib -C panic=abort -C opt-level=2 \
 	    --emit obj=$@ \
 	    --extern core=$(RUST_CORE_RLIB) \

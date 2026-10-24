@@ -28,18 +28,12 @@ CC="gcc -m32 -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -I$LIBC/
 nasm -f elf32 "$LIBC/crt0.asm" -o crt0.o
 $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
+$CC -c "$LIBC/string.c" -o string.o
 
-# Same rustc-flavor detection as ping-rs/build.sh and coreutils-rs/
-# build.sh - see either script's own comment for why this matters
-# (must match whichever toolchain build-sysroot.sh actually used for
-# the rlibs being linked against).
-if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
-    RUSTC_CMD="rustc +nightly"
-    BOOTSTRAP_ENV=""
-else
-    RUSTC_CMD="rustc"
-    BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
-fi
+# Use active rustc (stable 1.99.1 by default) with RUSTC_BOOTSTRAP=1 to match
+# the sysroot built by build-sysroot.sh.
+RUSTC_CMD="${RUSTC:-rustc}"
+BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
 
 # prog -> fixture name mapping, since "nslookup" -> "NSLOOKUP" (8
 # characters) is already at FAT32 8.3's exact 8-character name limit -
@@ -65,7 +59,7 @@ for prog in nslookup tftp udptest; do
         "$prog.rs"
 
     ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
-        -o "$prog.elf" crt0.o "${prog}_main.o" syscall.o stdlib.o \
+        -o "$prog.elf" crt0.o "${prog}_main.o" syscall.o string.o stdlib.o \
         "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
     cp "$prog.elf" "../../tools/fixtures/$fixture"

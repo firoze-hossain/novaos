@@ -46,27 +46,8 @@ TARGET_JSON="$TARGET.json"
 SYSROOT_LIB="sysroot/lib/rustlib/$TARGET/lib"
 mkdir -p "$SYSROOT_LIB"
 
-if ! command -v rustup >/dev/null 2>&1; then
-    echo "rustup not found - falling back to the RUSTC_BOOTSTRAP-based build..."
-    exec ./build-sysroot-bootstrap.sh
-fi
-
-echo "rustup found - using a nightly toolchain with cargo -Z build-std"
-echo "(this project's preferred path when available)..."
-
-if ! rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
-    echo "Installing a nightly toolchain via rustup..."
-    if ! rustup toolchain install nightly >/dev/null 2>&1; then
-        echo "  Could not install nightly (offline?) - falling back to" >&2
-        echo "  the RUSTC_BOOTSTRAP-based build..." >&2
-        exec ./build-sysroot-bootstrap.sh
-    fi
-fi
-
-if ! rustup component add rust-src --toolchain nightly >/dev/null 2>&1; then
-    echo "  Could not add the rust-src component to nightly - falling" >&2
-    echo "  back to the RUSTC_BOOTSTRAP-based build..." >&2
-    exec ./build-sysroot-bootstrap.sh
+if command -v rustup >/dev/null 2>&1; then
+    rustup component add rust-src >/dev/null 2>&1 || true
 fi
 
 # Reuses this project's own field-type detection logic (the correct
@@ -98,13 +79,13 @@ write_target_json_variant() {
 EOF
 }
 
-echo "Detecting nightly's expected target JSON field types..."
+echo "Detecting rustc's expected target JSON field types..."
 target_json_ok=false
 for pw in '"32"' '32'; do
     write_target_json_variant "$pw"
     probe_src="rust_target_probe.rs"
     echo 'pub fn x() {}' > "$probe_src"
-    probe_output=$(rustc +nightly -Z unstable-options --edition 2021 \
+    probe_output=$(env RUSTC_BOOTSTRAP=1 rustc -Z unstable-options --edition 2021 \
         --target "$TARGET_JSON" --crate-type lib --emit metadata \
         -o /dev/null "$probe_src" 2>&1) || true
     rm -f "$probe_src"
@@ -115,7 +96,7 @@ for pw in '"32"' '32'; do
 done
 
 if [ "$target_json_ok" != true ]; then
-    echo "  Could not find a working target JSON with nightly - falling" >&2
+    echo "  Could not find a working target JSON with rustc - falling" >&2
     echo "  back to the RUSTC_BOOTSTRAP-based build..." >&2
     exec ./build-sysroot-bootstrap.sh
 fi
@@ -165,7 +146,7 @@ rm -rf "$NIGHTLY_PROJECT_DIR/target"
 echo "Building core + compiler_builtins via cargo -Z build-std (this can"
 echo "take a minute the first time)..."
 (cd "$NIGHTLY_PROJECT_DIR" && \
-    cargo +nightly build -Z build-std=core,compiler_builtins -Z json-target-spec \
+    env RUSTC_BOOTSTRAP=1 cargo build -Z build-std=core,compiler_builtins -Z json-target-spec \
     -Z embed-metadata=yes \
     --target "../$TARGET_JSON" --release 2>&1)
 

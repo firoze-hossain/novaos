@@ -22,18 +22,13 @@ CC="gcc -m32 -ffreestanding -fno-stack-protector -fno-pie -Wall -Wextra -I$LIBC/
 nasm -f elf32 "$LIBC/crt0.asm" -o crt0.o
 $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
+$CC -c "$LIBC/string.c" -o string.o
 
 echo "Compiling wm.rs (Phase 70 - a real, interactive ring-3 window manager)..."
-# Same rustc-flavor detection as ping-rs/build.sh and coreutils-rs/
-# build.sh - must match whichever toolchain build-sysroot.sh actually
-# used for the rlibs being linked against.
-if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
-    RUSTC_CMD="rustc +nightly"
-    BOOTSTRAP_ENV=""
-else
-    RUSTC_CMD="rustc"
-    BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
-fi
+# Use active rustc (stable 1.99.1 by default) with RUSTC_BOOTSTRAP=1 to match
+# the sysroot built by build-sysroot.sh.
+RUSTC_CMD="${RUSTC:-rustc}"
+BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
 
 env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \
     --target "$RUST_SYSROOT/i686-novaos.json" \
@@ -45,7 +40,7 @@ env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \
     wm.rs
 
 ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
-    -o wm.elf crt0.o wm_main.o syscall.o stdlib.o \
+    -o wm.elf crt0.o wm_main.o syscall.o string.o stdlib.o \
     "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
 cp wm.elf ../../tools/fixtures/WM.ELF

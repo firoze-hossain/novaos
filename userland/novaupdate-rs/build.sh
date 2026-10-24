@@ -19,13 +19,10 @@ $CC -c "$LIBC/syscall.c" -o syscall.o
 $CC -c "$LIBC/stdlib.c" -o stdlib.o
 $CC -c "$LIBC/string.c" -o string.o
 
-if command -v rustup >/dev/null 2>&1 && rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
-    RUSTC_CMD="rustc +nightly"
-    BOOTSTRAP_ENV=""
-else
-    RUSTC_CMD="rustc"
-    BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
-fi
+# Use active rustc (stable 1.99.1 by default) with RUSTC_BOOTSTRAP=1 to match
+# the sysroot built by build-sysroot.sh.
+RUSTC_CMD="${RUSTC:-rustc}"
+BOOTSTRAP_ENV="RUSTC_BOOTSTRAP=1"
 
 echo "Compiling novaupdate.rs (NovaOS Dual-Source Autonomous Update Service in Rust)..."
 env $BOOTSTRAP_ENV $RUSTC_CMD --edition 2021 -Z unstable-options \

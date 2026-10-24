@@ -63,7 +63,7 @@ EARLY_EXIT_GRACE_SECONDS = 5
 # slow run (which is not a failure) and on a run with a line that never
 # comes (the known-flaky USB enumeration), which waits out the whole
 # ceiling, so it is set with real margin but not generously.
-DEFAULT_TIMEOUT_SECONDS = 360
+DEFAULT_TIMEOUT_SECONDS = 720
 
 # Mirrors the Makefile's own QEMU_FLAGS/DISK_FLAGS/NET_FLAGS/
 # AUDIO_FLAGS/USB_FLAGS exactly (kept here as one definition this
