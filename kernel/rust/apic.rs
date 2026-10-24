@@ -727,6 +727,20 @@ unsafe fn smp_boot_aps(smp: &crate::acpi::SmpDiscovery, bsp_apic_id: u8, lapic_b
         if acked {
             brought_up += 1;
             log_ap_ack(apic_id, next_index);
+
+            // Phase 95: ensure this AP has fully registered in CPU_INDEX_TABLE
+            // before the BSP attempts to boot any subsequent AP or proceed to
+            // scheduler validation.
+            let mut reg_wait = 0u32;
+            while reg_wait < AP_ACK_WAIT_ITERATIONS {
+                let table = CPU_INDEX_TABLE.lock();
+                if (next_index as usize) < SCHED_MAX_CPUS && table[next_index as usize].is_some() {
+                    break;
+                }
+                drop(table);
+                busy_wait(100);
+                reg_wait += 100;
+            }
         }
         next_index += 1;
     }
@@ -734,13 +748,11 @@ unsafe fn smp_boot_aps(smp: &crate::acpi::SmpDiscovery, bsp_apic_id: u8, lapic_b
     brought_up
 }
 
-/// Phase 57: mirrors kernel/include/smp.h's identically-named/valued C
-/// constant exactly - see that header's own comment for the FFI-
-/// boundary-constant-duplication convention this project follows
-/// instead of a shared bridge header. Bounds CPU_INDEX_TABLE below and
-/// every per-CPU array kernel/task/scheduler.c and
+/// Phase 57 / Phase 95: mirrors kernel/include/smp.h's identically-named/valued C
+/// constant exactly - expanded from 4 to 8 for Phase 95's SMP scaling validation.
+/// Bounds CPU_INDEX_TABLE below and every per-CPU array kernel/task/scheduler.c and
 /// kernel/arch/x86/cpu/tss.c keep.
-const SCHED_MAX_CPUS: usize = 4;
+const SCHED_MAX_CPUS: usize = 8;
 
 /// Phase 57: maps this kernel's own small, dense "scheduler CPU index"
 /// (0..SCHED_MAX_CPUS) to each registered CPU's real hardware identity
@@ -856,6 +868,34 @@ pub extern "C" fn rust_smp_current_cpu_index() -> u8 {
         }
     }
     0xFF
+}
+
+/// Phase 95: SMP scaling validation self-test and telemetry.
+/// Confirms Local APIC discovery, unique CPU index mappings without collisions,
+/// and that all online CPU slots are properly bounded within SCHED_MAX_CPUS.
+#[no_mangle]
+pub extern "C" fn rust_smp_scaling_validate() -> i32 {
+    let table = CPU_INDEX_TABLE.lock();
+    let mut online_count = 0u32;
+    for (i, slot) in table.iter().enumerate() {
+        if let Some(apic_id) = *slot {
+            online_count += 1;
+            if i >= SCHED_MAX_CPUS {
+                return -1;
+            }
+            for (j, other_slot) in table.iter().enumerate() {
+                if i != j && *other_slot == Some(apic_id) {
+                    return -2;
+                }
+            }
+        }
+    }
+
+    if online_count == 0 {
+        return -3;
+    }
+
+    online_count as i32
 }
 
 /// CPUID.1:EDX bit 9 - "this CPU has an on-die Local APIC at all,"

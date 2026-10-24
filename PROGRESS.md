@@ -11290,6 +11290,46 @@ From Month 5 ("Driver breadth & performance") of the NovaOS Build Plan: replaced
    - Sheet 2 (Kernel Track): Row 22 (Per-driver locking pass) marked as "Done".
    - Sheet 1 (Summary): Month 5 at 4/5 (80%), Kernel Track at 21/26 (80.77%), Overall at 21/56 (37.50%).
 
+## Phase 95 - SMP Scaling Validation Beyond Two CPUs (Month 5 Complete)
+
+Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation beyond the original 2-CPU default configuration. Real server and workstation hardware often features 4, 8, or more cores; this phase confirms that the kernel, scheduler, APIC discovery, GDT/TSS structures, per-driver locks, and process queues scale cleanly and correctly under higher CPU counts without deadlock, memory corruption, or lock starvation.
+
+1. **Expansion of `SCHED_MAX_CPUS` from 4 to 8**:
+   - `kernel/include/smp.h`: Expanded `#define SCHED_MAX_CPUS 8` (previously 4).
+   - `kernel/rust/apic.rs`: Updated `const SCHED_MAX_CPUS: usize = 8;`.
+   - `kernel/arch/x86/cpu/gdt.c` & `gdt.h`: Automatically scales GDT entries `(5 + SCHED_MAX_CPUS) = 13` entries with dedicated TSS selectors `(0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60)` for each CPU core without selector collisions.
+   - `kernel/arch/x86/cpu/tss.c`: Per-CPU `tss[SCHED_MAX_CPUS]` entries initialized and loaded via `ltr`.
+   - `kernel/task/scheduler.c`: Per-CPU running process slots `current[SCHED_MAX_CPUS]` and `startup_esp[SCHED_MAX_CPUS]` accommodate up to 8 concurrent cores.
+   - `kernel/task/rlimit.c`: Per-CPU quota accounting and limit enforcement iterate over all 8 slots, broadcasting limit ticks across APs via Local APIC shorthand `all excluding self`.
+
+2. **AP Bring-up & Multi-Core Scheduler Logging**:
+   - `kernel/rust/apic.rs`: Synchronized AP boot loop in `smp_boot_aps()` to ensure each AP has fully registered in `CPU_INDEX_TABLE` before the BSP launches the next AP, preventing race conditions during AP bring-up.
+   - `kernel/task/scheduler.c`: In `scheduler_ap_join()`, preserved the exact `Second CPU (cpu 1)` log expected by automated regression assertions, while higher APs (CPUs 2..7) log `SMP AP (cpu %d)`.
+
+3. **Lock Contention Elimination Under SMP**:
+   - Identified and resolved a critical SMP lock contention hazard: idle APs (or APs whose processes have exited) spinning in `scheduler_yield()` or `scheduler_ap_join()` were continuously acquiring and releasing `scheduler_lock` while scanning all process table entries, severely starving the BSP and active cores under QEMU software emulation (TCG).
+   - Implemented `scheduler_has_ready_work(for_ap)` in `kernel/task/scheduler.c`: checks for `PROCESS_READY && off_cpu` candidate processes without acquiring `scheduler_lock`.
+   - If no ready work exists, idle APs back off using a pause loop without touching `scheduler_lock`.
+   - When a process terminates in `process_exit_current()` (`kernel/task/process.c`), the idle loop yields only when ready work is available, eliminating lock contention.
+
+4. **SMP Scaling Self-Test & Telemetry**:
+   - Added `rust_smp_scaling_validate()` in `kernel/rust/apic.rs`:
+     - Inspects `CPU_INDEX_TABLE` to verify Local APIC discovery, unique APIC ID mappings, absence of slot collisions, and that all active cores reside within bounds `< SCHED_MAX_CPUS`.
+   - Boot-time telemetry wired into `kernel/init/main.c`:
+     `[ OK ] SMP scaling: validated on %d core(s) (BSP + %d APs online, max capacity %d cores)`.
+   - Boot assertion added to `tools/python/test_runner.py`: `smp_scaling_validated`.
+
+5. **Test Configuration & Multi-Core Verification**:
+   - `tools/python/test_runner.py`: Added `--smp N` command-line argument and `$SMP` environment variable support to parameterize QEMU `-smp N`.
+   - `Makefile`: Added `SMP ?= 2` configuration, passed `--smp $(SMP)` to `make test`, and added dedicated `make test-smp4` target.
+   - Dual-mode verification:
+     - `make test` (2 CPUs default): 215 of 215 assertions pass (exit code 0).
+     - `make test-smp4` (4 CPUs SMP): 215 of 215 assertions pass (exit code 0), verifying quad-core execution across all drivers, filesystems, and userland tests with 0 failures and 0 panics.
+
+6. **Build Plan Tracking (`NovaOS_Build_Plan.xlsx`)**:
+   - Sheet 2 (Kernel Track): Row 23 (SMP scaling validation) marked as "Done".
+   - Sheet 1 (Summary): Month 5 at 5/5 (100% complete!), Kernel Track at 22/26 (84.62%), Overall Project at 22/56 (39.29%).
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

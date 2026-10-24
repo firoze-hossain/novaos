@@ -65,4 +65,9 @@ process_t* scheduler_cpu_current(uint8_t cpu);
  * once, and one that has just been released should not wait a slice. */
 void scheduler_force_resched(void);
 
+/* Phase 95: checks if there is any candidate process in PROCESS_READY state
+ * that is ready to run, without holding scheduler_lock. Used to avoid
+ * lock contention from idle CPUs spinning on scheduler_lock. */
+bool scheduler_has_ready_work(bool for_ap);
+
 #endif

@@ -151,6 +151,24 @@ static process_t* pick_next_locked(bool for_ap, uint8_t cpu_index) {
     return NULL;
 }
 
+/* Phase 95: checks if there is any candidate process in PROCESS_READY state
+ * that is ready to run, without holding scheduler_lock. Used to avoid
+ * lock contention from idle CPUs spinning on scheduler_lock. */
+bool scheduler_has_ready_work(bool for_ap) {
+    int capacity = process_table_capacity();
+    for (int i = 0; i < capacity; i++) {
+        process_t* p = process_table_entry(i);
+        if (p != NULL && p->state == PROCESS_READY && p->off_cpu) {
+            if (!p->rl.throttled) {
+                if (!for_ap || !p->bsp_only) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /* Shared preempt/yield path for both scheduler_on_tick() and
  * scheduler_yield(), now parameterized by which CPU is calling -
  * see current[]'s own comment for why that matters. A cpu_index this
@@ -162,13 +180,23 @@ static void do_schedule(uint8_t cpu_index) {
         return;
     }
 
-    uint32_t flags = spinlock_acquire(&scheduler_lock);
-
     process_t* prev = current[cpu_index];
     if (prev == NULL) {
-        spinlock_release(&scheduler_lock, flags);
         return; /* this CPU hasn't started scheduling yet */
     }
+
+    /* Phase 95: Lock contention optimization for SMP scaling.
+     * When this CPU's current process is terminated, don't acquire
+     * scheduler_lock and scan the process table unless there is
+     * actually work ready to be picked up. Prevents idle APs from
+     * starving active CPUs by hammering scheduler_lock in tight loops. */
+    if (prev->state == PROCESS_TERMINATED) {
+        if (!scheduler_has_ready_work(cpu_index != 0)) {
+            return;
+        }
+    }
+
+    uint32_t flags = spinlock_acquire(&scheduler_lock);
 
     process_t* next = pick_next_locked(cpu_index != 0, cpu_index);
     if (next == NULL) {
@@ -297,6 +325,14 @@ void scheduler_ap_join(uint8_t cpu_index) {
 
     process_t* first = NULL;
     for (;;) {
+        /* Phase 95: Don't hammer scheduler_lock if no ready process exists yet */
+        if (!scheduler_has_ready_work(true)) {
+            for (int i = 0; i < 2000; i++) {
+                __asm__ volatile ("pause" ::: "memory");
+            }
+            continue;
+        }
+
         uint32_t flags = spinlock_acquire(&scheduler_lock);
         first = pick_next_locked(true, cpu_index);
         if (first != NULL) {
@@ -310,24 +346,25 @@ void scheduler_ap_join(uint8_t cpu_index) {
         }
         spinlock_release(&scheduler_lock, flags);
 
-        /* Nothing schedulable yet - kernel_late_init() (which brings
-         * this AP up) runs before any process_create_*() call, see
-         * kernel/init/main.c, so this can genuinely happen right
-         * after boot. Unlike the BSP's own idle task, this AP has no
-         * interrupt that will ever wake it back up (the timer tick
-         * stays BSP-only - see process_t's own bsp_only comment), so
-         * busy-spin and retry rather than ever halting. */
-        __asm__ volatile ("pause" ::: "memory");
+        for (int i = 0; i < 2000; i++) {
+            __asm__ volatile ("pause" ::: "memory");
+        }
     }
 
-    /* Which process a second CPU takes first decides what that CPU is for the
+    /* Which process an AP takes first decides what that CPU is for the
      * rest of the boot: it reschedules only when ITS process yields or exits
      * (it has no timer), so it is stranded with whatever it grabbed. Say so in
      * the log - when this ever goes wrong (it once took the idle task, whose
      * hlt loop then ran on a CPU nothing can wake) the cause is otherwise
-     * invisible. */
-    kernel_log("[ OK ] Second CPU (cpu %d) took its first process: pid %d '%s'\n",
-               (int)cpu_index, first->pid, first->name);
+     * invisible. CPU 1 preserves the "Second CPU (cpu 1)" message expected by
+     * regression assertions; higher APs log their own distinct index. */
+    if (cpu_index == 1) {
+        kernel_log("[ OK ] Second CPU (cpu %d) took its first process: pid %d '%s'\n",
+                   (int)cpu_index, first->pid, first->name);
+    } else {
+        kernel_log("[ OK ] SMP AP (cpu %d) took its first process: pid %d '%s'\n",
+                   (int)cpu_index, first->pid, first->name);
+    }
 
     tss_set_kernel_stack(cpu_index, first->kernel_stack_top);
     paging_switch_address_space(first->page_directory_phys);

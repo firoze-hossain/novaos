@@ -63,7 +63,9 @@ ASMFLAGS = -f elf32 -g
 # on Intel Mac, Hyper-V disabled on Windows) and can make even a plain
 # boot take tens of seconds or appear to hang. NovaOS doesn't use SMM,
 # so turning it off is free.
-QEMU_FLAGS = -M pc,smm=off -m 512M -smp 2 -no-reboot
+# Phase 95: SMP core count configuration (default 2, supports up to 8).
+SMP ?= 2
+QEMU_FLAGS = -M pc,smm=off -m 512M -smp $(SMP) -no-reboot
 
 # Test FAT32 disk image, built with mtools (mformat/mcopy) so it works
 # identically on Windows/WSL2, Linux, and macOS without needing loop-
@@ -374,7 +376,12 @@ TEST_LOG = build/test-serial.log
 
 test: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
-	    --iso $(ISO_FILE) --disk $(DISK_IMG)
+	    --iso $(ISO_FILE) --disk $(DISK_IMG) --smp $(SMP)
+
+# Phase 95: Dedicated 4-core SMP scaling validation test target.
+test-smp4: $(ISO_FILE) $(DISK_IMG)
+	@python3 tools/python/test_runner.py --boot --timeout 600 \
+	    --iso $(ISO_FILE) --disk $(DISK_IMG) --smp 4
 
 # Phase 73: the host-side libc tests - the real userland/libc sources run
 # against a fake kernel as an ordinary 32-bit Linux program, with

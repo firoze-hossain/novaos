@@ -983,7 +983,9 @@ void process_exit_current(int exit_code) {
      * of duplicated differently. */
     for (;;) {
         scheduler_yield();
-        __asm__ volatile ("pause" ::: "memory");
+        for (int i = 0; i < 2000; i++) {
+            __asm__ volatile ("pause" ::: "memory");
+        }
     }
 }
 

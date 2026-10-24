@@ -278,6 +278,20 @@ void kernel_late_init(void) {
                        "rust_smp_init() for what each negative code "
                        "means)\n", aps_online);
         }
+
+        /* Phase 95: SMP scaling validation telemetry and verification.
+         * Confirms Local APIC discovery, CPU index mappings, per-CPU TSS
+         * entries, and scheduler slots are sound across all active cores. */
+        {
+            extern int rust_smp_scaling_validate(void);
+            int valid_cpus = rust_smp_scaling_validate();
+            if (valid_cpus > 0) {
+                kernel_log("[ OK ] SMP scaling: validated on %d core(s) (BSP + %d APs online, max capacity %d cores)\n",
+                           valid_cpus, valid_cpus - 1, SCHED_MAX_CPUS);
+            } else {
+                kernel_log("[WARN] SMP scaling: validation failed (code %d)\n", valid_cpus);
+            }
+        }
     }
 
     /* Phase 77: timer/VFS/network are now self-registered too (see

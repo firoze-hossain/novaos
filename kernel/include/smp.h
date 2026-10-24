@@ -3,15 +3,12 @@
 
 #include "types.h"
 
-/* Phase 57: how many CPUs this kernel's own per-CPU scheduler/TSS
+/* Phase 57 / Phase 95: how many CPUs this kernel's own per-CPU scheduler/TSS
  * arrays (kernel/task/scheduler.c's `current[]`, kernel/arch/x86/cpu/
- * tss.c's `tss[]`) are sized for - deliberately small, matching Phase
- * 56's own "-smp 2" test default (see the Makefile's own comment) and
- * this project's established "kept deliberately small, headroom not
- * exhaustiveness" philosophy (the same reasoning Phase 56's own
- * INIT_TO_SIPI_WAIT_ITERATIONS-style constants used). A little
- * headroom over the tested default (2) is kept for manual testing at
- * a slightly higher `-smp N`, not for arbitrary real hardware.
+ * tss.c's `tss[]`) are sized for - expanded from 4 to 8 in Phase 95 for
+ * SMP scaling validation beyond the 2-CPU test default. Supports up to 8
+ * logical cores (1 BSP + 7 APs) under QEMU `-smp 4` or `-smp 8` and real
+ * multi-core hardware.
  *
  * kernel/rust/apic.rs mirrors this exact value under the same name
  * (SCHED_MAX_CPUS) - duplicated rather than shared via a header, this
@@ -27,7 +24,7 @@
  * further APs once this many are already registered, and
  * rust_smp_current_cpu_index() below fails safe (0xFF) for anything
  * that slips through - it just never joins the scheduler. */
-#define SCHED_MAX_CPUS 4
+#define SCHED_MAX_CPUS 8
 
 /* Returns a small, stable 0-based index for whichever CPU calls this
  * (0 = the BSP, 1.. = each AP in bring-up order) - implemented in

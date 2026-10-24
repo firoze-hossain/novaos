@@ -382,6 +382,10 @@ ASSERTIONS: list[Assertion] = [
               "executing compiled Rust - this line is logged from "
               "inside rust_ap_main() itself, on that second core, not "
               "inferred by the boot CPU"),
+    Assertion("smp_scaling_validated",
+              r"\[ OK \] SMP scaling: validated on [1-9]\d* core\(s\) \(BSP \+ \d+ APs online, max capacity 8 cores\)",
+              "Phase 95: SMP scaling validation verified Local APIC discovery, unique CPU index "
+              "mappings without collisions, and scheduler slots across all active cores"),
     Assertion("virtio_net_selftest",
               r"Kernel-side Rust virtio-net self-test.*layout=pass",
               "the virtio-net virtqueue layout math and RX buffer post/"
@@ -890,6 +894,7 @@ def boot_and_capture(
     virtio_disk_path: Path,
     nvme_disk_path: Path = DEFAULT_NVME_DISK,
     virgl: bool = False,
+    smp: int = 2,
 ) -> None:
     """Boots NovaOS headlessly under QEMU, capturing serial output to
     `log_path` - the same invocation shape as the Makefile's own
@@ -920,9 +925,16 @@ def boot_and_capture(
         "-device", "nvme,drive=nvme0,serial=novanvme0",
     ]
 
+    base_flags = list(QEMU_BASE_FLAGS)
+    if smp != 2:
+        for idx in range(len(base_flags) - 1):
+            if base_flags[idx] == "-smp":
+                base_flags[idx + 1] = str(smp)
+                break
+
     cmd = (
         [qemu_bin]
-        + QEMU_BASE_FLAGS
+        + base_flags
         + ["-boot", "order=d", "-drive",
            f"file={working_disk},format=raw,if=ide,index=0,media=disk"]
         + NET_FLAGS
@@ -1103,6 +1115,8 @@ def main() -> int:
                               "image (created fresh each run; default: "
                               "%(default)s)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--smp", type=int, default=int(os.environ.get("SMP", 2)),
+                         help="number of CPUs for QEMU -smp N (default: 2 or $SMP)")
     parser.add_argument("--virgl", action="store_true",
                          help="Phase 82: boot against a virgl-capable "
                               "virtio-gpu-gl-pci with a GL display and also "
@@ -1118,7 +1132,7 @@ def main() -> int:
     if args.boot:
         boot_and_capture(args.iso, args.disk, args.log, args.timeout,
                           args.virtio_disk, nvme_disk_path=args.nvme_disk,
-                          virgl=args.virgl)
+                          virgl=args.virgl, smp=args.smp)
 
     ok = run_checks(args.log)
     return 0 if ok else 1
