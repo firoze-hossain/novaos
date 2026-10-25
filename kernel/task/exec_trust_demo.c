@@ -429,6 +429,18 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: TERM.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 3 - Core desktop apps: EDIT.ELF --selftest.
+     * Proves multi-line text buffer, line splitting/merging, cursor navigation,
+     * typography scaling, file loading/saving roundtrip, and toolbar interaction. */
+    static const char* const edit_all[] = {"EDIT.ELF", "--selftest"};
+    int pid_edit = sys_exec_trusted("EDIT.ELF", (char**)edit_all, 2);
+    int code_edit = (pid_edit >= 0) ? sys_wait(pid_edit) : -1;
+    sys_write(pid_edit >= 0 && code_edit == 0
+                  ? "[sandbox] PASS: EDIT.ELF --selftest - text buffer, cursor navigation, "
+                    "font rendering, and file IO roundtrip all behaved correctly.\n"
+                  : "[sandbox] FAIL: EDIT.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

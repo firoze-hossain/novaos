@@ -302,6 +302,11 @@ ASSERTIONS: list[Assertion] = [
               r"wrapper and shell output dispatch all behaved correctly",
               "Month 3 Core desktop apps: userland/term-rs/term.rs - "
               "in-window terminal emulator rendering shell output and forwarding input"),
+    Assertion("edit_selftest_passed",
+              r"sandbox. PASS: EDIT\.ELF --selftest - text buffer, cursor navigation, "
+              r"font rendering, and file IO roundtrip all behaved correctly",
+              "Month 3 Core desktop apps: userland/edit-rs/editor.rs - "
+              "graphical text editor with multi-line buffer, font scaling, toolbar, and VFS file operations"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

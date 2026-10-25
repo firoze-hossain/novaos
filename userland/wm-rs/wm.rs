@@ -835,6 +835,8 @@ impl Wm {
                     draw_term_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                } else if w.label == 3 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_editor_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if (w.label == 4 || w.label == 5) && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 }
@@ -1325,6 +1327,113 @@ fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette:
     let bar_h = client.h - hdr_h - 4;
     s.fill_rect(Rect::new(bar_x, client.y + hdr_h + 2, 4, bar_h), Color::rgba(255, 255, 255, 12));
     s.fill_rect(Rect::new(bar_x, client.y + hdr_h + 10, 4, 30.min(bar_h)), Color::rgba(255, 255, 255, 50));
+}
+
+/// Renders the graphical text editor client view inside Window 2 / Editor - Scratchpad.
+fn draw_editor_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette: &ThemePalette) {
+    let font_mono = Font::mono();
+    let font_small = Font::small();
+
+    // 1. Fill main background
+    let bg_color = Color::rgb(13, 17, 23); // #0D1117
+    s.fill_rect(client, bg_color);
+
+    // 2. Toolbar (height 24px)
+    let tb_h = 24;
+    let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
+    s.fill_rect(tb_rect, Color::rgb(22, 27, 34)); // #161B22
+    s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), Color::rgb(48, 54, 61));
+
+    // Toolbar buttons: [New] [Open] [Save] [Cut] [Copy] [Paste] [Font: Mono]
+    let buttons: [(&str, i32); 7] = [
+        ("New", 36),
+        ("Open", 42),
+        ("Save", 42),
+        ("Cut", 36),
+        ("Copy", 42),
+        ("Paste", 46),
+        ("Font: Mono", 84),
+    ];
+
+    let mut bx = client.x + 6;
+    for (lbl, bw) in &buttons {
+        if bx + bw > client.right() - 6 {
+            break;
+        }
+        let b_rect = Rect::new(bx, client.y + 3, *bw, tb_h - 6);
+        s.fill_rect(b_rect, Color::rgb(33, 38, 45));
+        s.fill_rect(Rect::new(b_rect.x, b_rect.y, b_rect.w, 1), Color::rgb(56, 68, 77));
+        s.fill_rect(Rect::new(b_rect.x, b_rect.bottom() - 1, b_rect.w, 1), Color::rgb(56, 68, 77));
+        s.fill_rect(Rect::new(b_rect.x, b_rect.y, 1, b_rect.h), Color::rgb(56, 68, 77));
+        s.fill_rect(Rect::new(b_rect.right() - 1, b_rect.y, 1, b_rect.h), Color::rgb(56, 68, 77));
+
+        let tx = b_rect.x + (b_rect.w - (lbl.len() as i32 * 8)) / 2;
+        let ty = b_rect.y + (b_rect.h - 8) / 2;
+        ui::font::draw_text_font(s, tx, ty, lbl, Color::rgb(240, 246, 252), &font_small);
+        bx += bw + 6;
+    }
+
+    // 3. Status Bar at bottom
+    let sb_h = 18;
+    let sb_y = client.bottom() - sb_h;
+    if sb_y > client.y + tb_h + 30 {
+        let sb_rect = Rect::new(client.x, sb_y, client.w, sb_h);
+        s.fill_rect(sb_rect, Color::rgb(22, 27, 34));
+        s.fill_rect(Rect::new(client.x, sb_y, client.w, 1), Color::rgb(48, 54, 61));
+        ui::font::draw_text_font(s, client.x + 8, sb_y + 3, "HELLO.TXT *", Color::rgb(240, 246, 252), &font_small);
+        let coord_str = "Ln 2, Col 18 | UTF-8 | 8x16 Mono";
+        let c_sz = font_small.measure_str(coord_str);
+        ui::font::draw_text_font(s, client.right() - c_sz.w - 10, sb_y + 3, coord_str, Color::rgb(88, 166, 255), &font_small);
+    }
+
+    // 4. Gutter & Document Canvas
+    let gutter_w = 38;
+    let doc_y = client.y + tb_h;
+    let doc_h = (sb_y - doc_y).max(0);
+
+    // Gutter background & border
+    s.fill_rect(Rect::new(client.x, doc_y, gutter_w, doc_h), Color::rgb(18, 22, 28));
+    s.fill_rect(Rect::new(client.x + gutter_w - 1, doc_y, 1, doc_h), Color::rgb(48, 54, 61));
+
+    let line_h = 16;
+    let text_x = client.x + gutter_w + 6;
+
+    // Line 1: // NovaOS Scratchpad Editor
+    let y1 = doc_y + 6;
+    if y1 + line_h < sb_y {
+        ui::font::draw_text_font(s, client.x + 16, y1, "1", Color::rgb(110, 118, 129), &font_small);
+        ui::font::draw_text_font(s, text_x, y1, "// NovaOS Scratchpad Editor", Color::rgb(139, 148, 158), &font_mono);
+    }
+
+    // Line 2: Active line with highlight
+    let y2 = y1 + line_h;
+    if y2 + line_h < sb_y {
+        s.fill_rect(Rect::new(client.x + gutter_w, y2, client.w - gutter_w, line_h), Color::rgb(22, 27, 34));
+        ui::font::draw_text_font(s, client.x + 16, y2, "2", Color::rgb(240, 246, 252), &font_small);
+
+        // fn main() {
+        ui::font::draw_text_font(s, text_x, y2, "fn", Color::rgb(255, 123, 114), &font_mono);
+        ui::font::draw_text_font(s, text_x + 20, y2, "main() {", Color::rgb(240, 246, 252), &font_mono);
+
+        // Cursor at column 10
+        s.fill_rect(Rect::new(text_x + 88, y2 + 1, 2, line_h - 2), Color::rgb(88, 166, 255));
+    }
+
+    // Line 3: let msg = "Hello from NovaOS!";
+    let y3 = y2 + line_h;
+    if y3 + line_h < sb_y {
+        ui::font::draw_text_font(s, client.x + 16, y3, "3", Color::rgb(110, 118, 129), &font_small);
+        ui::font::draw_text_font(s, text_x + 16, y3, "let", Color::rgb(255, 123, 114), &font_mono);
+        ui::font::draw_text_font(s, text_x + 44, y3, "msg = ", Color::rgb(240, 246, 252), &font_mono);
+        ui::font::draw_text_font(s, text_x + 92, y3, "\"Hello from NovaOS!\";", Color::rgb(126, 231, 135), &font_mono);
+    }
+
+    // Line 4: }
+    let y4 = y3 + line_h;
+    if y4 + line_h < sb_y {
+        ui::font::draw_text_font(s, client.x + 16, y4, "4", Color::rgb(110, 118, 129), &font_small);
+        ui::font::draw_text_font(s, text_x, y4, "}", Color::rgb(240, 246, 252), &font_mono);
+    }
 }
 
 fn mouse(dx: i32, dy: i32, left: bool) -> ffi::MouseState {
