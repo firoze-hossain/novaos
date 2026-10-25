@@ -292,6 +292,11 @@ ASSERTIONS: list[Assertion] = [
               r"move, and delete all behaved correctly",
               "Month 3 Core desktop apps: userland/files-rs/files.rs - browse VFS files, "
               "open preview, move/rename, and delete via mouse operations"),
+    Assertion("settings_selftest_passed",
+              r"sandbox. PASS: SETTINGS\.ELF --selftest - settings shell "
+              r"and plugin panels all behaved correctly",
+              "Month 3 Core desktop apps: userland/settings-rs/settings.rs - "
+              "modular plugin-panel shell reading/writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

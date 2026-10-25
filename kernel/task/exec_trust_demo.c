@@ -404,6 +404,18 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: FILES.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 3 - Core desktop apps: SETTINGS.ELF --selftest.
+     * Proves modular plugin-panel settings architecture, reading and
+     * writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG from ring 3. */
+    static const char* const settings_all[] = {"SETTINGS.ELF", "--selftest"};
+    int pid_settings = sys_exec_trusted("SETTINGS.ELF", (char**)settings_all, 2);
+    int code_settings = (pid_settings >= 0) ? sys_wait(pid_settings) : -1;
+    sys_write(pid_settings >= 0 && code_settings == 0
+                  ? "[sandbox] PASS: SETTINGS.ELF --selftest - settings shell "
+                    "and plugin panels all behaved correctly.\n"
+                  : "[sandbox] FAIL: SETTINGS.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

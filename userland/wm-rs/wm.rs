@@ -833,6 +833,8 @@ impl Wm {
                 // Window 1 ("Files - Root Directory"): render client file manager view on high-res
                 if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                } else if (w.label == 4 || w.label == 5) && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 }
             }
 
@@ -873,6 +875,7 @@ impl Wm {
                     1 => "Console - NovaOS Shell",
                     2 => "Files - Root Directory",
                     3 => "Editor - Scratchpad",
+                    5 => "Settings - Control Panel",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -1145,6 +1148,97 @@ fn draw_files_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette:
         s.fill_rect(sb_rect, palette.surface_raised);
         s.fill_rect(Rect::new(client.x, sb_rect.y, client.w, 1), palette.border_subtle);
         ui::font::draw_text_font(s, client.x + 8, sb_rect.y + 2, "4 files | 5.8 KB", palette.text_muted, &f_small);
+    }
+}
+
+/// Renders a graphical settings control panel view inside the client area of Window 4 / Settings.
+fn draw_settings_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
+    let f_small = Font::small();
+    let font = Font::regular();
+
+    // 1. Sidebar with category badge tabs (w = 84)
+    let sb_w = 84;
+    let sb_rect = Rect::new(client.x, client.y, sb_w, client.h);
+    s.fill_rect(sb_rect, palette.surface_raised);
+    s.fill_rect(Rect::new(sb_rect.right() - 1, sb_rect.y, 1, sb_rect.h), palette.border_subtle);
+
+    let tabs: &[(&str, &str)] = &[
+        ("SYS",  "System"),
+        ("USR",  "Users"),
+        ("SVC",  "Services"),
+        ("FW",   "Firewall"),
+        ("DISP", "Display"),
+    ];
+
+    let mut ty = client.y + 6;
+    let tab_h = 22;
+    for (i, &(badge, name)) in tabs.iter().enumerate() {
+        if ty + tab_h > client.bottom() - 18 {
+            break;
+        }
+        let t_rect = Rect::new(client.x + 4, ty, sb_w - 8, tab_h);
+        if i == 0 {
+            ui::draw::draw_rounded_rect(s, t_rect, 2, palette.accent_primary.darken(35));
+            ui::draw::draw_rect_outline(s, t_rect, 1, palette.border_focused);
+            s.fill_rect(Rect::new(t_rect.x + 1, t_rect.y + 3, 2, t_rect.h - 6), palette.accent_primary);
+        }
+
+        let b_sz = f_small.measure_str(badge);
+        let b_rect = Rect::new(t_rect.x + 4, t_rect.y + 3, b_sz.w + 4, t_rect.h - 6);
+        let b_bg = if i == 0 { palette.accent_primary } else { palette.surface_sunken };
+        ui::draw::draw_rounded_rect(s, b_rect, 2, b_bg);
+        ui::font::draw_text_font(s, b_rect.x + 2, b_rect.y + 2, badge, Color::WHITE, &f_small);
+
+        let col = if i == 0 { Color::WHITE } else { palette.text_secondary };
+        ui::font::draw_text_font(s, b_rect.right() + 4, t_rect.y + 4, name, col, &f_small);
+
+        ty += tab_h + 2;
+    }
+
+    // 2. Top Header inside content area
+    let cx = client.x + sb_w;
+    let cw = client.w - sb_w;
+    let hdr_h = 24;
+    let hdr_rect = Rect::new(cx, client.y, cw, hdr_h);
+    s.fill_rect(hdr_rect, palette.surface_raised);
+    s.fill_rect(Rect::new(cx, hdr_rect.bottom() - 1, cw, 1), palette.border_subtle);
+
+    ui::font::draw_text_font(s, cx + 10, client.y + 4, "System & Identity", palette.text_primary, &font);
+
+    // Save button
+    let save_rect = Rect::new(client.right() - 48, client.y + 3, 42, 18);
+    ui::draw::draw_rounded_rect(s, save_rect, 2, palette.accent_primary);
+    let s_sz = f_small.measure_str("Save");
+    ui::font::draw_text_font(s, save_rect.x + (save_rect.w - s_sz.w)/2, save_rect.y + 2, "Save", Color::WHITE, &f_small);
+
+    // 3. Settings Fields
+    let fx = cx + 12;
+    let mut fy = client.y + hdr_h + 8;
+
+    ui::font::draw_text_font(s, fx, fy, "Hostname:", palette.text_muted, &f_small);
+    let h_card = Rect::new(fx + 64, fy - 2, 80, 18);
+    ui::draw::draw_rounded_rect(s, h_card, 2, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, h_card, 1, palette.border_subtle);
+    ui::font::draw_text_font(s, h_card.x + 6, h_card.y + 2, "novaos", palette.text_primary, &f_small);
+
+    fy += 24;
+    ui::font::draw_text_font(s, fx, fy, "Init (PID 1):", palette.text_muted, &f_small);
+    let i_card = Rect::new(fx + 64, fy - 2, 80, 18);
+    ui::draw::draw_rounded_rect(s, i_card, 2, palette.accent_primary.darken(35));
+    ui::draw::draw_rect_outline(s, i_card, 1, palette.accent_primary);
+    ui::font::draw_text_font(s, i_card.x + 6, i_card.y + 2, "SHELL.ELF", palette.accent_primary, &f_small);
+
+    fy += 24;
+    ui::font::draw_text_font(s, fx, fy, "Config File:", palette.text_muted, &f_small);
+    ui::font::draw_text_font(s, fx + 64, fy, "SYSTEM.CFG (81 B)", palette.text_secondary, &f_small);
+
+    // 4. Status Bar at bottom
+    if client.h >= 100 {
+        let sb_h = 18;
+        let sb_rect = Rect::new(cx, client.bottom() - sb_h, cw, sb_h);
+        s.fill_rect(sb_rect, palette.surface_raised);
+        s.fill_rect(Rect::new(cx, sb_rect.y, cw, 1), palette.border_subtle);
+        ui::font::draw_text_font(s, cx + 8, sb_rect.y + 2, "Ready | Synchronized", palette.text_muted, &f_small);
     }
 }
 
