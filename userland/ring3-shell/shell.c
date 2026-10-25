@@ -222,6 +222,8 @@ static void cmd_help(void) {
     printf("  tftp IP REMOTE [LOCAL] - fetch a file over TFTP (Rust, Phase 60)\n");
     printf("  update          - check & stage OS update from RozeHub / GitHub (Rust)\n");
     printf("  fdisk           - show on-disk partitioning and filesystem geometry (Rust)\n");
+    printf("  exit [CODE]     - exit shell / log out (restarted by novainit supervisor)\n");
+    printf("  logout          - alias for exit\n");
     printf("  help            - show this message\n");
     printf("\n");
     printf("Not yet available here: store (the full compositor +\n");
@@ -643,6 +645,19 @@ static void cmd_shutdown(void) {
     }
 }
 
+/* Month 1 - Prep (Interface Track): the shell is supervised under novainit
+ * as a restartable service (restart=always in SERVICES.CFG). Exiting the
+ * shell terminates this process, allowing novainit to immediately restart
+ * a fresh login session (the classic Unix init/getty respawn model). */
+static void cmd_exit(int argc, char** argv) {
+    int exit_code = 0;
+    if (argc >= 2) {
+        exit_code = atoi(argv[1]);
+    }
+    printf("Logging out of shell. novainit will restart session...\n");
+    sys_exit(exit_code);
+}
+
 static bool str_eq_ci(const char* a, const char* b) {
     while (*a && *b) {
         char ca = *a, cb = *b;
@@ -985,6 +1000,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_update(argc2, tokens);
         } else if (strcmp(tokens[0], "fdisk") == 0 || strcmp(tokens[0], "install") == 0) {
             cmd_fdisk(argc2, tokens);
+        } else if (strcmp(tokens[0], "exit") == 0 || strcmp(tokens[0], "logout") == 0) {
+            cmd_exit(argc2, tokens);
         } else {
             printf("Unknown command: %s (try 'help')\n", tokens[0]);
         }

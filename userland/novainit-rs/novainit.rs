@@ -99,13 +99,36 @@
 //! separate design Phase 75 already declined to rush into, not
 //! something this phase's own, narrower scope should attempt either.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
+#![cfg_attr(test, allow(dead_code))]
 
+#[cfg(not(test))]
 mod ffi;
 
+#[cfg(test)]
+mod ffi {
+    pub unsafe fn sys_write(_msg: *const u8) -> i32 { 0 }
+    pub unsafe fn sys_yield() {}
+    pub unsafe fn sys_open(_path: *const u8) -> i32 { -1 }
+    pub unsafe fn sys_read(_handle: i32, _buf: *mut u8, _count: i32) -> i32 { 0 }
+    pub unsafe fn sys_close(_handle: i32) -> i32 { 0 }
+    pub unsafe fn sys_exec(_path: *const u8, _argv: *const *const u8, _argc: i32) -> i32 { 10 }
+    pub unsafe fn sys_exec_trusted(_path: *const u8, _argv: *const *const u8, _argc: i32) -> i32 { 11 }
+    pub unsafe fn sys_wait_nonblock(_pid: i32, _exit_code: *mut i32) -> i32 { -1 }
+    #[repr(C)]
+    pub struct NovaKlogWrite {
+        pub severity: u8,
+        pub facility: *const u8,
+        pub msg: *const u8,
+    }
+    pub unsafe fn sys_klog_write(_req: *const NovaKlogWrite) -> i32 { 0 }
+}
+
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     unsafe {
@@ -161,20 +184,20 @@ const MAX_PATH: usize = 13; // this project's own 8.3-filename convention
 const MAX_RESTARTS: u32 = 20;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum RestartPolicy {
+pub enum RestartPolicy {
     Always,
     OnCrash,
     Never,
 }
 
 #[derive(Clone, Copy)]
-struct FixedStr<const N: usize> {
-    buf: [u8; N],
-    len: usize,
+pub struct FixedStr<const N: usize> {
+    pub buf: [u8; N],
+    pub len: usize,
 }
 
 impl<const N: usize> FixedStr<N> {
-    const fn empty() -> Self {
+    pub const fn empty() -> Self {
         FixedStr { buf: [0u8; N], len: 0 }
     }
 
@@ -183,21 +206,21 @@ impl<const N: usize> FixedStr<N> {
     /// for a config-file parser, which must never crash the whole
     /// supervisor over one malformed or unexpectedly-long field in a
     /// file a person hand-edited.
-    fn set(&mut self, src: &[u8]) {
+    pub fn set(&mut self, src: &[u8]) {
         let n = src.len().min(N);
         self.buf[..n].copy_from_slice(&src[..n]);
         self.len = n;
     }
 
-    fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         &self.buf[..self.len]
     }
 
-    fn eq_slice(&self, other: &[u8]) -> bool {
+    pub fn eq_slice(&self, other: &[u8]) -> bool {
         self.as_slice() == other
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
@@ -205,12 +228,7 @@ impl<const N: usize> FixedStr<N> {
     /// syscall expecting a real C string - one byte larger than N so
     /// a fully-`set()`-filled buffer still has room for the NUL
     /// itself.
-    fn as_cstr(&self) -> [u8; N] {
-        // N bytes total; if len == N there is no room for a NUL, but
-        // every real caller below sizes N with that one spare byte
-        // already accounted for (see MAX_NAME/MAX_ARG/MAX_PATH's own
-        // values versus this project's real, established field-size
-        // conventions) - not re-guarded here a second time.
+    pub fn as_cstr(&self) -> [u8; N] {
         let mut out = [0u8; N];
         out[..self.len].copy_from_slice(&self.buf[..self.len]);
         out
@@ -218,44 +236,21 @@ impl<const N: usize> FixedStr<N> {
 }
 
 #[derive(Clone, Copy)]
-struct Service {
-    name: FixedStr<MAX_NAME>,
-    exec_path: FixedStr<MAX_PATH>,
-    arg: FixedStr<MAX_ARG>,
-    depends_on: FixedStr<MAX_NAME>,
-    restart: RestartPolicy,
-    /// Phase 77: launched via SYS_EXEC_TRUSTED (delegating novainit's
-    /// own can_open_any_file/can_spawn, if it has them, to this one
-    /// service specifically) instead of the plain, no-special-
-    /// capability SYS_EXEC every other service gets - see start_
-    /// service()'s own comment for exactly what this changes and why
-    /// it defaults to false (least privilege: a service must opt in
-    /// to broad file access, not receive it by not saying otherwise).
-    trusted: bool,
-    /// -1 while not currently running (either never started, or
-    /// exited and not yet - or never going to be - restarted).
-    pid: i32,
-    /// Has this service ever been started at least once - the actual
-    /// condition another service's own `depends_on` waits for, not
-    /// "is it currently running" (a long-running, always-restarted
-    /// dependency spends most of its own time between "just exited"
-    /// and "just restarted," which must not look like "never started"
-    /// to anything depending on it).
-    started: bool,
-    restart_count: u32,
-    /// Phase 77: set once restart_count reaches MAX_RESTARTS - see
-    /// that constant's own comment for why this exists at all (it
-    /// didn't need to, back when this loop was still bounded to 30
-    /// passes total). A service that has given up is never eligible
-    /// again, regardless of its own restart policy - distinct from
-    /// `restart == Never`, which is a policy the config itself chose;
-    /// this is novainit's own, separate decision that enough is
-    /// enough for a service that keeps failing.
-    gave_up: bool,
+pub struct Service {
+    pub name: FixedStr<MAX_NAME>,
+    pub exec_path: FixedStr<MAX_PATH>,
+    pub arg: FixedStr<MAX_ARG>,
+    pub depends_on: FixedStr<MAX_NAME>,
+    pub restart: RestartPolicy,
+    pub trusted: bool,
+    pub pid: i32,
+    pub started: bool,
+    pub restart_count: u32,
+    pub gave_up: bool,
 }
 
 impl Service {
-    const fn empty() -> Self {
+    pub const fn empty() -> Self {
         Service {
             name: FixedStr::empty(),
             exec_path: FixedStr::empty(),
@@ -289,16 +284,54 @@ fn write_str(s: &[u8]) {
     };
 }
 
-/// Phase 77: the one piece of this file's own log output that needs
-/// an actual number in it (MAX_RESTARTS is small - at most 2 digits -
-/// so a fixed, tiny stack buffer is all this ever needs). No `core::
-/// fmt`/`write!` machinery: this crate is `#![no_std]` with no
-/// allocator and, like every other userland/*-rs/ program in this
-/// project, no formatting infrastructure linked in for the sake of
-/// one call site.
-fn write_u32(mut v: u32) {
-    let mut digits = [0u8; 10]; // u32::MAX is 10 digits
+fn write_service_msg(prefix: &[u8], name: &[u8], suffix: &[u8]) {
+    let mut buf = [0u8; 128];
+    let mut pos = 0;
+    for &b in prefix {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    for &b in name {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    for &b in suffix {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    write_str(&buf[..pos]);
+}
+
+fn write_failure_msg(name: &[u8], count: u32) {
+    let mut buf = [0u8; 128];
+    let mut pos = 0;
+    for &b in b"novainit: '" {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    for &b in name {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    for &b in b"' has failed " {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    let mut digits = [0u8; 10];
     let mut n = 0;
+    let mut v = count;
     if v == 0 {
         digits[0] = b'0';
         n = 1;
@@ -310,8 +343,21 @@ fn write_u32(mut v: u32) {
         }
         digits[..n].reverse();
     }
-    write_str(&digits[..n]);
+    for &b in &digits[..n] {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    for &b in b" times in a row - giving up, not restarting it again\n" {
+        if pos < buf.len() - 1 {
+            buf[pos] = b;
+            pos += 1;
+        }
+    }
+    write_str(&buf[..pos]);
 }
+
 
 /// Splits `line` on `|` into up to 6 fields, matching this file's own
 /// module doc comment's own documented format exactly - returns
@@ -347,29 +393,10 @@ fn parse_restart(s: &[u8]) -> RestartPolicy {
     }
 }
 
-/// Reads and parses tools/fixtures/SERVICES.CFG (or the real,
-/// currently-mounted equivalent at that same path), skipping the
-/// first line (the header, documented above) and any blank line.
-/// Returns the number of services successfully parsed - a real
-/// parsing failure on one line (the wrong field count) is logged and
-/// that one line skipped, not treated as fatal to every other,
-/// correctly-formed line in the same file.
-fn load_services(out: &mut [Service; MAX_SERVICES]) -> usize {
-    let path = b"SERVICES.CFG\0";
-    let handle = unsafe { ffi::sys_open(path.as_ptr()) };
-    if handle < 0 {
-        write_str(b"novainit: SERVICES.CFG not found - nothing to supervise\n");
-        return 0;
-    }
-
-    let mut buf = [0u8; 2048];
-    let n = unsafe { ffi::sys_read(handle, buf.as_mut_ptr(), buf.len() as i32) };
-    unsafe { ffi::sys_close(handle) };
-    if n <= 0 {
-        return 0;
-    }
-    let content = &buf[..n as usize];
-
+/// Parses the contents of SERVICES.CFG from an in-memory byte slice, skipping
+/// the first line (the header) and any blank lines. Populates `out` with up to
+/// `MAX_SERVICES` entries and returns the count of successfully parsed services.
+pub fn parse_services_from_bytes(content: &[u8], out: &mut [Service; MAX_SERVICES]) -> usize {
     let mut count = 0;
     let mut line_start = 0;
     let mut first_line = true;
@@ -391,7 +418,7 @@ fn load_services(out: &mut [Service; MAX_SERVICES]) -> usize {
             }
             if count >= MAX_SERVICES {
                 write_str(b"novainit: too many services in SERVICES.CFG, ");
-                          write_str(b"the rest are ignored\n");
+                write_str(b"the rest are ignored\n");
                 break;
             }
 
@@ -423,6 +450,30 @@ fn load_services(out: &mut [Service; MAX_SERVICES]) -> usize {
         }
     }
     count
+}
+
+/// Reads and parses tools/fixtures/SERVICES.CFG (or the real,
+/// currently-mounted equivalent at that same path), skipping the
+/// first line (the header, documented above) and any blank line.
+/// Returns the number of services successfully parsed - a real
+/// parsing failure on one line (the wrong field count) is logged and
+/// that one line skipped, not treated as fatal to every other,
+/// correctly-formed line in the same file.
+fn load_services(out: &mut [Service; MAX_SERVICES]) -> usize {
+    let path = b"SERVICES.CFG\0";
+    let handle = unsafe { ffi::sys_open(path.as_ptr()) };
+    if handle < 0 {
+        write_str(b"novainit: SERVICES.CFG not found - nothing to supervise\n");
+        return 0;
+    }
+
+    let mut buf = [0u8; 2048];
+    let n = unsafe { ffi::sys_read(handle, buf.as_mut_ptr(), buf.len() as i32) };
+    unsafe { ffi::sys_close(handle) };
+    if n <= 0 {
+        return 0;
+    }
+    parse_services_from_bytes(&buf[..n as usize], out)
 }
 
 /// True if `svc`'s own `depends_on` is empty (no dependency at all)
@@ -475,20 +526,12 @@ fn start_service(svc: &mut Service) {
     if pid >= 0 {
         svc.started = true;
         if svc.restart_count > 0 {
-            write_str(b"novainit: restarted '");
-            write_str(svc.name.as_slice());
-            write_str(b"'\n");
+            write_service_msg(b"novainit: restarted '", svc.name.as_slice(), b"'\n");
         } else {
-            write_str(b"novainit: started '");
-            write_str(svc.name.as_slice());
-            write_str(b"'\n");
+            write_service_msg(b"novainit: started '", svc.name.as_slice(), b"'\n");
         }
     } else {
-        write_str(b"novainit: FAILED to start '");
-        write_str(svc.name.as_slice());
-        write_str(b"' (exec_path not found, or the process table is ");
-        write_str(b"full - see PROGRESS.md's own honest note on this ");
-        write_str(b"kernel's real process table)\n");
+        write_service_msg(b"novainit: FAILED to start '", svc.name.as_slice(), b"'\n");
     }
 }
 
@@ -561,19 +604,12 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
                 // stopped, not silently wonder whether novainit itself
                 // has stalled.
                 svc.gave_up = true;
-                write_str(b"novainit: '");
-                write_str(svc.name.as_slice());
-                write_str(b"' has failed ");
-                write_u32(svc.restart_count);
-                write_str(b" times in a row - giving up, not restarting ");
-                write_str(b"it again\n");
+                write_failure_msg(svc.name.as_slice(), svc.restart_count);
             } else if should_restart {
                 svc.restart_count += 1;
                 start_service(svc);
             } else {
-                write_str(b"novainit: '");
-                write_str(svc.name.as_slice());
-                write_str(b"' exited (not restarting, per its own policy)\n");
+                write_service_msg(b"novainit: '", svc.name.as_slice(), b"' exited (not restarting, per its own policy)\n");
             }
         }
         // status == -1 (still running) or -2 (no such process,
@@ -725,6 +761,38 @@ fn run_selftest() -> i32 {
         code |= 4;
     }
 
+    // Case set 3 (Month 1 - Prep / Interface Track): verify SERVICES.CFG declarative format
+    // parsing and check that the shell is wired as a supervised service with restart=always
+    // and trusted=yes (delegating broad file access and spawn capabilities).
+    let sample_cfg = b"name|exec_path|arg|depends_on|restart|trusted\n\
+network-check|PING.ELF|10.0.2.2|-|always|no\n\
+greeting|HELLO.ELF|-|network-check|never|no\n\
+shell|SHELL.ELF|-|-|always|yes\n";
+
+    let mut parsed_svcs = [Service::empty(); MAX_SERVICES];
+    let parsed_count = parse_services_from_bytes(sample_cfg, &mut parsed_svcs);
+    let mut shell_found = false;
+    let mut shell_valid = false;
+    for i in 0..parsed_count {
+        if parsed_svcs[i].name.eq_slice(b"shell") {
+            shell_found = true;
+            if parsed_svcs[i].exec_path.eq_slice(b"SHELL.ELF")
+                && parsed_svcs[i].restart == RestartPolicy::Always
+                && parsed_svcs[i].trusted
+                && parsed_svcs[i].depends_on.is_empty()
+            {
+                shell_valid = true;
+            }
+        }
+    }
+
+    if shell_found && shell_valid {
+        write_str(b"[novainit-selftest] PASS: supervised shell service wired (restart=always, trusted=yes)\n");
+    } else {
+        write_str(b"[novainit-selftest] FAIL: supervised shell service configuration invalid\n");
+        code |= 8;
+    }
+
     if code == 0 {
         write_str(b"[novainit-selftest] all cases passed\n");
     }
@@ -744,6 +812,7 @@ fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
     true
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u8) -> i32 {
     if argc >= 2 {
@@ -782,5 +851,115 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     loop {
         supervise_pass(&mut services, count);
         unsafe { ffi::sys_yield() };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_fields() {
+        let line = b"shell|SHELL.ELF|-|always|yes";
+        assert!(split_fields(line).is_none()); // 5 fields instead of 6
+
+        let valid = b"shell|SHELL.ELF|-|-|always|yes";
+        let fields = split_fields(valid).expect("should have 6 fields");
+        assert_eq!(fields[0], b"shell");
+        assert_eq!(fields[1], b"SHELL.ELF");
+        assert_eq!(fields[2], b"-");
+        assert_eq!(fields[3], b"-");
+        assert_eq!(fields[4], b"always");
+        assert_eq!(fields[5], b"yes");
+    }
+
+    #[test]
+    fn test_parse_restart_policies() {
+        assert_eq!(parse_restart(b"always"), RestartPolicy::Always);
+        assert_eq!(parse_restart(b"on-crash"), RestartPolicy::OnCrash);
+        assert_eq!(parse_restart(b"never"), RestartPolicy::Never);
+        assert_eq!(parse_restart(b"unknown"), RestartPolicy::Never);
+    }
+
+    #[test]
+    fn test_restart_decision_logic() {
+        // Always restarts regardless of exit code (clean or crash)
+        assert!(should_restart_after_exit(RestartPolicy::Always, 0));
+        assert!(should_restart_after_exit(RestartPolicy::Always, 1));
+        assert!(should_restart_after_exit(RestartPolicy::Always, -1));
+
+        // OnCrash restarts only on non-zero exit codes
+        assert!(!should_restart_after_exit(RestartPolicy::OnCrash, 0));
+        assert!(should_restart_after_exit(RestartPolicy::OnCrash, 1));
+        assert!(should_restart_after_exit(RestartPolicy::OnCrash, 42));
+
+        // Never never restarts
+        assert!(!should_restart_after_exit(RestartPolicy::Never, 0));
+        assert!(!should_restart_after_exit(RestartPolicy::Never, 1));
+    }
+
+    #[test]
+    fn test_parse_services_cfg_and_supervised_shell() {
+        let sample = b"name|exec_path|arg|depends_on|restart|trusted\n\
+network-check|PING.ELF|10.0.2.2|-|always|no\r\n\
+greeting|HELLO.ELF|-|network-check|never|no\n\
+shell|SHELL.ELF|-|-|always|yes\n";
+
+        let mut svcs = [Service::empty(); MAX_SERVICES];
+        let count = parse_services_from_bytes(sample, &mut svcs);
+        assert_eq!(count, 3);
+
+        // Service 0: network-check
+        assert_eq!(svcs[0].name.as_slice(), b"network-check");
+        assert_eq!(svcs[0].exec_path.as_slice(), b"PING.ELF");
+        assert_eq!(svcs[0].arg.as_slice(), b"10.0.2.2");
+        assert!(svcs[0].depends_on.is_empty());
+        assert_eq!(svcs[0].restart, RestartPolicy::Always);
+        assert!(!svcs[0].trusted);
+
+        // Service 1: greeting
+        assert_eq!(svcs[1].name.as_slice(), b"greeting");
+        assert_eq!(svcs[1].exec_path.as_slice(), b"HELLO.ELF");
+        assert_eq!(svcs[1].depends_on.as_slice(), b"network-check");
+        assert_eq!(svcs[1].restart, RestartPolicy::Never);
+        assert!(!svcs[1].trusted);
+
+        // Service 2: shell (supervised, trusted, always restarted)
+        assert_eq!(svcs[2].name.as_slice(), b"shell");
+        assert_eq!(svcs[2].exec_path.as_slice(), b"SHELL.ELF");
+        assert!(svcs[2].depends_on.is_empty());
+        assert_eq!(svcs[2].restart, RestartPolicy::Always);
+        assert!(svcs[2].trusted);
+    }
+
+    #[test]
+    fn test_dependency_resolution() {
+        let mut svcs = [Service::empty(); MAX_SERVICES];
+        svcs[0].name.set(b"dep1");
+        svcs[0].started = false;
+
+        svcs[1].name.set(b"svc2");
+        svcs[1].depends_on.set(b"dep1");
+
+        // Initially dep1 is not started -> dependency unsatisfied
+        assert!(!dependency_satisfied(&svcs[1], &svcs, 2));
+
+        // Once dep1 is started -> dependency satisfied
+        svcs[0].started = true;
+        assert!(dependency_satisfied(&svcs[1], &svcs, 2));
+
+        // Dependency on nonexistent service -> unsatisfied
+        svcs[1].depends_on.set(b"nonexistent");
+        assert!(!dependency_satisfied(&svcs[1], &svcs, 2));
+    }
+
+    #[test]
+    fn test_max_restarts_constant() {
+        assert_eq!(MAX_RESTARTS, 20);
+    }
+
+    #[test]
+    fn test_novainit_selftest_cases() {
+        assert_eq!(run_selftest(), 0);
     }
 }

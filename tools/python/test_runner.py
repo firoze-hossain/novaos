@@ -283,6 +283,12 @@ ASSERTIONS: list[Assertion] = [
               "and a cleanly-exiting one) - all behaved correctly "
               "against real, exec'd child processes with known exit "
               "codes"),
+    Assertion("novainit_shell_supervised",
+              r"novainit: started 'shell'",
+              "Month 1 Prep: novainit supervises the interactive shell from SERVICES.CFG as a restartable service"),
+    Assertion("novainit_shell_selftest",
+              r"\[novainit-selftest\] PASS: supervised shell service wired \(restart=always, trusted=yes\)",
+              "Month 1 Prep: novainit self-test verifies supervised shell configuration in SERVICES.CFG"),
     Assertion("fork_created_child", r"process_fork: pid .* forked",
               "fork() actually created a new process"),
     Assertion("fork_child_ran", r"sandbox-child. I am the child",
