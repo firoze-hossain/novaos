@@ -264,6 +264,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("ui_design_system_selftest",
               r"\[wm-selftest\] PASS: shared UI design system invariants hold",
               "Month 1 Prep: shared UI design system invariants hold (colors, spacing, typography, widgets, drawing)"),
+    Assertion("wm_framebuffer_surface_selftest",
+              r"\[wm-selftest\] PASS: framebuffer surface rendering \(BufferSurface32\)",
+              "Month 2 Compositor: WM renders 32-bit XRGB framebuffer surfaces via BufferSurface32"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

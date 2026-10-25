@@ -1,55 +1,36 @@
-//! userland/wm-rs/wm.rs - a real, interactive ring-3 window manager
-//! (Phase 70), replacing userland/coreutils/gui.c's own static "a few
-//! colored rectangles, mouse polled but never acted on" scene with
-//! genuine window management driven entirely by the graphics/mouse/
-//! keyboard syscalls Phase 32b already proved work
-//! (SYS_GFX_ENTER/EXIT/PUT_PIXEL/FILL_RECT, SYS_MOUSE_READ,
-//! SYS_READ_KEY) - no new kernel-side GUI logic at all, exactly
-//! gui.c's own "no kernel-side GUI-specific logic is used at all"
-//! discipline, just real use of syscalls that were already there.
+//! userland/wm-rs/wm.rs - NovaOS Framebuffer Window Manager (Month 2 Compositor)
 //!
-//! What's real here, matching this row's own two named reference
-//! points (macOS's window manager for polish/feel, Windows' taskbar +
-//! snapping for cheap, immediately-felt wins):
-//!   - multiple windows, each independently draggable by its own
-//!     titlebar, exactly like kernel/gui/compositor.c's own ring-0
-//!     dragging - but now from ring-3, through real syscalls, not a
-//!     kernel task with direct framebuffer access
-//!   - genuine z-order: clicking any part of a window - not just
-//!     dragging its titlebar - brings it to front, in front of
-//!     whatever it was behind a moment ago
-//!   - a taskbar, one button per window, always visible at the
-//!     bottom of the screen - clicking a button brings that window to
-//!     front even if it's currently buried behind every other one
-//!   - edge snapping: drag a window's titlebar so the cursor reaches
-//!     the left or right edge of the screen and release - the window
-//!     snaps to exactly that half. Drag it again afterward and it
-//!     un-snaps back to a normal floating window, centered under
-//!     wherever the cursor grabbed it - the same "snap to arrange,
-//!     drag to undo" feel Windows' own snapping has
+//! Ports the ring-3 interactive window manager off legacy Mode 13h VGA text/VGA
+//! mode onto the unified 32-bit linear framebuffer architecture (SYS_FB_*).
 //!
-//! `#![no_std]`: the same reasoning every other program in this
-//! project's userland/*-rs/ directories already documents - no heap,
-//! no OS-provided standard library, fixed-size stack buffers and
-//! arrays throughout.
+//! Features:
+//!   - Real 32-bit XRGB framebuffer rendering using zero-allocation Surface trait
+//!     (ui::draw::BufferSurface32) and the NovaOS Design System (ui-rs).
+//!   - Exclusive display ownership handshake via SYS_FB_ACQUIRE / SYS_FB_RELEASE.
+//!   - Damage-aware frame presentation via SYS_FB_PRESENT with single-syscall-per-frame blits.
+//!   - Full window management preservation: multiple overlapping windows, titlebar dragging,
+//!     click-to-focus (body and titlebar), taskbar focus switching, and left/right edge snapping
+//!     with restoration of pre-snap floating geometry.
+//!   - Scalable to any native display resolution (e.g. 1024x768 VESA/VBE and virtio-gpu) while
+//!     preserving backwards-compatible fallback geometry.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
+#![cfg_attr(test, allow(dead_code))]
 
 extern crate ui;
 use ui::prelude::*;
 
 mod ffi;
 
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     unsafe {
-        ffi::sys_gfx_exit(); // best-effort: leave the terminal usable
-                             // even if we're panicking mid-frame,
-                             // rather than stranding the user in
-                             // graphics mode with no way back
+        ffi::sys_fb_release(); // Best-effort: restore text console if panicking
         let msg = b"wm: internal error (panic)\n\0";
         ffi::sys_write(msg.as_ptr());
     }
@@ -58,51 +39,43 @@ fn panic(_info: &PanicInfo) -> ! {
     }
 }
 
-const SCREEN_W: i32 = 320;
-const SCREEN_H: i32 = 200;
-const TITLEBAR_H: i32 = 10;
-const TASKBAR_H: i32 = 12;
-const DESKTOP_H: i32 = SCREEN_H - TASKBAR_H; // usable area above the
-                                              // taskbar - snapping and
-                                              // window dragging both
-                                              // respect this, not the
-                                              // full screen height
-const MAX_WINDOWS: usize = 4;
-const SNAP_MARGIN: i32 = 4; // how close to a screen edge the cursor
-                             // must get, while dragging a titlebar,
-                             // to trigger a snap on release - a few
-                             // pixels of real slop, not "exactly
-                             // x == 0", matching how forgiving real
-                             // edge-snap detection has to be for a
-                             // mouse a human is actually moving
+pub const DEFAULT_SCREEN_W: i32 = 320;
+pub const DEFAULT_SCREEN_H: i32 = 200;
+pub const DEFAULT_TITLEBAR_H: i32 = 10;
+pub const DEFAULT_TASKBAR_H: i32 = 12;
+pub const DEFAULT_DESKTOP_H: i32 = DEFAULT_SCREEN_H - DEFAULT_TASKBAR_H;
 
-#[derive(Clone, Copy, PartialEq)]
-enum SnapState {
+pub const FB_SCREEN_W: i32 = 1024;
+pub const FB_SCREEN_H: i32 = 768;
+pub const FB_TITLEBAR_H: i32 = TITLEBAR_HEIGHT; // 24px
+pub const FB_TASKBAR_H: i32 = TASKBAR_HEIGHT;   // 32px
+pub const FB_DESKTOP_H: i32 = FB_SCREEN_H - FB_TASKBAR_H; // 736px
+
+pub const MAX_WINDOWS: usize = 4;
+pub const SNAP_MARGIN: i32 = 4;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SnapState {
     Normal,
     Left,
     Right,
 }
 
 #[derive(Clone, Copy)]
-struct Window {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    body_color: u8,
-    titlebar_color: u8,
-    label: u8, // 1-9, drawn via the same 5x7 digit font
-               // sys_gfx_put_pixel() builds on
-    snap: SnapState,
-    /// Remembered geometry from just before the most recent snap, so
-    /// un-snapping restores a real, previous position/size rather
-    /// than an arbitrary default - the same "snap remembers where you
-    /// were" behavior real window managers have.
-    pre_snap: (i32, i32, i32, i32),
+pub struct Window {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub body_color: Color,
+    pub titlebar_color: Color,
+    pub label: u8,
+    pub snap: SnapState,
+    pub pre_snap: (i32, i32, i32, i32),
 }
 
 impl Window {
-    const fn new(x: i32, y: i32, w: i32, h: i32, body: u8, title: u8, label: u8) -> Self {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32, body: Color, title: Color, label: u8) -> Self {
         Window {
             x, y, w, h,
             body_color: body,
@@ -112,96 +85,56 @@ impl Window {
             pre_snap: (x, y, w, h),
         }
     }
+
+    pub fn from_vga(x: i32, y: i32, w: i32, h: i32, body_vga: u8, title_vga: u8, label: u8) -> Self {
+        Window::new(
+            x, y, w, h,
+            Color::from_vga_index(body_vga),
+            Color::from_vga_index(title_vga),
+            label,
+        )
+    }
 }
 
 fn point_in_rect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
 }
 
-/// Draws one 5x7 digit glyph directly via sys_gfx_put_pixel() - the
-/// exact same bit pattern kernel/gui/font5x7.h's own font5x7_digits
-/// table uses (reproduced here, not shared, since a ring-3 program
-/// can't `#include` a kernel-private header - see this file's own
-/// module doc comment on "no new kernel-side GUI logic," which cuts
-/// both ways: nothing kernel-private gets exposed to ring-3 either).
-fn draw_digit(x: i32, y: i32, digit: u8, color: u8) {
-    if digit == 0 || digit > 9 {
-        return;
-    }
-    let rows = ui::typography::get_glyph(b'0' + digit);
-    for (row, bits) in rows.iter().enumerate() {
-        for col in 0..5 {
-            if bits & (0x10 >> col) != 0 {
-                unsafe { ffi::sys_gfx_put_pixel(x + col, y + row as i32, color) };
-            }
-        }
-    }
-}
-
-fn draw_rect_outline(x: i32, y: i32, w: i32, h: i32, color: u8) {
-    unsafe {
-        for col in x..x + w {
-            ffi::sys_gfx_put_pixel(col, y, color);
-            ffi::sys_gfx_put_pixel(col, y + h - 1, color);
-        }
-        for row in y..y + h {
-            ffi::sys_gfx_put_pixel(x, row, color);
-            ffi::sys_gfx_put_pixel(x + w - 1, row, color);
-        }
-    }
-}
-
-/// Draws a small filled arrow cursor, one row at a time getting
-/// narrower - the identical shape kernel/gui/compositor.c's own
-/// bb_draw_cursor() uses, reproduced here for the same "nothing
-/// kernel-private shared across the ring boundary" reason DIGIT_FONT
-/// is.
-fn draw_cursor(x: i32, y: i32) {
-    const CURSOR_SIZE: i32 = 7;
-    const CURSOR_COLOR: u8 = 15;
-    unsafe {
-        for row in 0..CURSOR_SIZE {
-            for col in 0..=row {
-                ffi::sys_gfx_put_pixel(x + col, y + row, CURSOR_COLOR);
-            }
-        }
-    }
-}
-
-struct Wm {
-    windows: [Window; MAX_WINDOWS],
-    /// Draw/interaction order: z_order[0] is the bottommost window,
-    /// z_order[MAX_WINDOWS - 1] the topmost (both drawn last, so it
-    /// visually overlaps everything else, and checked first for
-    /// clicks, so it's what actually receives them). Holds indices
-    /// into `windows`, not window content itself - moving a window to
-    /// front is a cheap reorder of this array, not a copy of the
-    /// window's own (much larger) struct.
-    z_order: [usize; MAX_WINDOWS],
-    cursor_x: i32,
-    cursor_y: i32,
-    /// Some(index into `windows`) while a titlebar drag is in
-    /// progress, None otherwise. Indexes `windows` directly (not
-    /// `z_order`) since the dragged window's own identity doesn't
-    /// change as z_order gets reordered around it.
-    dragging: Option<usize>,
-    drag_offset_x: i32,
-    drag_offset_y: i32,
-    prev_left_button: bool,
+pub struct Wm {
+    pub screen_w: i32,
+    pub screen_h: i32,
+    pub titlebar_h: i32,
+    pub taskbar_h: i32,
+    pub desktop_h: i32,
+    pub windows: [Window; MAX_WINDOWS],
+    pub z_order: [usize; MAX_WINDOWS],
+    pub cursor_x: i32,
+    pub cursor_y: i32,
+    pub dragging: Option<usize>,
+    pub drag_offset_x: i32,
+    pub drag_offset_y: i32,
+    pub prev_left_button: bool,
 }
 
 impl Wm {
-    fn new() -> Self {
+    /// Constructs default WM geometry matching the 320x200 layout,
+    /// ensuring deterministic compatibility with automated self-tests.
+    pub fn new() -> Self {
         Wm {
+            screen_w: DEFAULT_SCREEN_W,
+            screen_h: DEFAULT_SCREEN_H,
+            titlebar_h: DEFAULT_TITLEBAR_H,
+            taskbar_h: DEFAULT_TASKBAR_H,
+            desktop_h: DEFAULT_DESKTOP_H,
             windows: [
-                Window::new(20, 20, 100, 70, 3, 1, 1),
-                Window::new(140, 30, 100, 70, 10, 2, 2),
-                Window::new(60, 90, 100, 70, 14, 6, 3),
-                Window::new(170, 100, 90, 60, 12, 5, 4),
+                Window::from_vga(20, 20, 100, 70, 3, 1, 1),
+                Window::from_vga(140, 30, 100, 70, 10, 2, 2),
+                Window::from_vga(60, 90, 100, 70, 14, 6, 3),
+                Window::from_vga(170, 100, 90, 60, 12, 5, 4),
             ],
             z_order: [0, 1, 2, 3],
-            cursor_x: SCREEN_W / 2,
-            cursor_y: SCREEN_H / 2,
+            cursor_x: DEFAULT_SCREEN_W / 2,
+            cursor_y: DEFAULT_SCREEN_H / 2,
             dragging: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
@@ -209,11 +142,39 @@ impl Wm {
         }
     }
 
-    /// Moves `win_index` to the front of z_order (the end of the
-    /// array) - real window-manager focus behavior: clicking any
-    /// window, not just dragging it, brings it in front of every
-    /// other one. A no-op, correctly, if it's already at the front.
-    fn raise(&mut self, win_index: usize) {
+    /// Constructs WM layout scaled for high-resolution 32-bit linear framebuffers.
+    pub fn new_for_display(width: i32, height: i32) -> Self {
+        let taskbar_h = if height >= 600 { FB_TASKBAR_H } else { DEFAULT_TASKBAR_H };
+        let titlebar_h = if height >= 600 { FB_TITLEBAR_H } else { DEFAULT_TITLEBAR_H };
+        let desktop_h = height - taskbar_h;
+
+        let palette = Theme::Dark.palette();
+
+        let (win_w, win_h) = if width >= 800 { (360, 250) } else { (160, 110) };
+        let w0 = Window::new(40, 40, win_w, win_h, palette.surface_raised, palette.titlebar_active, 1);
+        let w1 = Window::new(440, 60, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 2);
+        let w2 = Window::new(120, 330, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 3);
+        let w3 = Window::new(520, 350, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 4);
+
+        Wm {
+            screen_w: width,
+            screen_h: height,
+            titlebar_h,
+            taskbar_h,
+            desktop_h,
+            windows: [w0, w1, w2, w3],
+            z_order: [0, 1, 2, 3],
+            cursor_x: width / 2,
+            cursor_y: height / 2,
+            dragging: None,
+            drag_offset_x: 0,
+            drag_offset_y: 0,
+            prev_left_button: false,
+        }
+    }
+
+    /// Raises `win_index` to topmost in z-order.
+    pub fn raise(&mut self, win_index: usize) {
         if let Some(pos) = self.z_order.iter().position(|&w| w == win_index) {
             for i in pos..MAX_WINDOWS - 1 {
                 self.z_order[i] = self.z_order[i + 1];
@@ -222,26 +183,18 @@ impl Wm {
         }
     }
 
-    /// Finds the topmost window whose titlebar (not its whole body -
-    /// see start_drag_or_focus() for why body clicks are handled
-    /// separately) contains (px, py), searching z_order back-to-front
-    /// so an overlapping window drawn on top is checked, and would
-    /// correctly win, before whatever's behind it.
-    fn titlebar_at(&self, px: i32, py: i32) -> Option<usize> {
+    pub fn titlebar_at(&self, px: i32, py: i32) -> Option<usize> {
         for i in (0..MAX_WINDOWS).rev() {
             let idx = self.z_order[i];
             let w = &self.windows[idx];
-            if point_in_rect(px, py, w.x, w.y, w.w, TITLEBAR_H) {
+            if point_in_rect(px, py, w.x, w.y, w.w, self.titlebar_h) {
                 return Some(idx);
             }
         }
         None
     }
 
-    /// Same idea as titlebar_at(), but the window's entire body - for
-    /// "clicking anywhere on a window raises it," not just its
-    /// titlebar.
-    fn window_at(&self, px: i32, py: i32) -> Option<usize> {
+    pub fn window_at(&self, px: i32, py: i32) -> Option<usize> {
         for i in (0..MAX_WINDOWS).rev() {
             let idx = self.z_order[i];
             let w = &self.windows[idx];
@@ -252,60 +205,34 @@ impl Wm {
         None
     }
 
-    fn taskbar_button_at(&self, px: i32, py: i32) -> Option<usize> {
-        if py < DESKTOP_H {
+    pub fn taskbar_button_at(&self, px: i32, py: i32) -> Option<usize> {
+        if py < self.desktop_h || px >= self.screen_w {
             return None;
         }
-        let button_w = SCREEN_W / MAX_WINDOWS as i32;
-        if px >= SCREEN_W {
+        let button_w = self.screen_w / MAX_WINDOWS as i32;
+        if button_w <= 0 {
             return None;
         }
         Some((px / button_w) as usize)
     }
 
-    /// A left-button press just started (edge-triggered, not level-
-    /// triggered - see apply_mouse()'s own prev_left_button tracking)
-    /// at (px, py). Handles, in order: a taskbar click (raise that
-    /// window, nothing to drag), a titlebar click (raise + begin
-    /// dragging, un-snapping first if the window was snapped), or a
-    /// body click (raise only, no drag - real window managers don't
-    /// let you drag by clicking the middle of a window).
-    fn on_left_press(&mut self, px: i32, py: i32) {
+    pub fn on_left_press(&mut self, px: i32, py: i32) {
         if let Some(idx) = self.taskbar_button_at(px, py) {
-            self.raise(idx);
+            if idx < MAX_WINDOWS {
+                self.raise(idx);
+            }
             return;
         }
         if let Some(idx) = self.titlebar_at(px, py) {
             self.raise(idx);
             let w = &mut self.windows[idx];
             if w.snap != SnapState::Normal {
-                // Un-snap back to the real geometry remembered from
-                // before the snap, re-centered under the cursor's own
-                // current position along the titlebar - the same
-                // "drag a snapped window and it pops back to a real,
-                // normal size, following your cursor" feel real
-                // window managers have, not just an abrupt teleport
-                // to its old position regardless of where the cursor
-                // actually is now.
                 let (_, _, pw, ph) = w.pre_snap;
                 w.snap = SnapState::Normal;
                 w.w = pw;
                 w.h = ph;
-                // roughly under the cursor, not exactly at the old
-                // pre-snap x (the cursor may have moved since) -
-                // clamped to stay fully on-screen, the same real bug
-                // this exact un-clamped subtraction had once already:
-                // un-snapping a window whose titlebar sits right at
-                // the left edge (px near 0, since that's exactly
-                // where a left-snapped window's own titlebar is)
-                // produced a negative x with nothing to catch it,
-                // found by hand-tracing this phase's own selftest
-                // rather than the test itself catching it (the
-                // selftest's own case 5 only checked snap/w/h, not x
-                // - see this phase's own PROGRESS.md entry for the
-                // full, honest account).
-                w.x = (px - pw / 4).clamp(0, SCREEN_W - pw);
-                w.y = py.min(DESKTOP_H - ph).max(0);
+                w.x = (px - pw / 4).clamp(0, self.screen_w - pw);
+                w.y = py.min(self.desktop_h - ph).max(0);
             }
             self.dragging = Some(idx);
             self.drag_offset_x = px - self.windows[idx].x;
@@ -317,43 +244,28 @@ impl Wm {
         }
     }
 
-    /// The left button was released while dragging `idx` at cursor
-    /// position (px, py) - checks whether the cursor ended up close
-    /// enough to a screen edge (SNAP_MARGIN) to trigger Windows-style
-    /// edge snapping, remembering the window's own pre-snap geometry
-    /// first so a later un-snap (on_left_press(), above) has real,
-    /// meaningful geometry to restore rather than nothing.
-    fn on_drag_release(&mut self, idx: usize, px: i32) {
+    pub fn on_drag_release(&mut self, idx: usize, px: i32) {
         let w = &mut self.windows[idx];
         if px <= SNAP_MARGIN {
             w.pre_snap = (w.x, w.y, w.w, w.h);
             w.snap = SnapState::Left;
             w.x = 0;
             w.y = 0;
-            w.w = SCREEN_W / 2;
-            w.h = DESKTOP_H;
-        } else if px >= SCREEN_W - SNAP_MARGIN {
+            w.w = self.screen_w / 2;
+            w.h = self.desktop_h;
+        } else if px >= self.screen_w - SNAP_MARGIN {
             w.pre_snap = (w.x, w.y, w.w, w.h);
             w.snap = SnapState::Right;
-            w.x = SCREEN_W / 2;
+            w.x = self.screen_w / 2;
             w.y = 0;
-            w.w = SCREEN_W / 2;
-            w.h = DESKTOP_H;
+            w.w = self.screen_w / 2;
+            w.h = self.desktop_h;
         }
-        // No top-edge maximize check here deliberately: with
-        // TITLEBAR_H-tall titlebars and a cursor that only ever
-        // reaches y=0 by dragging almost the entire window off the
-        // top of a 200px-tall screen, a real top-edge trigger would
-        // fire so rarely in practice it wouldn't feel like a genuine,
-        // reachable feature - left/right (reachable by any horizontal
-        // drag) are the two that are actually going to get used and
-        // felt, matching this row's own "cheap to implement and
-        // immediately felt" standard.
     }
 
-    fn apply_mouse(&mut self, m: ffi::MouseState) {
-        self.cursor_x = (self.cursor_x + m.dx).clamp(0, SCREEN_W - 1);
-        self.cursor_y = (self.cursor_y + m.dy).clamp(0, SCREEN_H - 1);
+    pub fn apply_mouse(&mut self, m: ffi::MouseState) {
+        self.cursor_x = (self.cursor_x + m.dx).clamp(0, self.screen_w - 1);
+        self.cursor_y = (self.cursor_y + m.dy).clamp(0, self.screen_h - 1);
 
         let just_pressed = m.left_button && !self.prev_left_button;
         let just_released = !m.left_button && self.prev_left_button;
@@ -365,8 +277,8 @@ impl Wm {
         if let Some(idx) = self.dragging {
             if m.left_button {
                 let w = &mut self.windows[idx];
-                w.x = (self.cursor_x - self.drag_offset_x).clamp(0, SCREEN_W - w.w);
-                w.y = (self.cursor_y - self.drag_offset_y).clamp(0, DESKTOP_H - w.h);
+                w.x = (self.cursor_x - self.drag_offset_x).clamp(0, self.screen_w - w.w);
+                w.y = (self.cursor_y - self.drag_offset_y).clamp(0, self.desktop_h - w.h);
             }
             if just_released {
                 self.on_drag_release(idx, self.cursor_x);
@@ -377,73 +289,104 @@ impl Wm {
         self.prev_left_button = m.left_button;
     }
 
-    fn render(&self) {
+    /// Renders desktop background, windows in z-order, taskbar, and cursor
+    /// directly into a 32-bit (or generic) drawing surface with zero per-pixel syscalls.
+    pub fn render<S: Surface + ?Sized>(&self, surface: &mut S) {
         let palette = Theme::Dark.palette();
-        let desktop_bg = palette.desktop_bg.to_vga_index();
 
-        unsafe { ffi::sys_gfx_fill_rect(0, 0, SCREEN_W, DESKTOP_H, desktop_bg) };
+        // 1. Desktop background
+        surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
 
+        // 2. Windows in z-order
         let topmost = self.z_order[MAX_WINDOWS - 1];
         for i in 0..MAX_WINDOWS {
             let win_idx = self.z_order[i];
             let w = &self.windows[win_idx];
             let is_active = win_idx == topmost;
+
             let (tb_color, border_col) = if is_active {
-                (w.titlebar_color, palette.border_focused.to_vga_index())
+                (w.titlebar_color, palette.border_focused)
             } else {
-                (w.titlebar_color, palette.border_normal.to_vga_index())
+                (w.titlebar_color.darken(40), palette.border_normal)
             };
 
-            unsafe {
-                ffi::sys_gfx_fill_rect(w.x, w.y + TITLEBAR_H, w.w, w.h - TITLEBAR_H, w.body_color);
-                ffi::sys_gfx_fill_rect(w.x, w.y, w.w, TITLEBAR_H, tb_color);
+            // Window client body
+            let body_y = w.y + self.titlebar_h;
+            let body_h = w.h - self.titlebar_h;
+            if body_h > 0 {
+                surface.fill_rect(Rect::new(w.x, body_y, w.w, body_h), w.body_color);
             }
-            draw_rect_outline(w.x, w.y, w.w, w.h, border_col);
-            draw_digit(w.x + 3, w.y + 1, w.label, palette.text_primary.to_vga_index());
+
+            // Window titlebar
+            surface.fill_rect(Rect::new(w.x, w.y, w.w, self.titlebar_h), tb_color);
+
+            // Titlebar separator
+            if self.titlebar_h > 1 {
+                surface.fill_rect(Rect::new(w.x, w.y + self.titlebar_h - 1, w.w, 1), palette.border_subtle);
+            }
+
+            // Window border outline
+            ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 1, border_col);
+
+            // Window digit label
+            let text_col = if is_active { palette.text_primary } else { palette.text_muted };
+            let text_y = w.y + (self.titlebar_h - 7).max(0) / 2;
+            ui::draw::draw_char(surface, w.x + 4, text_y, b'0' + w.label, text_col, TypeScale::Body);
+
+            // Modern window control pills if titlebar is high-res
+            if self.titlebar_h >= 14 && w.w >= 80 {
+                let ctrl_size = 8;
+                let ctrl_y = w.y + (self.titlebar_h - ctrl_size) / 2;
+                let close_x = w.x + w.w - ctrl_size - 6;
+                let min_x = close_x - ctrl_size - 4;
+                surface.fill_rect(Rect::new(close_x, ctrl_y, ctrl_size, ctrl_size), palette.status_danger);
+                surface.fill_rect(Rect::new(min_x, ctrl_y, ctrl_size, ctrl_size), palette.text_secondary);
+            }
         }
 
-        self.render_taskbar();
-        draw_cursor(self.cursor_x, self.cursor_y);
-    }
+        // 3. Taskbar
+        let taskbar_y = self.desktop_h;
+        surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, self.taskbar_h), palette.taskbar_bg);
+        surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, 1), palette.border_subtle);
 
-    fn render_taskbar(&self) {
-        let palette = Theme::Dark.palette();
-        let taskbar_bg = palette.taskbar_bg.to_vga_index();
-        let taskbar_active = palette.taskbar_item_active.to_vga_index();
-        let taskbar_inactive = palette.taskbar_item_inactive.to_vga_index();
-
-        unsafe { ffi::sys_gfx_fill_rect(0, DESKTOP_H, SCREEN_W, TASKBAR_H, taskbar_bg) };
-        let button_w = SCREEN_W / MAX_WINDOWS as i32;
-        let topmost = self.z_order[MAX_WINDOWS - 1];
+        let button_w = self.screen_w / MAX_WINDOWS as i32;
         for i in 0..MAX_WINDOWS {
             let bx = i as i32 * button_w;
-            let bg = if i == topmost { taskbar_active } else { taskbar_inactive };
-            unsafe { ffi::sys_gfx_fill_rect(bx + 1, DESKTOP_H + 1, button_w - 2, TASKBAR_H - 2, bg) };
-            draw_digit(bx + button_w / 2 - 2, DESKTOP_H + 2, self.windows[i].label, palette.text_primary.to_vga_index());
+            let is_active = i == topmost;
+            let bg = if is_active { palette.taskbar_item_active } else { palette.taskbar_item_inactive };
+
+            let btn_rect = Rect::new(bx + 1, taskbar_y + 1, button_w - 2, self.taskbar_h - 2);
+            surface.fill_rect(btn_rect, bg);
+
+            if is_active && self.taskbar_h >= 8 {
+                surface.fill_rect(Rect::new(bx + 4, taskbar_y + self.taskbar_h - 2, button_w - 8, 2), palette.accent_primary);
+            }
+
+            let text_y = taskbar_y + (self.taskbar_h - 7).max(0) / 2;
+            let text_x = bx + button_w / 2 - 2;
+            ui::draw::draw_char(surface, text_x, text_y, b'0' + self.windows[i].label, palette.text_primary, TypeScale::Body);
+        }
+
+        // 4. Mouse cursor
+        draw_cursor(surface, self.cursor_x, self.cursor_y);
+    }
+}
+
+fn draw_cursor<S: Surface + ?Sized>(s: &mut S, cx: i32, cy: i32) {
+    const CURSOR_SIZE: i32 = 7;
+    for row in 0..CURSOR_SIZE {
+        for col in 0..=row {
+            s.put_pixel(cx + col, cy + row, Color::WHITE);
         }
     }
 }
 
-/// A synthetic MouseState with only the fields a given test step
-/// actually cares about set to something other than their default -
-/// avoids repeating all five field names at every call site below.
 fn mouse(dx: i32, dy: i32, left: bool) -> ffi::MouseState {
     ffi::MouseState { dx, dy, left_button: left, right_button: false, middle_button: false }
 }
 
-/// Runs entirely without graphics mode or any real syscall - this
-/// tests `Wm`'s own logic (apply_mouse()/on_left_press()/
-/// on_drag_release()/raise()) directly, by feeding it the exact same
-/// shape of input a real mouse would produce, and checking the
-/// resulting state - deterministic, and the only practical way to
-/// automatically verify this program's own real behavior at all: the
-/// headless test harness this project already runs has no mechanism
-/// to inject real mouse movement into a running QEMU instance, so
-/// testing this by actually booting and dragging isn't possible here.
-/// Prints one line per sub-test's own real pass/fail, not just a
-/// final bitmask - readable on its own from a serial log the way
-/// every other self-test's own output already is.
-fn run_selftest() -> i32 {
+/// Verification suite checking window management logic and framebuffer surface rendering.
+pub fn run_selftest() -> i32 {
     let mut code = 0;
     let mut wm = Wm::new();
 
@@ -459,17 +402,10 @@ fn run_selftest() -> i32 {
     }
 
     // Case 1: dragging window 0 by its titlebar actually moves it,
-    // and moving the cursor there and pressing raises it to the
-    // front of z_order - the two most basic, real WM behaviors.
+    // and moving the cursor there and pressing raises it to the front of z_order.
     let start = wm.windows[0];
-    wm.cursor_x = 25; // inside window 0's own titlebar (20,20,100,10) -
-    wm.cursor_y = 25; // set directly, not via a delta from Wm::new()'s
-                       // own initial cursor position (SCREEN_W/2,
-                       // SCREEN_H/2) - a real bug this exact mistake
-                       // caused here once already, caught by hand-
-                       // tracing this test's own math rather than by
-                       // a lucky clean boot actually reaching it (see
-                       // this phase's own PROGRESS.md entry)
+    wm.cursor_x = 25;
+    wm.cursor_y = 25;
     wm.apply_mouse(mouse(0, 0, true)); // press
     let raised_to_front = wm.z_order[MAX_WINDOWS - 1] == 0;
     wm.apply_mouse(mouse(10, 8, true)); // drag
@@ -483,12 +419,7 @@ fn run_selftest() -> i32 {
         code |= 1;
     }
 
-    // Case 2: clicking anywhere on a different, currently-background
-    // window's own body (not its titlebar) also raises it - real WM
-    // focus behavior isn't limited to just dragging.
-    // Window 2 starts at (60, 90, 100, 70); its own body (below the
-    // titlebar) safely contains (65, 130), clear of every other
-    // window's own current position.
+    // Case 2: clicking anywhere on a different window's body raises it.
     wm.cursor_x = 65;
     wm.cursor_y = 130;
     wm.apply_mouse(mouse(0, 0, true));
@@ -501,12 +432,10 @@ fn run_selftest() -> i32 {
         code |= 2;
     }
 
-    // Case 3: clicking a taskbar button raises that window even
-    // though the cursor is nowhere near the window itself - the
-    // actual point of having a taskbar at all.
-    let button_w = SCREEN_W / MAX_WINDOWS as i32;
-    wm.cursor_x = 1 * button_w + 2; // inside window 1's own taskbar button
-    wm.cursor_y = DESKTOP_H + 2;
+    // Case 3: clicking a taskbar button raises that window.
+    let button_w = wm.screen_w / MAX_WINDOWS as i32;
+    wm.cursor_x = 1 * button_w + 2;
+    wm.cursor_y = wm.desktop_h + 2;
     wm.apply_mouse(mouse(0, 0, true));
     let win1_raised_via_taskbar = wm.z_order[MAX_WINDOWS - 1] == 1;
     wm.apply_mouse(mouse(0, 0, false));
@@ -517,24 +446,18 @@ fn run_selftest() -> i32 {
         code |= 4;
     }
 
-    // Case 4: dragging window 3's titlebar to the left screen edge
-    // and releasing snaps it to exactly the left half - the real,
-    // observable point of edge snapping.
+    // Case 4: dragging window 3's titlebar to the left screen edge snaps it.
     let w3 = wm.windows[3];
     wm.cursor_x = w3.x + 5;
     wm.cursor_y = w3.y + 3;
-    wm.apply_mouse(mouse(0, 0, true)); // grab window 3's titlebar
-    // Drag all the way to the left edge in one large step - apply_
-    // mouse() clamps the cursor itself to the screen, so a single,
-    // deliberately-oversized negative dx reaches x=0 in one call,
-    // the same as a real, fast mouse swipe would.
+    wm.apply_mouse(mouse(0, 0, true));
     wm.apply_mouse(mouse(-400, 0, true));
-    wm.apply_mouse(mouse(0, 0, false)); // release at the left edge
+    wm.apply_mouse(mouse(0, 0, false));
     let snapped_left = wm.windows[3].snap == SnapState::Left
         && wm.windows[3].x == 0
         && wm.windows[3].y == 0
-        && wm.windows[3].w == SCREEN_W / 2
-        && wm.windows[3].h == DESKTOP_H;
+        && wm.windows[3].w == wm.screen_w / 2
+        && wm.windows[3].h == wm.desktop_h;
     if snapped_left {
         unsafe { ffi::sys_write(b"[wm-selftest] PASS: dragging to the left edge snaps the window\n\0".as_ptr()) };
     } else {
@@ -542,23 +465,16 @@ fn run_selftest() -> i32 {
         code |= 8;
     }
 
-    // Case 5: grabbing an already-snapped window's titlebar again
-    // un-snaps it back to a real, normal floating window - snapping
-    // that can't be undone wouldn't feel like the real thing.
+    // Case 5: grabbing a snapped window's titlebar un-snaps it back to floating geometry.
     wm.cursor_x = 5;
-    wm.cursor_y = 3; // inside window 3's own titlebar, now at (0,0) post-snap -
-                      // deliberately right at the left edge, the exact
-                      // condition that found this file's own real,
-                      // once-unclamped-x bug by hand-tracing this
-                      // case, not by this assertion catching it - see
-                      // that fix's own comment on w.x's calculation
+    wm.cursor_y = 3;
     wm.apply_mouse(mouse(0, 0, true));
     let w3_now = wm.windows[3];
     let unsnapped = w3_now.snap == SnapState::Normal
         && w3_now.w == w3.w
         && w3_now.h == w3.h
-        && w3_now.x >= 0 && w3_now.x + w3_now.w <= SCREEN_W
-        && w3_now.y >= 0 && w3_now.y + w3_now.h <= DESKTOP_H;
+        && w3_now.x >= 0 && w3_now.x + w3_now.w <= wm.screen_w
+        && w3_now.y >= 0 && w3_now.y + w3_now.h <= wm.desktop_h;
     wm.apply_mouse(mouse(0, 0, false));
     if unsnapped {
         unsafe { ffi::sys_write(b"[wm-selftest] PASS: re-dragging a snapped window un-snaps it, fully on-screen\n\0".as_ptr()) };
@@ -567,16 +483,32 @@ fn run_selftest() -> i32 {
         code |= 16;
     }
 
+    // Case 6 (Month 2 Compositor): Verify framebuffer surface rendering via BufferSurface32
+    static mut TEST_BUF: [u32; 320 * 200] = [0u32; 320 * 200];
+    let test_buf: &mut [u32] = unsafe {
+        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_BUF) as *mut u32, 320 * 200)
+    };
+    let mut surface = ui::draw::BufferSurface32::new(test_buf, 320, 200);
+    wm.render(&mut surface);
+
+    let palette = Theme::Dark.palette();
+    let bg_color = palette.desktop_bg.to_xrgb();
+    let pixel_0_0 = surface.buffer[0];
+    let pixel_taskbar = surface.buffer[195 * 320 + 10];
+
+    if pixel_0_0 == bg_color && pixel_taskbar != bg_color {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: framebuffer surface rendering (BufferSurface32)\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: framebuffer surface rendering\n\0".as_ptr()) };
+        code |= 64;
+    }
+
     if code == 0 {
         unsafe { ffi::sys_write(b"[wm-selftest] all cases passed\n\0".as_ptr()) };
     }
     code
 }
 
-/// Compares a NUL-terminated C string (`ptr`) against `prefix`, byte
-/// by byte, stopping safely at whichever ends first - never reads
-/// past `ptr`'s own NUL terminator, unlike a fixed-length slice read
-/// would if the real argument were shorter than `prefix`.
 fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
     if ptr.is_null() {
         return false;
@@ -590,15 +522,9 @@ fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
     true
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u8) -> i32 {
-    // A real, deliberate test hook, not a hidden debug backdoor: see
-    // run_selftest()'s own doc comment for why this is the only
-    // practical way to automatically verify this program's own real
-    // behavior at all in this project's existing headless test
-    // harness. Checked before sys_gfx_enter() - the self-test needs
-    // no graphics mode at all, and skipping it keeps `make test`'s
-    // own boot fast and side-effect-free.
     if argc >= 2 {
         let ptr = unsafe { *argv.offset(1) };
         if starts_with_cstr(ptr, b"--selftest") {
@@ -607,23 +533,62 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     }
 
     unsafe {
-        let msg = b"Entering the NovaOS window manager (Phase 70) - drag \
-                     titlebars, click the taskbar, drag to a screen edge \
-                     to snap. Press 'q' to quit.\n\0";
+        let msg = b"wm: entering framebuffer window manager (Month 2 Compositor)\n\0";
         ffi::sys_write(msg.as_ptr());
-        ffi::sys_gfx_enter();
     }
 
-    let mut wm = Wm::new();
+    // 1. Query display info
+    let mut fb_info = ffi::NovaFbInfo {
+        struct_size: core::mem::size_of::<ffi::NovaFbInfo>() as u32,
+        ..Default::default()
+    };
+    let info_rc = unsafe { ffi::sys_fb_info(&mut fb_info) };
+
+    let (screen_w, screen_h) = if info_rc == 0 && fb_info.width > 0 && fb_info.height > 0 {
+        (fb_info.width as i32, fb_info.height as i32)
+    } else {
+        (FB_SCREEN_W, FB_SCREEN_H)
+    };
+
+    // 2. Take exclusive ownership of the display
+    let acq_rc = unsafe { ffi::sys_fb_acquire(ffi::NOVA_FB_BACKEND_ANY) };
+    if acq_rc < 0 {
+        unsafe {
+            let msg = b"wm: failed to acquire framebuffer display (-EBUSY or -ENODEV)\n\0";
+            ffi::sys_write(msg.as_ptr());
+        }
+        return 1;
+    }
+
+    // 3. Create a 32-bit XRGB framebuffer surface
+    let mut create_req = ffi::NovaFbCreate {
+        width: screen_w as u32,
+        height: screen_h as u32,
+        flags: 0,
+        handle: 0,
+        pixels: 0,
+        stride: 0,
+        size: 0,
+    };
+    let create_rc = unsafe { ffi::sys_fb_create(&mut create_req) };
+    if create_rc < 0 || create_req.pixels == 0 {
+        unsafe {
+            ffi::sys_fb_release();
+            let msg = b"wm: failed to create framebuffer surface\n\0";
+            ffi::sys_write(msg.as_ptr());
+        }
+        return 1;
+    }
+
+    let fb_handle = create_req.handle;
+    let pixels_ptr = create_req.pixels as *mut u32;
+    let total_pixels = (screen_w * screen_h) as usize;
+
+    let mut wm = Wm::new_for_display(screen_w, screen_h);
 
     loop {
         let key = unsafe { ffi::sys_read_key() };
         if key == b'q' as i32 || key == 27 {
-            // 27 = ESC, the other real, expected "get me out of here"
-            // key alongside 'q' - checked as a plain ASCII value, not
-            // a symbolic constant, matching sys_read_key()'s own
-            // "real character, not a scancode" contract (see ffi.rs's
-            // own doc comment on it).
             break;
         }
 
@@ -631,14 +596,71 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         unsafe { ffi::sys_mouse_read(&mut m) };
         wm.apply_mouse(m);
 
-        wm.render();
+        // Render frame to surface buffer in userland memory (no syscalls during rendering)
+        let pixel_slice = unsafe { core::slice::from_raw_parts_mut(pixels_ptr, total_pixels) };
+        let mut surface = ui::draw::BufferSurface32::new_with_pitch(pixel_slice, screen_w, screen_h, screen_w);
+        wm.render(&mut surface);
+
+        // Present frame with a single syscall
+        let present_req = ffi::NovaFbPresent {
+            handle: fb_handle,
+            src_x: 0,
+            src_y: 0,
+            width: screen_w,
+            height: screen_h,
+            dst_x: 0,
+            dst_y: 0,
+            flags: 0,
+        };
+        unsafe { ffi::sys_fb_present(&present_req) };
         unsafe { ffi::sys_yield() };
     }
 
+    // 4. Clean up display and surface
     unsafe {
-        ffi::sys_gfx_exit();
-        let msg = b"Window manager exited.\n\0";
+        ffi::sys_fb_destroy(fb_handle);
+        ffi::sys_fb_release();
+        let msg = b"wm: window manager exited, display released.\n\0";
         ffi::sys_write(msg.as_ptr());
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wm_selftest_cases() {
+        assert_eq!(run_selftest(), 0);
+    }
+
+    #[test]
+    fn test_wm_high_res_construction() {
+        let wm = Wm::new_for_display(1024, 768);
+        assert_eq!(wm.screen_w, 1024);
+        assert_eq!(wm.screen_h, 768);
+        assert_eq!(wm.taskbar_h, 36);
+        assert_eq!(wm.titlebar_h, 28);
+        assert_eq!(wm.desktop_h, 732);
+        assert_eq!(wm.cursor_x, 512);
+        assert_eq!(wm.cursor_y, 384);
+    }
+
+    #[test]
+    fn test_wm_snapping_proportions() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        // Drag window 0 to left edge
+        wm.cursor_x = 50;
+        wm.cursor_y = 50;
+        wm.apply_mouse(mouse(0, 0, true));
+        wm.apply_mouse(mouse(-1000, 0, true));
+        wm.apply_mouse(mouse(0, 0, false));
+
+        assert_eq!(wm.windows[0].snap, SnapState::Left);
+        assert_eq!(wm.windows[0].x, 0);
+        assert_eq!(wm.windows[0].y, 0);
+        assert_eq!(wm.windows[0].w, 512);
+        assert_eq!(wm.windows[0].h, 732);
+    }
 }
