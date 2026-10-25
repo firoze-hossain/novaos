@@ -123,6 +123,14 @@ AUDIO_FLAGS = -audiodev none,id=noaudio -device AC97,audiodev=noaudio
 # standard as every other piece of hardware in this list.
 USB_FLAGS = -device piix3-usb-uhci -device usb-kbd -device qemu-xhci,id=xhci0 -device usb-mouse,bus=xhci0.0
 
+# Interactive run flags: omit -device usb-kbd and -device usb-mouse by
+# default during interactive 'make run' so QEMU routes host keystrokes
+# and mouse events directly to the PS/2 controller (keyboard.c IRQ1 /
+# ps2mouse.c IRQ12). As documented in TESTING.md / PROGRESS.md,
+# attaching -device usb-kbd causes QEMU to absorb host keystrokes into
+# the USB HID device, which the kernel's keyboard driver does not read.
+RUN_USB_FLAGS ?=
+
 # Directories
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -349,11 +357,11 @@ $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DI
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(USB_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
