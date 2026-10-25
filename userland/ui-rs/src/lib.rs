@@ -12,6 +12,7 @@ pub mod draw;
 pub mod font;
 pub mod font_data;
 pub mod geom;
+pub mod menu;
 pub mod spacing;
 pub mod typography;
 pub mod widget;
@@ -31,6 +32,12 @@ pub mod prelude {
         Font, FontSize, FontStyle, GlyphMetrics,
     };
     pub use crate::geom::{Insets, Point, Rect, Size};
+    pub use crate::menu::{
+        draw_dropdown_surface, draw_menubar_surface, measure_dropdown_rect, measure_menubar_item,
+        menubar_for_label, Menu, MenuBar, MenuClickEvent, MenuItem, ACTION_FILE_CLOSE,
+        ACTION_FILE_NEW, ACTION_FILE_OPEN, ACTION_FILE_QUIT, ACTION_FILE_SAVE, EDITOR_MENUBAR,
+        FILES_MENUBAR, SYSTEM_MENUBAR, TERMINAL_MENUBAR,
+    };
     pub use crate::spacing::*;
     pub use crate::typography::{measure_text, TextAlign, TypeScale};
     pub use crate::widget::{
@@ -167,6 +174,16 @@ pub fn run_design_system_selftest() -> i32 {
         if !has_outline || !has_fill || !has_transparent {
             failures |= 16384;
         }
+    }
+
+    // 9. Desktop Menu Bar Invariants (Month 3 Core Desktop)
+    let term_bar = TERMINAL_MENUBAR;
+    if term_bar.menus.is_empty() || term_bar.menus[0].items.is_empty() {
+        failures |= 32768;
+    }
+    let quit_item = term_bar.menus[0].items.iter().find(|it| it.action_id == ACTION_FILE_QUIT);
+    if quit_item.is_none() {
+        failures |= 32768;
     }
 
     failures
@@ -428,5 +445,64 @@ mod tests {
 
         assert_ne!(c_classic.outline, c_dark.outline);
         assert_ne!(c_light.accent, c_amber.accent);
+    }
+
+    #[test]
+    fn test_menubar_structures() {
+        let bar = menubar_for_label(1);
+        assert_eq!(bar.app_name, "Terminal");
+        assert_eq!(bar.menus.len(), 4);
+        assert_eq!(bar.menus[0].title, "File");
+
+        // Verify Quit item exists and has ACTION_FILE_QUIT
+        let quit_item = bar.menus[0].items.iter().find(|i| i.action_id == ACTION_FILE_QUIT);
+        assert!(quit_item.is_some());
+        assert_eq!(quit_item.unwrap().shortcut, "Ctrl+Q");
+    }
+
+    #[test]
+    fn test_menubar_surface_rendering() {
+        let bar = TERMINAL_MENUBAR;
+        let mut buf = [0u32; 800 * 24];
+        let mut surface = BufferSurface32::new(&mut buf, 800, 24);
+        let palette = Theme::Dark.palette();
+
+        draw_menubar_surface(
+            &mut surface,
+            Rect::new(0, 0, 800, 24),
+            &bar,
+            Some(0), // "File" active
+            None,
+            "18:18",
+            &palette,
+        );
+
+        // Verify surface has non-zero pixels
+        let non_zero = surface.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero > 100);
+
+        // Verify bottom divider line is rendered
+        let divider_p = surface.buffer[23 * 800 + 400];
+        assert_eq!(divider_p, palette.border_subtle.to_xrgb());
+    }
+
+    #[test]
+    fn test_dropdown_surface_rendering() {
+        let menu = &TERMINAL_MENUBAR.menus[0]; // File
+        let font = Font::regular();
+        let bounds = measure_dropdown_rect(10, 24, menu, 800, &font);
+
+        assert!(bounds.w >= 140);
+        assert!(bounds.h > 60);
+
+        let mut buf = [0u32; 250 * 150];
+        let mut surface = BufferSurface32::new(&mut buf, 250, 150);
+        let palette = Theme::Dark.palette();
+
+        draw_dropdown_surface(&mut surface, bounds, menu, Some(0), &palette);
+
+        // Verify dropdown background and highlighted item pixels exist
+        let non_zero = surface.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero > 500);
     }
 }

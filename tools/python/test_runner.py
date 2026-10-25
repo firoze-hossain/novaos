@@ -273,6 +273,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wm_cursor_chrome_selftest",
               r"\[wm-selftest\] PASS: cursor themes and redesigned window chrome",
               "Month 2 Compositor: cursor themes and redesigned window chrome"),
+    Assertion("wm_menubar_selftest",
+              r"\[wm-selftest\] PASS: persistent top menu bar and app menu dispatch",
+              "Month 3 Core desktop apps: persistent top menu bar and active app menu dispatch"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

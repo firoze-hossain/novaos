@@ -47,9 +47,10 @@ pub const DEFAULT_DESKTOP_H: i32 = DEFAULT_SCREEN_H - DEFAULT_TASKBAR_H;
 
 pub const FB_SCREEN_W: i32 = 1024;
 pub const FB_SCREEN_H: i32 = 768;
-pub const FB_TITLEBAR_H: i32 = TITLEBAR_HEIGHT; // 24px
-pub const FB_TASKBAR_H: i32 = TASKBAR_HEIGHT;   // 32px
-pub const FB_DESKTOP_H: i32 = FB_SCREEN_H - FB_TASKBAR_H; // 736px
+pub const FB_TITLEBAR_H: i32 = TITLEBAR_HEIGHT; // 28px
+pub const FB_TASKBAR_H: i32 = TASKBAR_HEIGHT;   // 36px
+pub const FB_MENUBAR_H: i32 = MENUBAR_HEIGHT;   // 24px
+pub const FB_DESKTOP_H: i32 = FB_SCREEN_H - FB_TASKBAR_H; // 732px
 
 pub const MAX_WINDOWS: usize = 4;
 pub const SNAP_MARGIN: i32 = 4;
@@ -105,6 +106,7 @@ pub struct Wm {
     pub screen_h: i32,
     pub titlebar_h: i32,
     pub taskbar_h: i32,
+    pub menubar_h: i32,
     pub desktop_h: i32,
     pub windows: [Window; MAX_WINDOWS],
     pub z_order: [usize; MAX_WINDOWS],
@@ -115,6 +117,10 @@ pub struct Wm {
     pub drag_offset_y: i32,
     pub prev_left_button: bool,
     pub cursor_theme: CursorTheme,
+    pub active_menu: Option<usize>,
+    pub hovered_menu: Option<usize>,
+    pub hovered_item: Option<usize>,
+    pub last_menu_event: Option<MenuClickEvent>,
 }
 
 impl Wm {
@@ -126,6 +132,7 @@ impl Wm {
             screen_h: DEFAULT_SCREEN_H,
             titlebar_h: DEFAULT_TITLEBAR_H,
             taskbar_h: DEFAULT_TASKBAR_H,
+            menubar_h: 0,
             desktop_h: DEFAULT_DESKTOP_H,
             windows: [
                 Window::from_vga(20, 20, 100, 70, 3, 1, 1),
@@ -141,6 +148,10 @@ impl Wm {
             drag_offset_y: 0,
             prev_left_button: false,
             cursor_theme: CursorTheme::Classic,
+            active_menu: None,
+            hovered_menu: None,
+            hovered_item: None,
+            last_menu_event: None,
         }
     }
 
@@ -148,6 +159,7 @@ impl Wm {
     pub fn new_for_display(width: i32, height: i32) -> Self {
         let taskbar_h = if height >= 600 { FB_TASKBAR_H } else { DEFAULT_TASKBAR_H };
         let titlebar_h = if height >= 600 { FB_TITLEBAR_H } else { DEFAULT_TITLEBAR_H };
+        let menubar_h = if height >= 600 { FB_MENUBAR_H } else { 0 };
         let desktop_h = height - taskbar_h;
 
         let palette = Theme::Dark.palette();
@@ -163,6 +175,7 @@ impl Wm {
             screen_h: height,
             titlebar_h,
             taskbar_h,
+            menubar_h,
             desktop_h,
             windows: [w0, w1, w2, w3],
             z_order: [0, 1, 2, 3],
@@ -173,6 +186,10 @@ impl Wm {
             drag_offset_y: 0,
             prev_left_button: false,
             cursor_theme: CursorTheme::Classic,
+            active_menu: None,
+            hovered_menu: None,
+            hovered_item: None,
+            last_menu_event: None,
         }
     }
 
@@ -219,10 +236,118 @@ impl Wm {
         Some((px / button_w) as usize)
     }
 
+    /// Returns the MenuBar for the window at `win_index`.
+    pub fn app_menubar(&self, win_index: usize) -> ui::menu::MenuBar {
+        if win_index < MAX_WINDOWS {
+            ui::menu::menubar_for_label(self.windows[win_index].label)
+        } else {
+            ui::menu::menubar_for_label(1)
+        }
+    }
+
+    /// Returns the MenuBar for the currently focused (active) window.
+    pub fn current_menubar(&self) -> ui::menu::MenuBar {
+        let topmost = self.z_order[MAX_WINDOWS - 1];
+        self.app_menubar(topmost)
+    }
+
+    /// Hit-tests a point against the top menu bar items.
+    pub fn menubar_item_at(&self, px: i32, py: i32) -> Option<usize> {
+        if self.menubar_h <= 0 || py < 0 || py >= self.menubar_h {
+            return None;
+        }
+        let menubar = self.current_menubar();
+        let font = if self.menubar_h >= 20 { Font::regular() } else { Font::small() };
+        let star_size = if self.menubar_h >= 20 { 12 } else { 8 };
+        let star_x = 8;
+        let app_sz = font.measure_str(menubar.app_name);
+        let app_x = star_x + star_size + 8;
+        let start_x = app_x + app_sz.w + 18;
+
+        for (i, _) in menubar.menus.iter().enumerate() {
+            if let Some(r) = ui::menu::measure_menubar_item(&menubar, i, start_x, 0, self.menubar_h, &font) {
+                if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns the screen bounds of the currently open dropdown menu.
+    pub fn active_dropdown_rect(&self) -> Option<Rect> {
+        if self.menubar_h <= 0 {
+            return None;
+        }
+        let menu_idx = self.active_menu?;
+        let menubar = self.current_menubar();
+        if menu_idx >= menubar.menus.len() {
+            return None;
+        }
+        let font = if self.menubar_h >= 20 { Font::regular() } else { Font::small() };
+        let star_size = if self.menubar_h >= 20 { 12 } else { 8 };
+        let star_x = 8;
+        let app_sz = font.measure_str(menubar.app_name);
+        let app_x = star_x + star_size + 8;
+        let start_x = app_x + app_sz.w + 18;
+
+        let item_rect = ui::menu::measure_menubar_item(&menubar, menu_idx, start_x, 0, self.menubar_h, &font)?;
+        let menu = &menubar.menus[menu_idx];
+        Some(ui::menu::measure_dropdown_rect(item_rect.x, self.menubar_h, menu, self.screen_w, &font))
+    }
+
+    /// Hit-tests a point against the items inside the active dropdown menu.
+    pub fn dropdown_item_at(&self, px: i32, py: i32) -> Option<usize> {
+        let rect = self.active_dropdown_rect()?;
+        if !point_in_rect(px, py, rect.x, rect.y, rect.w, rect.h) {
+            return None;
+        }
+        let menu_idx = self.active_menu?;
+        let menubar = self.current_menubar();
+        let menu = menubar.menus.get(menu_idx)?;
+        let font = if rect.h > 100 { Font::regular() } else { Font::small() };
+        let item_h = if font.line_height() > 10 { 22 } else { 14 };
+
+        let mut cur_y = rect.y + 4;
+        for (i, item) in menu.items.iter().enumerate() {
+            let h = if item.is_separator { 6 } else { item_h };
+            if py >= cur_y && py < cur_y + h {
+                if !item.is_separator && item.is_enabled {
+                    return Some(i);
+                } else {
+                    return None;
+                }
+            }
+            cur_y += h;
+        }
+        None
+    }
+
+    /// Drains and returns the most recent menu click event, if any.
+    pub fn take_menu_event(&mut self) -> Option<MenuClickEvent> {
+        self.last_menu_event.take()
+    }
+
     /// Evaluates dynamic cursor shape based on current pointer coordinates.
     pub fn cursor_shape_at(&self, cx: i32, cy: i32) -> CursorShape {
         if self.dragging.is_some() {
             return CursorShape::Move;
+        }
+        // Active dropdown menu inspection
+        if let Some(rect) = self.active_dropdown_rect() {
+            if point_in_rect(cx, cy, rect.x, rect.y, rect.w, rect.h) {
+                if self.dropdown_item_at(cx, cy).is_some() {
+                    return CursorShape::Pointer;
+                }
+                return CursorShape::Arrow;
+            }
+        }
+        // Top menubar inspection
+        if self.menubar_h > 0 && cy < self.menubar_h {
+            if self.menubar_item_at(cx, cy).is_some() {
+                return CursorShape::Pointer;
+            }
+            return CursorShape::Arrow;
         }
         if self.taskbar_button_at(cx, cy).is_some() {
             return CursorShape::Pointer;
@@ -255,12 +380,58 @@ impl Wm {
     }
 
     pub fn on_left_press(&mut self, px: i32, py: i32) {
+        // 1. If dropdown menu is open:
+        if self.active_menu.is_some() {
+            if let Some(item_idx) = self.dropdown_item_at(px, py) {
+                let menu_idx = self.active_menu.unwrap();
+                let topmost = self.z_order[MAX_WINDOWS - 1];
+                let menubar = self.current_menubar();
+                let action_id = menubar.menus[menu_idx].items[item_idx].action_id;
+                self.last_menu_event = Some(MenuClickEvent {
+                    window_id: topmost,
+                    menu_index: menu_idx,
+                    item_index: item_idx,
+                    action_id,
+                });
+                self.active_menu = None;
+                return;
+            }
+            // Clicking inside dropdown panel on separator/padding
+            if let Some(drop_rect) = self.active_dropdown_rect() {
+                if point_in_rect(px, py, drop_rect.x, drop_rect.y, drop_rect.w, drop_rect.h) {
+                    return;
+                }
+            }
+            // Clicking a top menu item toggles or switches
+            if let Some(menu_idx) = self.menubar_item_at(px, py) {
+                if self.active_menu == Some(menu_idx) {
+                    self.active_menu = None;
+                } else {
+                    self.active_menu = Some(menu_idx);
+                }
+                return;
+            }
+            // Clicking outside dismisses dropdown
+            self.active_menu = None;
+        }
+
+        // 2. Top menu bar clicks
+        if self.menubar_h > 0 && py < self.menubar_h {
+            if let Some(menu_idx) = self.menubar_item_at(px, py) {
+                self.active_menu = Some(menu_idx);
+            }
+            return;
+        }
+
+        // 3. Taskbar button clicks
         if let Some(idx) = self.taskbar_button_at(px, py) {
             if idx < MAX_WINDOWS {
                 self.raise(idx);
             }
             return;
         }
+
+        // 4. Window titlebar clicks (raise and start drag)
         if let Some(idx) = self.titlebar_at(px, py) {
             self.raise(idx);
             let w = &mut self.windows[idx];
@@ -277,6 +448,8 @@ impl Wm {
             self.drag_offset_y = py - self.windows[idx].y;
             return;
         }
+
+        // 5. Window body clicks (raise)
         if let Some(idx) = self.window_at(px, py) {
             self.raise(idx);
         }
@@ -304,6 +477,16 @@ impl Wm {
     pub fn apply_mouse(&mut self, m: ffi::MouseState) {
         self.cursor_x = (self.cursor_x + m.dx).clamp(0, self.screen_w - 1);
         self.cursor_y = (self.cursor_y + m.dy).clamp(0, self.screen_h - 1);
+
+        self.hovered_menu = self.menubar_item_at(self.cursor_x, self.cursor_y);
+        self.hovered_item = self.dropdown_item_at(self.cursor_x, self.cursor_y);
+
+        // If dropdown is open, hovering over another top menu switches to that dropdown
+        if self.active_menu.is_some() {
+            if let Some(m_idx) = self.hovered_menu {
+                self.active_menu = Some(m_idx);
+            }
+        }
 
         let just_pressed = m.left_button && !self.prev_left_button;
         let just_released = !m.left_button && self.prev_left_button;
@@ -479,7 +662,39 @@ impl Wm {
             }
         }
 
-        // 4. Mouse cursor
+        // 4. Persistent Top Menu Bar (always-on-top compositor layer)
+        if self.menubar_h > 0 {
+            let menubar = self.current_menubar();
+            let menubar_rect = Rect::new(0, 0, self.screen_w, self.menubar_h);
+            ui::menu::draw_menubar_surface(
+                surface,
+                menubar_rect,
+                &menubar,
+                self.active_menu,
+                self.hovered_menu,
+                "12:45 PM",
+                &palette,
+            );
+        }
+
+        // 5. Active Dropdown Menu Overlay
+        if let Some(drop_rect) = self.active_dropdown_rect() {
+            if let Some(idx) = self.active_menu {
+                let menubar = self.current_menubar();
+                if idx < menubar.menus.len() {
+                    let menu = &menubar.menus[idx];
+                    ui::menu::draw_dropdown_surface(
+                        surface,
+                        drop_rect,
+                        menu,
+                        self.hovered_item,
+                        &palette,
+                    );
+                }
+            }
+        }
+
+        // 6. Mouse cursor
         let shape = self.cursor_shape_at(self.cursor_x, self.cursor_y);
         ui::cursor::draw_cursor_sprite(surface, self.cursor_x, self.cursor_y, shape, self.cursor_theme);
     }
@@ -720,6 +935,81 @@ pub fn run_selftest() -> i32 {
     } else {
         unsafe { ffi::sys_write(b"[wm-selftest] FAIL: cursor themes and window chrome\n\0".as_ptr()) };
         code |= 256;
+    }
+
+    // Case 9 (Month 3 Core desktop apps): Persistent top menu bar and app menu dispatch
+    let mut wm_mb = Wm::new_for_display(1024, 768);
+    wm_mb.raise(0); // Focus Window 0 (Terminal)
+
+    // 1. Verify menubar title reflects active focused window
+    let mb_term = wm_mb.current_menubar();
+    let is_terminal = mb_term.app_name == "Terminal" && mb_term.menus.len() == 4;
+
+    wm_mb.raise(1); // Focus Window 1 (Files)
+    let mb_files = wm_mb.current_menubar();
+    let is_files = mb_files.app_name == "Files" && mb_files.menus.len() == 4;
+
+    wm_mb.raise(0); // Restore Window 0 (Terminal)
+
+    // 2. Locate File menu item (menu 0)
+    let font = Font::regular();
+    let star_size = 12;
+    let star_x = 8;
+    let app_sz = font.measure_str("Terminal");
+    let start_x = star_x + star_size + 8 + app_sz.w + 18;
+    let file_rect = ui::menu::measure_menubar_item(&mb_term, 0, start_x, 0, wm_mb.menubar_h, &font)
+        .unwrap_or(Rect::new(0, 0, 0, 0));
+
+    let file_hit = wm_mb.menubar_item_at(file_rect.x + 4, file_rect.y + 4) == Some(0);
+    let shape_menu = wm_mb.cursor_shape_at(file_rect.x + 4, file_rect.y + 4);
+
+    // 3. Click File menu item to open dropdown
+    wm_mb.cursor_x = file_rect.x + 4;
+    wm_mb.cursor_y = file_rect.y + 4;
+    wm_mb.apply_mouse(mouse(0, 0, true));
+    wm_mb.apply_mouse(mouse(0, 0, false));
+    let dropdown_opened = wm_mb.active_menu == Some(0) && wm_mb.active_dropdown_rect().is_some();
+
+    // 4. Locate and click "Quit Terminal" item (item 4, action 105)
+    let drop_rect = wm_mb.active_dropdown_rect().unwrap_or(Rect::new(0, 0, 0, 0));
+    let quit_item_y = drop_rect.y + 4 + 22 + 22 + 6 + 22 + 10;
+    let quit_hit = wm_mb.dropdown_item_at(drop_rect.x + 10, quit_item_y) == Some(4);
+    let shape_drop_item = wm_mb.cursor_shape_at(drop_rect.x + 10, quit_item_y);
+
+    wm_mb.cursor_x = drop_rect.x + 10;
+    wm_mb.cursor_y = quit_item_y;
+    wm_mb.apply_mouse(mouse(0, 0, true));
+    wm_mb.apply_mouse(mouse(0, 0, false));
+
+    let dropdown_closed = wm_mb.active_menu.is_none();
+    let menu_event = wm_mb.take_menu_event();
+    let event_ok = menu_event == Some(MenuClickEvent {
+        window_id: 0,
+        menu_index: 0,
+        item_index: 4,
+        action_id: ui::menu::ACTION_FILE_QUIT,
+    });
+    let event_drained = wm_mb.take_menu_event().is_none();
+
+    // 5. Render menubar into BufferSurface32
+    test_buf[..1024 * 30].fill(0);
+    let mut menu_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 30], 1024, 30);
+    wm_mb.render(&mut menu_surf);
+
+    let mb_bg = palette.surface_sunken.to_xrgb();
+    let p_corner = menu_surf.buffer[0];
+    let p_divider = menu_surf.buffer[23 * 1024 + 100];
+    let divider_ok = p_divider == palette.border_subtle.to_xrgb();
+    let bg_ok = p_corner == mb_bg;
+
+    if is_terminal && is_files && file_hit && shape_menu == CursorShape::Pointer
+        && dropdown_opened && quit_hit && shape_drop_item == CursorShape::Pointer
+        && dropdown_closed && event_ok && event_drained && bg_ok && divider_ok
+    {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: persistent top menu bar and app menu dispatch\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: persistent top menu bar\n\0".as_ptr()) };
+        code |= 512;
     }
 
     if code == 0 {
@@ -970,5 +1260,64 @@ mod tests {
         assert!(found_red, "Active window should have a red Close button");
         assert!(found_green, "Active window should have a green Maximize button");
         assert!(found_amber, "Active window should have an amber Minimize button");
+    }
+
+    #[test]
+    fn test_wm_menubar_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0); // Terminal
+
+        assert_eq!(wm.current_menubar().app_name, "Terminal");
+        assert_eq!(wm.menubar_h, 24);
+        assert!(wm.active_menu.is_none());
+
+        // Find File menu
+        let font = Font::regular();
+        let star_size = 12;
+        let star_x = 8;
+        let app_sz = font.measure_str("Terminal");
+        let start_x = star_x + star_size + 8 + app_sz.w + 18;
+        let file_rect = ui::menu::measure_menubar_item(&wm.current_menubar(), 0, start_x, 0, wm.menubar_h, &font).unwrap();
+
+        // Hover over File menu
+        wm.cursor_x = file_rect.x + 2;
+        wm.cursor_y = file_rect.y + 2;
+        wm.apply_mouse(mouse(0, 0, false));
+        assert_eq!(wm.hovered_menu, Some(0));
+        assert_eq!(wm.cursor_shape_at(wm.cursor_x, wm.cursor_y), CursorShape::Pointer);
+
+        // Click to open File menu
+        wm.apply_mouse(mouse(0, 0, true));
+        wm.apply_mouse(mouse(0, 0, false));
+        assert_eq!(wm.active_menu, Some(0));
+        assert!(wm.active_dropdown_rect().is_some());
+
+        // Switch menu by hovering over Edit menu (menu 1)
+        let edit_rect = ui::menu::measure_menubar_item(&wm.current_menubar(), 1, start_x, 0, wm.menubar_h, &font).unwrap();
+        wm.cursor_x = edit_rect.x + 2;
+        wm.cursor_y = edit_rect.y + 2;
+        wm.apply_mouse(mouse(0, 0, false));
+        assert_eq!(wm.active_menu, Some(1));
+
+        // Switch back to File menu
+        wm.cursor_x = file_rect.x + 2;
+        wm.cursor_y = file_rect.y + 2;
+        wm.apply_mouse(mouse(0, 0, false));
+        assert_eq!(wm.active_menu, Some(0));
+
+        // Click "Close Window" (item 3, action 104)
+        let drop_rect = wm.active_dropdown_rect().unwrap();
+        let close_y = drop_rect.y + 4 + 22 + 22 + 6 + 10;
+        wm.cursor_x = drop_rect.x + 10;
+        wm.cursor_y = close_y;
+        wm.apply_mouse(mouse(0, 0, true));
+        wm.apply_mouse(mouse(0, 0, false));
+
+        assert!(wm.active_menu.is_none());
+        let ev = wm.take_menu_event().expect("should emit menu event");
+        assert_eq!(ev.window_id, 0);
+        assert_eq!(ev.menu_index, 0);
+        assert_eq!(ev.item_index, 3);
+        assert_eq!(ev.action_id, ui::menu::ACTION_FILE_CLOSE);
     }
 }
