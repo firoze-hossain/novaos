@@ -315,11 +315,14 @@ impl Stream {
             match self.pop() {
                 Some(f) => self.cur = f,
                 None => {
-                    // the next input frame has not arrived: the stream will
-                    // report an underrun on the next call instead of
-                    // inventing audio
+                    // the next input frame has not arrived: the stream has
+                    // run dry and underrun
                     self.have_cur = false;
                     self.phase = 0;
+                    if self.started && !self.in_underrun {
+                        self.in_underrun = true;
+                        self.underrun_events = self.underrun_events.wrapping_add(1);
+                    }
                     break;
                 }
             }

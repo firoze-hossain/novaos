@@ -8,6 +8,8 @@
 
 pub mod color;
 pub mod draw;
+pub mod font;
+pub mod font_data;
 pub mod geom;
 pub mod spacing;
 pub mod typography;
@@ -19,6 +21,10 @@ pub mod prelude {
         draw_button, draw_char, draw_checkbox, draw_line, draw_progress_bar, draw_rect_outline,
         draw_rounded_rect, draw_text, draw_text_aligned, draw_window_frame, BufferSurface32,
         BufferSurface8, Surface,
+    };
+    pub use crate::font::{
+        draw_char_font, draw_text_font, draw_text_font_aligned, font_for_scale, AntialiasMode,
+        Font, FontSize, FontStyle, GlyphMetrics,
     };
     pub use crate::geom::{Insets, Point, Rect, Size};
     pub use crate::spacing::*;
@@ -101,6 +107,30 @@ pub fn run_design_system_selftest() -> i32 {
         // Pixels (0,0) to (4,4) must be white (0x00FFFFFF or 0xFFFFFFFF)
         if surface.buffer[0] != 0x00FFFFFF {
             failures |= 512;
+        }
+    }
+
+    // 7. Multi-size Font & Antialiasing Invariants (Month 2 Compositor)
+    let f_micro = Font::new(FontSize::Micro, FontStyle::Sans, AntialiasMode::None);
+    let f_small = Font::small();
+    let f_reg = Font::regular();
+    let f_large = Font::large();
+    let s_micro = f_micro.measure_str("NovaOS");
+    let s_small = f_small.measure_str("NovaOS");
+    let s_reg = f_reg.measure_str("NovaOS");
+    let s_large = f_large.measure_str("NovaOS");
+    if s_large.w <= s_reg.w || s_reg.w <= s_micro.w || s_large.h <= s_reg.h || s_reg.h <= s_small.h || s_small.h <= s_micro.h {
+        failures |= 1024;
+    }
+
+    // Verify antialiased rendering produces intermediate fractional alpha coverage
+    let mut font_pixels = [0u32; 16 * 16];
+    {
+        let mut surface = BufferSurface32::new(&mut font_pixels, 16, 16);
+        draw_char_font(&mut surface, 0, 0, b'A', Color::WHITE, &f_reg);
+        let has_intermediate = font_pixels.iter().any(|&p| p != 0 && p != 0x00FFFFFF);
+        if !has_intermediate {
+            failures |= 2048;
         }
     }
 
@@ -244,5 +274,76 @@ mod tests {
             }
         }
         assert!(non_zero > 100);
+    }
+
+    #[test]
+    fn test_font_sizes_and_metrics() {
+        let small = Font::small();
+        let regular = Font::regular();
+        let large = Font::large();
+
+        assert_eq!(small.line_height(), 10);
+        assert_eq!(regular.line_height(), 16);
+        assert_eq!(large.line_height(), 24);
+
+        // Proportional spacing differences
+        let w_i = regular.measure_char(b'i');
+        let w_m = regular.measure_char(b'm');
+        let w_w = regular.measure_char(b'w');
+        let w_dot = regular.measure_char(b'.');
+        assert!(w_i < w_m);
+        assert!(w_dot < w_w);
+
+        // Monospace fixed pitch
+        let mono = Font::mono();
+        assert_eq!(mono.measure_char(b'i'), mono.measure_char(b'W'));
+        assert_eq!(mono.measure_char(b'.'), mono.measure_char(b'M'));
+
+        // Multiline string measurement
+        let text = "Hello\nWorld";
+        let sz = regular.measure_str(text);
+        assert_eq!(sz.h, regular.line_height() * 2);
+        assert!(sz.w > 0);
+    }
+
+    #[test]
+    fn test_font_antialiased_rendering() {
+        let mut buf = [0u32; 32 * 32];
+        let mut surface = BufferSurface32::new(&mut buf, 32, 32);
+
+        let font_aa = Font::large(); // 12x24 antialiased
+        draw_char_font(&mut surface, 4, 4, b'A', Color::WHITE, &font_aa);
+
+        let mut has_solid = false;
+        let mut has_intermediate = false;
+        for &p in surface.buffer.iter() {
+            if p == 0x00FFFFFF {
+                has_solid = true;
+            } else if p != 0 {
+                has_intermediate = true;
+            }
+        }
+
+        assert!(has_solid, "Glyph core should have solid white pixels");
+        assert!(has_intermediate, "Antialiased edges should produce blended fractional pixels");
+    }
+
+    #[test]
+    fn test_vector_stroke_rasterizer() {
+        let font_vec = Font::vector(28);
+        assert_eq!(font_vec.line_height(), (28 * 12) / 10);
+
+        let mut buf = [0u32; 32 * 32];
+        let mut surface = BufferSurface32::new(&mut buf, 32, 32);
+
+        // Draw scalable vector glyph '0'
+        draw_char_font(&mut surface, 2, 2, b'0', Color::WHITE, &font_vec);
+
+        let non_zero_count = surface.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_count > 20, "Vector glyph should rasterize pixels into surface");
+
+        // Intermediate coverage present from analytical distance falloff
+        let aa_pixels = surface.buffer.iter().filter(|&&p| p != 0 && p != 0x00FFFFFF).count();
+        assert!(aa_pixels > 0, "Vector rasterizer should produce antialiased edges");
     }
 }

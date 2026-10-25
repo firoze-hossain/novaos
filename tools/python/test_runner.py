@@ -267,6 +267,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wm_framebuffer_surface_selftest",
               r"\[wm-selftest\] PASS: framebuffer surface rendering \(BufferSurface32\)",
               "Month 2 Compositor: WM renders 32-bit XRGB framebuffer surfaces via BufferSurface32"),
+    Assertion("wm_font_antialiasing_selftest",
+              r"\[wm-selftest\] PASS: real multi-size font rendering and antialiasing",
+              "Month 2 Compositor: real multi-size font rendering and subpixel antialiasing"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

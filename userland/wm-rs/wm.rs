@@ -328,10 +328,23 @@ impl Wm {
             // Window border outline
             ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 1, border_col);
 
-            // Window digit label
+            // Window title text (real multi-size font with antialiasing)
             let text_col = if is_active { palette.text_primary } else { palette.text_muted };
-            let text_y = w.y + (self.titlebar_h - 7).max(0) / 2;
-            ui::draw::draw_char(surface, w.x + 4, text_y, b'0' + w.label, text_col, TypeScale::Body);
+            if self.titlebar_h >= 20 {
+                let font = Font::regular();
+                let text_y = w.y + (self.titlebar_h - font.line_height()) / 2;
+                let title_str = match w.label {
+                    1 => "Window 1 - Console",
+                    2 => "Window 2 - Files",
+                    3 => "Window 3 - Editor",
+                    _ => "Window 4 - System",
+                };
+                ui::font::draw_text_font(surface, w.x + 8, text_y, title_str, text_col, &font);
+            } else {
+                let font = Font::small();
+                let text_y = w.y + (self.titlebar_h - 8).max(0) / 2;
+                ui::font::draw_char_font(surface, w.x + 4, text_y, b'0' + w.label, text_col, &font);
+            }
 
             // Modern window control pills if titlebar is high-res
             if self.titlebar_h >= 14 && w.w >= 80 {
@@ -362,9 +375,24 @@ impl Wm {
                 surface.fill_rect(Rect::new(bx + 4, taskbar_y + self.taskbar_h - 2, button_w - 8, 2), palette.accent_primary);
             }
 
-            let text_y = taskbar_y + (self.taskbar_h - 7).max(0) / 2;
-            let text_x = bx + button_w / 2 - 2;
-            ui::draw::draw_char(surface, text_x, text_y, b'0' + self.windows[i].label, palette.text_primary, TypeScale::Body);
+            if self.taskbar_h >= 20 {
+                let font = Font::regular();
+                let label_str = match self.windows[i].label {
+                    1 => "Win 1",
+                    2 => "Win 2",
+                    3 => "Win 3",
+                    _ => "Win 4",
+                };
+                let sz = font.measure_str(label_str);
+                let text_x = bx + (button_w - sz.w) / 2;
+                let text_y = taskbar_y + (self.taskbar_h - font.line_height()) / 2;
+                ui::font::draw_text_font(surface, text_x, text_y, label_str, palette.text_primary, &font);
+            } else {
+                let font = Font::small();
+                let text_y = taskbar_y + (self.taskbar_h - 8).max(0) / 2;
+                let text_x = bx + button_w / 2 - 4;
+                ui::font::draw_char_font(surface, text_x, text_y, b'0' + self.windows[i].label, palette.text_primary, &font);
+            }
         }
 
         // 4. Mouse cursor
@@ -501,6 +529,26 @@ pub fn run_selftest() -> i32 {
     } else {
         unsafe { ffi::sys_write(b"[wm-selftest] FAIL: framebuffer surface rendering\n\0".as_ptr()) };
         code |= 64;
+    }
+
+    // Case 7 (Month 2 Compositor): Verify multi-size font rendering and antialiasing
+    let f_small = Font::small();
+    let f_reg = Font::regular();
+    let f_large = Font::large();
+    let m_small = f_small.measure_str("NovaOS");
+    let m_reg = f_reg.measure_str("NovaOS");
+    let m_large = f_large.measure_str("NovaOS");
+
+    let mut aa_buf = [0u32; 16 * 16];
+    let mut aa_surface = ui::draw::BufferSurface32::new(&mut aa_buf, 16, 16);
+    ui::font::draw_char_font(&mut aa_surface, 4, 0, b'A', Color::WHITE, &f_reg);
+    let has_aa_blend = aa_surface.buffer.iter().any(|&p| p != 0 && p != 0x00FFFFFF);
+
+    if m_large.h > m_reg.h && m_reg.h > m_small.h && has_aa_blend {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: real multi-size font rendering and antialiasing\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: font rendering\n\0".as_ptr()) };
+        code |= 128;
     }
 
     if code == 0 {
@@ -662,5 +710,34 @@ mod tests {
         assert_eq!(wm.windows[0].y, 0);
         assert_eq!(wm.windows[0].w, 512);
         assert_eq!(wm.windows[0].h, 732);
+    }
+
+    #[test]
+    fn test_wm_font_rendering_high_res() {
+        let wm = Wm::new_for_display(1024, 768);
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surface = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surface);
+
+        // Window 1 titlebar should contain antialiased text pixels
+        let title_region = Rect::new(40, 40, 360, 28);
+        let mut non_zero_pixels = 0;
+        let mut aa_pixels = 0;
+        let bg_color = Theme::Dark.palette().titlebar_active.to_xrgb();
+
+        for y in title_region.y..title_region.bottom() {
+            for x in title_region.x..title_region.right() {
+                let p = surface.buffer[(y * 1024 + x) as usize];
+                if p != bg_color {
+                    non_zero_pixels += 1;
+                    if p != 0x00FFFFFF && p != 0 {
+                        aa_pixels += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(non_zero_pixels > 50, "Window titlebar should contain rendered text pixels");
+        assert!(aa_pixels > 0, "Window titlebar should contain antialiased blended pixels");
     }
 }
