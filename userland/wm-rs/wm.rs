@@ -53,6 +53,7 @@ pub const FB_MENUBAR_H: i32 = MENUBAR_HEIGHT;   // 24px
 pub const FB_DESKTOP_H: i32 = FB_SCREEN_H - FB_TASKBAR_H; // 732px
 
 pub const MAX_WINDOWS: usize = 4;
+pub const MAX_DOCK_ITEMS: usize = 8;
 pub const SNAP_MARGIN: i32 = 4;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -62,7 +63,7 @@ pub enum SnapState {
     Right,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Window {
     pub x: i32,
     pub y: i32,
@@ -73,6 +74,8 @@ pub struct Window {
     pub label: u8,
     pub snap: SnapState,
     pub pre_snap: (i32, i32, i32, i32),
+    pub is_open: bool,
+    pub is_minimized: bool,
 }
 
 impl Window {
@@ -84,6 +87,8 @@ impl Window {
             label,
             snap: SnapState::Normal,
             pre_snap: (x, y, w, h),
+            is_open: true,
+            is_minimized: false,
         }
     }
 
@@ -121,12 +126,26 @@ pub struct Wm {
     pub hovered_menu: Option<usize>,
     pub hovered_item: Option<usize>,
     pub last_menu_event: Option<MenuClickEvent>,
+    pub dock_apps: [DockApp; MAX_DOCK_ITEMS],
+    pub dock_count: usize,
+    pub hovered_dock_item: Option<usize>,
+    pub last_dock_event: Option<DockEvent>,
 }
 
 impl Wm {
     /// Constructs default WM geometry matching the 320x200 layout,
     /// ensuring deterministic compatibility with automated self-tests.
     pub fn new() -> Self {
+        let default_apps = [
+            DEFAULT_PINNED_APPS[0],
+            DEFAULT_PINNED_APPS[1],
+            DEFAULT_PINNED_APPS[2],
+            DEFAULT_PINNED_APPS[3],
+            DEFAULT_PINNED_APPS[4],
+            DockApp::new(0, "", "", false),
+            DockApp::new(0, "", "", false),
+            DockApp::new(0, "", "", false),
+        ];
         Wm {
             screen_w: DEFAULT_SCREEN_W,
             screen_h: DEFAULT_SCREEN_H,
@@ -152,6 +171,10 @@ impl Wm {
             hovered_menu: None,
             hovered_item: None,
             last_menu_event: None,
+            dock_apps: default_apps,
+            dock_count: 4,
+            hovered_dock_item: None,
+            last_dock_event: None,
         }
     }
 
@@ -169,6 +192,19 @@ impl Wm {
         let w1 = Window::new(440, 60, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 2);
         let w2 = Window::new(120, 330, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 3);
         let w3 = Window::new(520, 350, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 4);
+
+        let default_apps = [
+            DEFAULT_PINNED_APPS[0],
+            DEFAULT_PINNED_APPS[1],
+            DEFAULT_PINNED_APPS[2],
+            DEFAULT_PINNED_APPS[3],
+            DEFAULT_PINNED_APPS[4],
+            DockApp::new(0, "", "", false),
+            DockApp::new(0, "", "", false),
+            DockApp::new(0, "", "", false),
+        ];
+
+        let dock_count = if height >= 600 { 5 } else { 4 };
 
         Wm {
             screen_w: width,
@@ -190,6 +226,10 @@ impl Wm {
             hovered_menu: None,
             hovered_item: None,
             last_menu_event: None,
+            dock_apps: default_apps,
+            dock_count,
+            hovered_dock_item: None,
+            last_dock_event: None,
         }
     }
 
@@ -207,6 +247,9 @@ impl Wm {
         for i in (0..MAX_WINDOWS).rev() {
             let idx = self.z_order[i];
             let w = &self.windows[idx];
+            if !w.is_open || w.is_minimized {
+                continue;
+            }
             if point_in_rect(px, py, w.x, w.y, w.w, self.titlebar_h) {
                 return Some(idx);
             }
@@ -218,6 +261,9 @@ impl Wm {
         for i in (0..MAX_WINDOWS).rev() {
             let idx = self.z_order[i];
             let w = &self.windows[idx];
+            if !w.is_open || w.is_minimized {
+                continue;
+            }
             if point_in_rect(px, py, w.x, w.y, w.w, w.h) {
                 return Some(idx);
             }
@@ -225,15 +271,55 @@ impl Wm {
         None
     }
 
+    /// Returns the topmost window that is open and not minimized.
+    pub fn active_window(&self) -> Option<usize> {
+        for i in (0..MAX_WINDOWS).rev() {
+            let idx = self.z_order[i];
+            let w = &self.windows[idx];
+            if w.is_open && !w.is_minimized {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Hit-tests pointer coordinates against dock / taskbar items.
+    pub fn dock_item_at(&self, px: i32, py: i32) -> Option<usize> {
+        if py < self.desktop_h || py >= self.screen_h || px < 0 || px >= self.screen_w {
+            return None;
+        }
+
+        if self.taskbar_h >= 24 {
+            let taskbar_rect = Rect::new(0, self.desktop_h, self.screen_w, self.taskbar_h);
+            let start_w = 36;
+            let start_offset_x = start_w + 12;
+            let max_item_w = if self.screen_w >= 800 { 120 } else { 80 };
+
+            for i in 0..self.dock_count {
+                if let Some(rect) = ui::dock::measure_dock_item(i, self.dock_count, taskbar_rect, start_offset_x, max_item_w) {
+                    if point_in_rect(px, py, rect.x, rect.y, rect.w, rect.h) {
+                        return Some(i);
+                    }
+                }
+            }
+            None
+        } else {
+            let count = self.dock_count.max(1);
+            let button_w = self.screen_w / count as i32;
+            if button_w <= 0 {
+                return None;
+            }
+            let idx = (px / button_w) as usize;
+            if idx < count {
+                Some(idx)
+            } else {
+                None
+            }
+        }
+    }
+
     pub fn taskbar_button_at(&self, px: i32, py: i32) -> Option<usize> {
-        if py < self.desktop_h || px >= self.screen_w {
-            return None;
-        }
-        let button_w = self.screen_w / MAX_WINDOWS as i32;
-        if button_w <= 0 {
-            return None;
-        }
-        Some((px / button_w) as usize)
+        self.dock_item_at(px, py)
     }
 
     /// Returns the MenuBar for the window at `win_index`.
@@ -247,8 +333,11 @@ impl Wm {
 
     /// Returns the MenuBar for the currently focused (active) window.
     pub fn current_menubar(&self) -> ui::menu::MenuBar {
-        let topmost = self.z_order[MAX_WINDOWS - 1];
-        self.app_menubar(topmost)
+        if let Some(topmost) = self.active_window() {
+            self.app_menubar(topmost)
+        } else {
+            ui::menu::SYSTEM_MENUBAR
+        }
     }
 
     /// Hit-tests a point against the top menu bar items.
@@ -328,6 +417,181 @@ impl Wm {
         self.last_menu_event.take()
     }
 
+    /// Computes the runtime state of all items currently displayed in the dock/taskbar.
+    pub fn dock_items(&self) -> [Option<DockItem>; MAX_DOCK_ITEMS] {
+        let mut items = [None; MAX_DOCK_ITEMS];
+        let active_win = self.active_window();
+
+        for i in 0..self.dock_count {
+            let app = self.dock_apps[i];
+            let mut matching_win = None;
+            for (w_idx, w) in self.windows.iter().enumerate() {
+                if w.is_open && w.label == app.app_id {
+                    matching_win = Some((w_idx, w));
+                    break;
+                }
+            }
+
+            if let Some((w_idx, w)) = matching_win {
+                let is_active = active_win == Some(w_idx);
+                items[i] = Some(DockItem::new(
+                    app,
+                    true,
+                    is_active,
+                    w.is_minimized,
+                    Some(w_idx),
+                ));
+            } else {
+                items[i] = Some(DockItem::new(
+                    app,
+                    false,
+                    false,
+                    false,
+                    None,
+                ));
+            }
+        }
+        items
+    }
+
+    /// Handles a click on the dock / taskbar item at index `idx`.
+    pub fn on_dock_item_click(&mut self, idx: usize) {
+        if idx >= self.dock_count {
+            return;
+        }
+        let app = self.dock_apps[idx];
+        let items = self.dock_items();
+        let item = match items[idx] {
+            Some(it) => it,
+            None => return,
+        };
+
+        if item.is_running {
+            if let Some(win_idx) = item.window_id {
+                let is_active = self.active_window() == Some(win_idx);
+                if is_active {
+                    // Clicking active focused window minimizes it to taskbar
+                    self.minimize_window(win_idx);
+                } else if self.windows[win_idx].is_minimized {
+                    // Clicking minimized window restores and focuses it
+                    self.restore_window(win_idx);
+                } else {
+                    // Clicking inactive running window raises it to front
+                    self.raise(win_idx);
+                    self.last_dock_event = Some(DockEvent::Switch { window_id: win_idx });
+                }
+            }
+        } else {
+            // App is pinned but NOT currently running: Launch-on-click!
+            self.last_dock_event = Some(DockEvent::Launch {
+                app_id: app.app_id,
+                exec_path: app.exec_path,
+            });
+
+            // Re-open window if matching slot exists
+            for (w_idx, w) in self.windows.iter_mut().enumerate() {
+                if w.label == app.app_id {
+                    w.is_open = true;
+                    w.is_minimized = false;
+                    self.raise(w_idx);
+                    return;
+                }
+            }
+
+            // Or allocate first closed slot
+            for (w_idx, w) in self.windows.iter_mut().enumerate() {
+                if !w.is_open {
+                    w.label = app.app_id;
+                    w.is_open = true;
+                    w.is_minimized = false;
+                    self.raise(w_idx);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Minimizes `win_idx` to the dock / taskbar.
+    pub fn minimize_window(&mut self, win_idx: usize) {
+        if win_idx < MAX_WINDOWS {
+            self.windows[win_idx].is_minimized = true;
+            self.last_dock_event = Some(DockEvent::Minimize { window_id: win_idx });
+        }
+    }
+
+    /// Restores a minimized window and brings it to front.
+    pub fn restore_window(&mut self, win_idx: usize) {
+        if win_idx < MAX_WINDOWS {
+            self.windows[win_idx].is_minimized = false;
+            self.windows[win_idx].is_open = true;
+            self.raise(win_idx);
+            self.last_dock_event = Some(DockEvent::Restore { window_id: win_idx });
+        }
+    }
+
+    /// Closes window `win_idx` while preserving its pinned dock status.
+    pub fn close_window(&mut self, win_idx: usize) {
+        if win_idx < MAX_WINDOWS {
+            self.windows[win_idx].is_open = false;
+            self.windows[win_idx].is_minimized = false;
+        }
+    }
+
+    /// Pins `app` to the dock / taskbar.
+    pub fn pin_app(&mut self, app: DockApp) -> bool {
+        for i in 0..self.dock_count {
+            if self.dock_apps[i].app_id == app.app_id {
+                self.dock_apps[i].is_pinned = true;
+                self.last_dock_event = Some(DockEvent::Pin { app_id: app.app_id });
+                return true;
+            }
+        }
+        if self.dock_count < MAX_DOCK_ITEMS {
+            self.dock_apps[self.dock_count] = app;
+            self.dock_count += 1;
+            self.last_dock_event = Some(DockEvent::Pin { app_id: app.app_id });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Unpins `app_id` from the dock.
+    pub fn unpin_app(&mut self, app_id: u8) -> bool {
+        for i in 0..self.dock_count {
+            if self.dock_apps[i].app_id == app_id {
+                let items = self.dock_items();
+                let is_running = items[i].map_or(false, |it| it.is_running);
+                if is_running {
+                    self.dock_apps[i].is_pinned = false;
+                } else {
+                    for j in i..self.dock_count - 1 {
+                        self.dock_apps[j] = self.dock_apps[j + 1];
+                    }
+                    self.dock_count -= 1;
+                }
+                self.last_dock_event = Some(DockEvent::Unpin { app_id });
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Checks if `app_id` is pinned in the dock.
+    pub fn is_app_pinned(&self, app_id: u8) -> bool {
+        for i in 0..self.dock_count {
+            if self.dock_apps[i].app_id == app_id && self.dock_apps[i].is_pinned {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drains and returns the most recent dock event, if any.
+    pub fn take_dock_event(&mut self) -> Option<DockEvent> {
+        self.last_dock_event.take()
+    }
+
     /// Evaluates dynamic cursor shape based on current pointer coordinates.
     pub fn cursor_shape_at(&self, cx: i32, cy: i32) -> CursorShape {
         if self.dragging.is_some() {
@@ -355,6 +619,9 @@ impl Wm {
         for i in (0..MAX_WINDOWS).rev() {
             let win_idx = self.z_order[i];
             let w = &self.windows[win_idx];
+            if !w.is_open || w.is_minimized {
+                continue;
+            }
             if point_in_rect(cx, cy, w.x, w.y, w.w, w.h) {
                 if cy < w.y + self.titlebar_h {
                     if self.titlebar_h >= 14 && w.w >= 80 {
@@ -425,14 +692,30 @@ impl Wm {
 
         // 3. Taskbar button clicks
         if let Some(idx) = self.taskbar_button_at(px, py) {
-            if idx < MAX_WINDOWS {
-                self.raise(idx);
-            }
+            self.on_dock_item_click(idx);
             return;
         }
 
         // 4. Window titlebar clicks (raise and start drag)
         if let Some(idx) = self.titlebar_at(px, py) {
+            let w = &mut self.windows[idx];
+            if self.titlebar_h >= 14 && w.w >= 80 {
+                let btn_size = if self.titlebar_h >= 20 { 12 } else { 8 };
+                let btn_y = w.y + (self.titlebar_h - btn_size) / 2;
+                let close_x = w.x + w.w - btn_size - 8;
+                let min_x = close_x - (btn_size + 6) * 2;
+
+                if py >= btn_y && py < btn_y + btn_size {
+                    if px >= close_x && px < close_x + btn_size {
+                        self.close_window(idx);
+                        return;
+                    } else if px >= min_x && px < min_x + btn_size {
+                        self.minimize_window(idx);
+                        return;
+                    }
+                }
+            }
+
             self.raise(idx);
             let w = &mut self.windows[idx];
             if w.snap != SnapState::Normal {
@@ -480,6 +763,7 @@ impl Wm {
 
         self.hovered_menu = self.menubar_item_at(self.cursor_x, self.cursor_y);
         self.hovered_item = self.dropdown_item_at(self.cursor_x, self.cursor_y);
+        self.hovered_dock_item = self.dock_item_at(self.cursor_x, self.cursor_y);
 
         // If dropdown is open, hovering over another top menu switches to that dropdown
         if self.active_menu.is_some() {
@@ -519,11 +803,14 @@ impl Wm {
         surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
 
         // 2. Windows in z-order
-        let topmost = self.z_order[MAX_WINDOWS - 1];
+        let active_win = self.active_window();
         for i in 0..MAX_WINDOWS {
             let win_idx = self.z_order[i];
             let w = &self.windows[win_idx];
-            let is_active = win_idx == topmost;
+            if !w.is_open || w.is_minimized {
+                continue;
+            }
+            let is_active = Some(win_idx) == active_win;
 
             let (tb_color, border_col) = if is_active {
                 (w.titlebar_color, palette.border_focused)
@@ -624,41 +911,59 @@ impl Wm {
             }
         }
 
-        // 3. Taskbar
-        let taskbar_y = self.desktop_h;
-        surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, self.taskbar_h), palette.taskbar_bg);
-        surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, 1), palette.border_subtle);
-
-        let button_w = self.screen_w / MAX_WINDOWS as i32;
-        for i in 0..MAX_WINDOWS {
-            let bx = i as i32 * button_w;
-            let is_active = i == topmost;
-            let bg = if is_active { palette.taskbar_item_active } else { palette.taskbar_item_inactive };
-
-            let btn_rect = Rect::new(bx + 1, taskbar_y + 1, button_w - 2, self.taskbar_h - 2);
-            surface.fill_rect(btn_rect, bg);
-
-            if is_active && self.taskbar_h >= 8 {
-                surface.fill_rect(Rect::new(bx + 4, taskbar_y + self.taskbar_h - 2, button_w - 8, 2), palette.accent_primary);
+        // 3. Taskbar / Dock
+        if self.taskbar_h >= 24 {
+            let dock_items = self.dock_items();
+            let mut valid_items = [DockItem::new(self.dock_apps[0], false, false, false, None); MAX_DOCK_ITEMS];
+            let mut valid_count = 0;
+            for i in 0..self.dock_count {
+                if let Some(it) = dock_items[i] {
+                    valid_items[valid_count] = it;
+                    valid_count += 1;
+                }
             }
+            let taskbar_rect = Rect::new(0, self.desktop_h, self.screen_w, self.taskbar_h);
+            ui::dock::draw_dock_surface(
+                surface,
+                taskbar_rect,
+                &valid_items[..valid_count],
+                self.hovered_dock_item,
+                "12:45 PM",
+                &palette,
+            );
+        } else {
+            let taskbar_y = self.desktop_h;
+            surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, self.taskbar_h), palette.taskbar_bg);
+            surface.fill_rect(Rect::new(0, taskbar_y, self.screen_w, 1), palette.border_subtle);
 
-            if self.taskbar_h >= 20 {
-                let font = Font::regular();
-                let label_str = match self.windows[i].label {
-                    1 => "Win 1",
-                    2 => "Win 2",
-                    3 => "Win 3",
-                    _ => "Win 4",
+            let count = self.dock_count.max(1);
+            let button_w = self.screen_w / count as i32;
+            let active_win = self.active_window();
+
+            for i in 0..count {
+                let bx = i as i32 * button_w;
+                let is_active = active_win == Some(i);
+                let is_minimized = i < MAX_WINDOWS && self.windows[i].is_minimized;
+                let bg = if is_active {
+                    palette.taskbar_item_active
+                } else if is_minimized {
+                    palette.surface_sunken
+                } else {
+                    palette.taskbar_item_inactive
                 };
-                let sz = font.measure_str(label_str);
-                let text_x = bx + (button_w - sz.w) / 2;
-                let text_y = taskbar_y + (self.taskbar_h - font.line_height()) / 2;
-                ui::font::draw_text_font(surface, text_x, text_y, label_str, palette.text_primary, &font);
-            } else {
+
+                let btn_rect = Rect::new(bx + 1, taskbar_y + 1, button_w - 2, self.taskbar_h - 2);
+                surface.fill_rect(btn_rect, bg);
+
+                if is_active && self.taskbar_h >= 8 {
+                    surface.fill_rect(Rect::new(bx + 4, taskbar_y + self.taskbar_h - 2, button_w - 8, 2), palette.accent_primary);
+                }
+
                 let font = Font::small();
                 let text_y = taskbar_y + (self.taskbar_h - 8).max(0) / 2;
                 let text_x = bx + button_w / 2 - 4;
-                ui::font::draw_char_font(surface, text_x, text_y, b'0' + self.windows[i].label, palette.text_primary, &font);
+                let lbl_char = if i < MAX_WINDOWS { b'0' + self.windows[i].label } else { b'0' + (i as u8 + 1) };
+                ui::font::draw_char_font(surface, text_x, text_y, lbl_char, palette.text_primary, &font);
             }
         }
 
@@ -723,6 +1028,10 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 4, y + 4, 4, 1), palette.text_muted);
             s.fill_rect(Rect::new(x + 4, y + 6, 4, 1), palette.text_muted);
             s.fill_rect(Rect::new(x + 4, y + 8, 3, 1), palette.text_muted);
+        }
+        5 => {
+            // Settings sliders icon
+            ui::dock::draw_dock_app_icon(s, x, y, 5, palette);
         }
         _ => {
             // System gear icon
@@ -1010,6 +1319,83 @@ pub fn run_selftest() -> i32 {
     } else {
         unsafe { ffi::sys_write(b"[wm-selftest] FAIL: persistent top menu bar\n\0".as_ptr()) };
         code |= 512;
+    }
+
+    // Case 10 (Month 3 Core desktop apps): Dock with app pinning and window switching
+    let mut wm_dock = Wm::new_for_display(1024, 768);
+
+    // 1. Verify default pinned applications
+    let p_term = wm_dock.is_app_pinned(APP_ID_TERMINAL);
+    let p_files = wm_dock.is_app_pinned(APP_ID_FILES);
+    let p_edit = wm_dock.is_app_pinned(APP_ID_EDITOR);
+    let p_sys = wm_dock.is_app_pinned(APP_ID_SYSTEM);
+    let p_set = wm_dock.is_app_pinned(APP_ID_SETTINGS);
+    let initial_count_ok = wm_dock.dock_count == 5;
+
+    // 2. Verify window switching and minimize/restore toggle
+    // Initially Window 3 (System) is active (topmost in z_order)
+    let init_active = wm_dock.active_window() == Some(3);
+    // Clicking active Window 3 item in dock minimizes it!
+    wm_dock.on_dock_item_click(3);
+    let win3_minimized = wm_dock.windows[3].is_minimized;
+    let min_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Minimize { window_id: 3 });
+
+    // Clicking minimized Window 3 item in dock restores and raises it!
+    wm_dock.on_dock_item_click(3);
+    let win3_restored = !wm_dock.windows[3].is_minimized && wm_dock.active_window() == Some(3);
+    let res_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Restore { window_id: 3 });
+
+    // 3. Focus switching between open windows
+    // Clicking Window 1 (Files) raises it
+    wm_dock.on_dock_item_click(1);
+    let win1_focused = wm_dock.active_window() == Some(1);
+    let switch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Switch { window_id: 1 });
+
+    // 4. Launch-on-click for pinned unlaunched app (Settings, App 5)
+    let set_init_running = wm_dock.dock_items()[4].unwrap().is_running;
+    wm_dock.on_dock_item_click(4);
+    let launch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Launch {
+        app_id: APP_ID_SETTINGS,
+        exec_path: "SETTINGS.ELF",
+    });
+
+    // 5. Window close and re-launch
+    // Close Window 2 (Editor)
+    wm_dock.close_window(2);
+    let win2_closed = !wm_dock.windows[2].is_open;
+    let edit_pinned_after_close = wm_dock.is_app_pinned(APP_ID_EDITOR);
+    let edit_not_running = !wm_dock.dock_items()[2].unwrap().is_running;
+
+    // Launch Editor by clicking its dock item
+    wm_dock.on_dock_item_click(2);
+    let win2_reopened = wm_dock.windows[2].is_open && wm_dock.active_window() == Some(2);
+    let relaunch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Launch {
+        app_id: APP_ID_EDITOR,
+        exec_path: "EDIT.ELF",
+    });
+
+    // 6. Dynamic Pinning and Unpinning
+    let custom_app = DockApp::new(6, "Calc", "CALC.ELF", true);
+    let pin_ok = wm_dock.pin_app(custom_app) && wm_dock.is_app_pinned(6) && wm_dock.dock_count == 6;
+    let unpin_ok = wm_dock.unpin_app(6) && !wm_dock.is_app_pinned(6) && wm_dock.dock_count == 5;
+
+    // 7. Dock surface rasterization
+    test_buf[..1024 * 40].fill(0);
+    let mut dock_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 40], 1024, 40);
+    wm_dock.render(&mut dock_surf);
+    let dock_non_zero = dock_surf.buffer.iter().filter(|&&p| p != 0).count();
+    let render_ok = dock_non_zero > 100;
+
+    if p_term && p_files && p_edit && p_sys && p_set && initial_count_ok
+        && init_active && win3_minimized && min_event_ok && win3_restored && res_event_ok
+        && win1_focused && switch_event_ok && !set_init_running && launch_event_ok
+        && win2_closed && edit_pinned_after_close && edit_not_running && win2_reopened
+        && relaunch_event_ok && pin_ok && unpin_ok && render_ok
+    {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: dock with app pinning and window switching\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: dock with app pinning and window switching\n\0".as_ptr()) };
+        code |= 1024;
     }
 
     if code == 0 {
@@ -1319,5 +1705,55 @@ mod tests {
         assert_eq!(ev.menu_index, 0);
         assert_eq!(ev.item_index, 3);
         assert_eq!(ev.action_id, ui::menu::ACTION_FILE_CLOSE);
+    }
+
+    #[test]
+    fn test_wm_dock_pinning_and_switching() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        assert_eq!(wm.dock_count, 5);
+        assert!(wm.is_app_pinned(APP_ID_TERMINAL));
+        assert!(wm.is_app_pinned(APP_ID_SETTINGS));
+
+        // Window 3 (System) starts active
+        assert_eq!(wm.active_window(), Some(3));
+
+        // Click active Window 3 dock button -> minimizes
+        wm.on_dock_item_click(3);
+        assert!(wm.windows[3].is_minimized);
+        assert_eq!(wm.take_dock_event(), Some(DockEvent::Minimize { window_id: 3 }));
+
+        // Click again -> restores and raises
+        wm.on_dock_item_click(3);
+        assert!(!wm.windows[3].is_minimized);
+        assert_eq!(wm.active_window(), Some(3));
+        assert_eq!(wm.take_dock_event(), Some(DockEvent::Restore { window_id: 3 }));
+
+        // Switch to Window 0 (Terminal)
+        wm.on_dock_item_click(0);
+        assert_eq!(wm.active_window(), Some(0));
+        assert_eq!(wm.take_dock_event(), Some(DockEvent::Switch { window_id: 0 }));
+    }
+
+    #[test]
+    fn test_wm_dock_launch_on_click() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // Click Settings (item 4, not running) -> launches Settings!
+        let items = wm.dock_items();
+        assert!(!items[4].unwrap().is_running);
+        wm.on_dock_item_click(4);
+
+        let ev = wm.take_dock_event().expect("should emit launch event");
+        assert_eq!(ev, DockEvent::Launch { app_id: APP_ID_SETTINGS, exec_path: "SETTINGS.ELF" });
+
+        // Close Window 1 (Files)
+        wm.close_window(1);
+        assert!(!wm.windows[1].is_open);
+        assert!(wm.is_app_pinned(APP_ID_FILES));
+
+        // Click Files dock item (item 1) -> launches and reopens window
+        wm.on_dock_item_click(1);
+        assert!(wm.windows[1].is_open);
+        assert_eq!(wm.active_window(), Some(1));
     }
 }

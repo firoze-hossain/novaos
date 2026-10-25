@@ -8,6 +8,7 @@
 
 pub mod color;
 pub mod cursor;
+pub mod dock;
 pub mod draw;
 pub mod font;
 pub mod font_data;
@@ -21,6 +22,11 @@ pub mod prelude {
     pub use crate::color::{Color, Theme, ThemePalette, BLACK, TRANSPARENT, WHITE};
     pub use crate::cursor::{
         draw_cursor_sprite, CursorColors, CursorShape, CursorSprite, CursorTheme,
+    };
+    pub use crate::dock::{
+        app_for_id, draw_dock_app_icon, draw_dock_surface, measure_dock_item, DockApp, DockEvent,
+        DockItem, APP_ID_EDITOR, APP_ID_FILES, APP_ID_SETTINGS, APP_ID_SYSTEM, APP_ID_TERMINAL,
+        DEFAULT_PINNED_APPS, MAX_PINNED_APPS,
     };
     pub use crate::draw::{
         draw_button, draw_char, draw_checkbox, draw_line, draw_progress_bar, draw_rect_outline,
@@ -184,6 +190,15 @@ pub fn run_design_system_selftest() -> i32 {
     let quit_item = term_bar.menus[0].items.iter().find(|it| it.action_id == ACTION_FILE_QUIT);
     if quit_item.is_none() {
         failures |= 32768;
+    }
+
+    // 10. Dock & Taskbar Invariants (Month 3 Core Desktop)
+    let pinned = DEFAULT_PINNED_APPS;
+    if pinned.len() < 5 || !pinned[0].is_pinned || pinned[0].app_id != APP_ID_TERMINAL {
+        failures |= 65536;
+    }
+    if app_for_id(APP_ID_SETTINGS).is_none() {
+        failures |= 65536;
     }
 
     failures
@@ -504,5 +519,80 @@ mod tests {
         // Verify dropdown background and highlighted item pixels exist
         let non_zero = surface.buffer.iter().filter(|&&p| p != 0).count();
         assert!(non_zero > 500);
+    }
+
+    #[test]
+    fn test_dock_structures_and_defaults() {
+        let apps = DEFAULT_PINNED_APPS;
+        assert_eq!(apps.len(), 5);
+        assert_eq!(apps[0].name, "Terminal");
+        assert_eq!(apps[0].exec_path, "SHELL.ELF");
+        assert!(apps[0].is_pinned);
+
+        assert_eq!(apps[4].name, "Settings");
+        assert_eq!(apps[4].exec_path, "SETTINGS.ELF");
+
+        let app = app_for_id(APP_ID_FILES).expect("files app must exist");
+        assert_eq!(app.name, "Files");
+    }
+
+    #[test]
+    fn test_dock_item_states_and_measurement() {
+        let app = DEFAULT_PINNED_APPS[0];
+        let item_running = DockItem::new(app, true, true, false, Some(0));
+        assert!(item_running.is_running);
+        assert!(item_running.is_active);
+        assert!(!item_running.is_minimized);
+        assert_eq!(item_running.window_id, Some(0));
+
+        let item_minimized = DockItem::new(app, true, false, true, Some(0));
+        assert!(item_minimized.is_minimized);
+
+        let item_unlaunched = DockItem::new(app, false, false, false, None);
+        assert!(!item_unlaunched.is_running);
+
+        let taskbar = Rect::new(0, 732, 1024, 36);
+        let rect = measure_dock_item(0, 5, taskbar, 48, 120);
+        assert!(rect.is_some());
+        let r = rect.unwrap();
+        assert_eq!(r.x, 48);
+        assert_eq!(r.y, 734);
+        assert!(r.w >= 48);
+        assert_eq!(r.h, 32);
+    }
+
+    #[test]
+    fn test_dock_surface_rendering() {
+        let items = [
+            DockItem::new(DEFAULT_PINNED_APPS[0], true, true, false, Some(0)),
+            DockItem::new(DEFAULT_PINNED_APPS[1], true, false, false, Some(1)),
+            DockItem::new(DEFAULT_PINNED_APPS[2], true, false, true, Some(2)),
+            DockItem::new(DEFAULT_PINNED_APPS[3], false, false, false, None),
+        ];
+
+        let mut buf = [0u32; 1024 * 36];
+        let mut surface = BufferSurface32::new(&mut buf, 1024, 36);
+        let palette = Theme::Dark.palette();
+
+        draw_dock_surface(
+            &mut surface,
+            Rect::new(0, 0, 1024, 36),
+            &items,
+            Some(1),
+            "12:45 PM",
+            &palette,
+        );
+
+        // Verify taskbar rendered non-zero pixels
+        let non_zero = surface.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero > 1000);
+
+        // Verify top border line
+        assert_eq!(surface.buffer[500], palette.border_subtle.to_xrgb());
+
+        // Verify active running indicator bar is rendered at bottom of item 0
+        let item0_rect = measure_dock_item(0, 4, Rect::new(0, 0, 1024, 36), 48, 120).unwrap();
+        let bar_pixel = surface.buffer[(item0_rect.bottom() - 1) as usize * 1024 + (item0_rect.x + 15) as usize];
+        assert_eq!(bar_pixel, palette.accent_primary.to_xrgb());
     }
 }
