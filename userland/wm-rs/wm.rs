@@ -829,6 +829,11 @@ impl Wm {
             let body_h = w.h - self.titlebar_h;
             if body_h > 0 {
                 surface.fill_rect(Rect::new(w.x, body_y, w.w, body_h), w.body_color);
+
+                // Window 1 ("Files - Root Directory"): render client file manager view on high-res
+                if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                }
             }
 
             // Window titlebar
@@ -1040,6 +1045,106 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 2, y + 4, 8, 4), gear_col);
             s.fill_rect(Rect::new(x + 5, y + 5, 2, 2), palette.titlebar_active);
         }
+    }
+}
+
+/// Renders a graphical file manager view inside the client area of Window 1.
+fn draw_files_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
+    let f_small = Font::small();
+
+    // 1. Client toolbar
+    let tb_h = 24;
+    let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
+    s.fill_rect(tb_rect, palette.surface_raised);
+    s.fill_rect(Rect::new(client.x, tb_rect.bottom() - 1, client.w, 1), palette.border_subtle);
+
+    // Path pill
+    let path_rect = Rect::new(client.x + 6, client.y + 3, 64, 18);
+    ui::draw::draw_rounded_rect(s, path_rect, 2, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, path_rect, 1, palette.border_subtle);
+    ui::font::draw_text_font(s, path_rect.x + 6, path_rect.y + 2, "/root", palette.text_primary, &f_small);
+
+    // Mini buttons: Open, Move, Delete
+    let btns: &[(&str, Color)] = &[
+        ("Open", palette.accent_primary),
+        ("Move", palette.surface_raised.lighten(30)),
+        ("Delete", palette.status_danger),
+    ];
+    let mut bx = path_rect.right() + 8;
+    for &(label, col) in btns {
+        if bx + 42 > client.right() - 4 {
+            break;
+        }
+        let b_rect = Rect::new(bx, client.y + 3, 40, 18);
+        ui::draw::draw_rounded_rect(s, b_rect, 2, col);
+        let sz = f_small.measure_str(label);
+        let tx = b_rect.x + (b_rect.w - sz.w) / 2;
+        let ty = b_rect.y + (b_rect.h - f_small.line_height()) / 2;
+        ui::font::draw_text_font(s, tx, ty, label, Color::WHITE, &f_small);
+        bx += 44;
+    }
+
+    // 2. Table Column Headers
+    let hdr_y = tb_rect.bottom();
+    let hdr_h = 18;
+    let hdr_rect = Rect::new(client.x, hdr_y, client.w, hdr_h);
+    s.fill_rect(hdr_rect, palette.surface_raised.darken(10));
+    s.fill_rect(Rect::new(client.x, hdr_rect.bottom() - 1, client.w, 1), palette.border_subtle);
+
+    ui::font::draw_text_font(s, client.x + 24, hdr_y + 2, "Name", palette.text_muted, &f_small);
+    if client.w >= 200 {
+        ui::font::draw_text_font(s, client.x + 130, hdr_y + 2, "Size", palette.text_muted, &f_small);
+    }
+    if client.w >= 280 {
+        ui::font::draw_text_font(s, client.x + 190, hdr_y + 2, "Type", palette.text_muted, &f_small);
+    }
+
+    // 3. File Rows
+    let rows: &[(&str, &str, &str, Color)] = &[
+        ("HELLO.TXT",     "68 B",   "Document", Color::WHITE),
+        ("SHELL.ELF",     "4.0 KB", "Executable", palette.status_success),
+        ("SYSTEM.CFG",    "512 B",  "Config", Color::rgb(140, 190, 240)),
+        ("FIREWALL.CFG",  "1.2 KB", "Config", Color::rgb(140, 190, 240)),
+    ];
+
+    let mut ry = hdr_rect.bottom() + 1;
+    let row_h = 20;
+    for (idx, &(name, size, kind, icon_col)) in rows.iter().enumerate() {
+        if ry + row_h > client.bottom() - 18 {
+            break;
+        }
+        // Selection on row 0
+        if idx == 0 {
+            s.fill_rect(Rect::new(client.x + 1, ry, client.w - 2, row_h), palette.accent_primary.darken(40));
+        }
+
+        // Mini file icon
+        ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, ry + 4, 8, 10), 1, icon_col);
+
+        // Name
+        let name_col = if idx == 0 { Color::WHITE } else { palette.text_primary };
+        ui::font::draw_text_font(s, client.x + 24, ry + 3, name, name_col, &f_small);
+
+        // Size
+        if client.w >= 200 {
+            ui::font::draw_text_font(s, client.x + 130, ry + 3, size, palette.text_secondary, &f_small);
+        }
+
+        // Type
+        if client.w >= 280 {
+            ui::font::draw_text_font(s, client.x + 190, ry + 3, kind, palette.text_secondary, &f_small);
+        }
+
+        ry += row_h;
+    }
+
+    // 4. Status Bar at bottom
+    if client.h >= 100 {
+        let sb_h = 18;
+        let sb_rect = Rect::new(client.x, client.bottom() - sb_h, client.w, sb_h);
+        s.fill_rect(sb_rect, palette.surface_raised);
+        s.fill_rect(Rect::new(client.x, sb_rect.y, client.w, 1), palette.border_subtle);
+        ui::font::draw_text_font(s, client.x + 8, sb_rect.y + 2, "4 files | 5.8 KB", palette.text_muted, &f_small);
     }
 }
 

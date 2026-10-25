@@ -287,6 +287,11 @@ ASSERTIONS: list[Assertion] = [
               "titlebar dragging, click-to-focus, taskbar-click focus, "
               "and edge snap/un-snap - all behaved correctly against "
               "synthetic mouse input, run through the real SYS_EXEC path"),
+    Assertion("files_selftest_passed",
+              r"sandbox. PASS: FILES\.ELF --selftest - file browser, open, "
+              r"move, and delete all behaved correctly",
+              "Month 3 Core desktop apps: userland/files-rs/files.rs - browse VFS files, "
+              "open preview, move/rename, and delete via mouse operations"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

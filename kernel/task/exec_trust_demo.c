@@ -392,6 +392,18 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: PKGRTEST.ELF - the package repository "
                     "conformance suite did not pass.\n");
 
+    /* Month 3 - Core desktop apps: FILES.ELF --selftest.
+     * Proves VFS directory listing, metadata classification, mouse selection,
+     * text file preview, move, and delete operations from ring 3. */
+    static const char* const files_all[] = {"FILES.ELF", "--selftest"};
+    int pid_files = sys_exec_trusted("FILES.ELF", (char**)files_all, 2);
+    int code_files = (pid_files >= 0) ? sys_wait(pid_files) : -1;
+    sys_write(pid_files >= 0 && code_files == 0
+                  ? "[sandbox] PASS: FILES.ELF --selftest - file browser, "
+                    "open, move, and delete all behaved correctly.\n"
+                  : "[sandbox] FAIL: FILES.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

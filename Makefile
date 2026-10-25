@@ -485,6 +485,12 @@ novainit-test:
 wm-test:
 	@sh tools/tests/run_wm_tests.sh
 
+# Interface Track / Month 3 - Core desktop apps: NovaOS Graphical File Manager (files-rs)
+# suite on the host: VFS directory listing parsing, metadata classification,
+# mouse selection, preview loading, move & delete operations, and BufferSurface32 rendering.
+files-test:
+	@sh tools/tests/run_files_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -585,4 +591,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test pkgrepo-test ui-test novainit-test wm-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test pkgrepo-test ui-test novainit-test wm-test files-test clean setup check-prereqs help install-image test-custom-boot
