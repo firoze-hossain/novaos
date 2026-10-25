@@ -505,6 +505,12 @@ files-test:
 settings-test:
 	@sh tools/tests/run_settings_tests.sh
 
+# Interface Track / Month 3 - Core desktop apps: NovaOS In-Window Terminal App (term-rs)
+# suite on the host: VT character grid, dynamic resize, character flow, line wrapping,
+# line scrolling, ANSI escape sequence parsing, line editing, and command dispatch.
+term-test:
+	@sh tools/tests/run_term_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -605,4 +611,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test clean setup check-prereqs help install-image test-custom-boot

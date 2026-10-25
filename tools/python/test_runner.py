@@ -297,6 +297,11 @@ ASSERTIONS: list[Assertion] = [
               r"and plugin panels all behaved correctly",
               "Month 3 Core desktop apps: userland/settings-rs/settings.rs - "
               "modular plugin-panel shell reading/writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG"),
+    Assertion("term_selftest_passed",
+              r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
+              r"wrapper and shell output dispatch all behaved correctly",
+              "Month 3 Core desktop apps: userland/term-rs/term.rs - "
+              "in-window terminal emulator rendering shell output and forwarding input"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

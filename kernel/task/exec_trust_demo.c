@@ -416,6 +416,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: SETTINGS.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 3 - Core desktop apps: TERM.ELF --selftest.
+     * Proves in-window terminal emulator, VT cell grid, character flow,
+     * wrapping, scrolling, ANSI escape sequence decoding, interactive line
+     * editing, and shell command execution dispatch from ring 3. */
+    static const char* const term_all[] = {"TERM.ELF", "--selftest"};
+    int pid_term = sys_exec_trusted("TERM.ELF", (char**)term_all, 2);
+    int code_term = (pid_term >= 0) ? sys_wait(pid_term) : -1;
+    sys_write(pid_term >= 0 && code_term == 0
+                  ? "[sandbox] PASS: TERM.ELF --selftest - in-window terminal "
+                    "wrapper and shell output dispatch all behaved correctly.\n"
+                  : "[sandbox] FAIL: TERM.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

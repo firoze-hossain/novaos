@@ -830,8 +830,10 @@ impl Wm {
             if body_h > 0 {
                 surface.fill_rect(Rect::new(w.x, body_y, w.w, body_h), w.body_color);
 
-                // Window 1 ("Files - Root Directory"): render client file manager view on high-res
-                if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                // Render client application view on high-res
+                if w.label == 1 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_term_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                } else if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if (w.label == 4 || w.label == 5) && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
@@ -1240,6 +1242,89 @@ fn draw_settings_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palet
         s.fill_rect(Rect::new(cx, sb_rect.y, cw, 1), palette.border_subtle);
         ui::font::draw_text_font(s, cx + 8, sb_rect.y + 2, "Ready | Synchronized", palette.text_muted, &f_small);
     }
+}
+
+/// Renders the in-window terminal emulator client view inside Window 0 / Console Shell.
+fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette: &ThemePalette) {
+    let font_mono = Font::mono();
+    let font_small = Font::small();
+
+    // 1. Dark terminal canvas
+    let bg_color = Color::rgb(13, 17, 23); // #0D1117
+    s.fill_rect(client, bg_color);
+
+    // 2. Terminal header / status line
+    let hdr_h = 18;
+    let hdr_rect = Rect::new(client.x, client.y, client.w, hdr_h);
+    s.fill_rect(hdr_rect, Color::rgb(22, 27, 34)); // #161B22
+    s.fill_rect(Rect::new(client.x, client.y + hdr_h - 1, client.w, 1), Color::rgb(48, 54, 61));
+
+    ui::font::draw_text_font(s, client.x + 8, client.y + 3, "sh - 80x24 (xterm-256color) | pid 14", Color::rgb(139, 148, 158), &font_small);
+    let right_status = "UTF-8";
+    let st_sz = font_small.measure_str(right_status);
+    ui::font::draw_text_font(s, client.right() - st_sz.w - 12, client.y + 3, right_status, Color::rgb(88, 166, 255), &font_small);
+
+    // 3. Terminal text lines
+    let mut y = client.y + hdr_h + 6;
+    let line_h = 16;
+    let pad_x = client.x + 8;
+
+    // Line 1: Shell welcome
+    if y + line_h < client.bottom() - 10 {
+        ui::font::draw_text_font(s, pad_x, y, "NovaOS Terminal (Month 3 Desktop Apps)", Color::rgb(88, 166, 255), &font_mono);
+        y += line_h;
+    }
+
+    // Line 2: uname -a output
+    if y + line_h < client.bottom() - 10 {
+        ui::font::draw_text_font(s, pad_x, y, "$ uname -a", Color::rgb(139, 148, 158), &font_mono);
+        y += line_h;
+    }
+    if y + line_h < client.bottom() - 10 {
+        ui::font::draw_text_font(s, pad_x, y, "NovaOS 1.0.0-compositor i686 pc-novaos", Color::rgb(63, 185, 80), &font_mono);
+        y += line_h;
+    }
+
+    // Line 3: ls output
+    if y + line_h < client.bottom() - 10 {
+        ui::font::draw_text_font(s, pad_x, y, "$ ls /bin", Color::rgb(139, 148, 158), &font_mono);
+        y += line_h;
+    }
+    if y + line_h < client.bottom() - 10 {
+        ui::font::draw_text_font(s, pad_x, y, "FILES.ELF   SETTINGS.ELF   TERM.ELF", Color::rgb(240, 246, 252), &font_mono);
+        y += line_h;
+    }
+
+    // Line 4: Active prompt and cursor
+    if y + line_h < client.bottom() - 10 {
+        let user_str = "admin@novaos";
+        let u_sz = font_mono.measure_str(user_str);
+        ui::font::draw_text_font(s, pad_x, y, user_str, Color::rgb(63, 185, 80), &font_mono);
+
+        let colon_x = pad_x + u_sz.w;
+        ui::font::draw_text_font(s, colon_x, y, ":", Color::rgb(139, 148, 158), &font_mono);
+
+        let path_str = "~";
+        let p_sz = font_mono.measure_str(path_str);
+        ui::font::draw_text_font(s, colon_x + 8, y, path_str, Color::rgb(88, 166, 255), &font_mono);
+
+        let dollar_x = colon_x + 8 + p_sz.w;
+        ui::font::draw_text_font(s, dollar_x, y, "$ ", Color::rgb(240, 246, 252), &font_mono);
+
+        let cmd_str = "help";
+        let c_sz = font_mono.measure_str(cmd_str);
+        ui::font::draw_text_font(s, dollar_x + 16, y, cmd_str, Color::rgb(240, 246, 252), &font_mono);
+
+        // Blinking / solid block cursor
+        let cursor_x = dollar_x + 16 + c_sz.w + 2;
+        s.fill_rect(Rect::new(cursor_x, y + 2, 8, line_h - 4), Color::rgb(88, 166, 255));
+    }
+
+    // 4. Subtle vertical scrollbar on right
+    let bar_x = client.right() - 6;
+    let bar_h = client.h - hdr_h - 4;
+    s.fill_rect(Rect::new(bar_x, client.y + hdr_h + 2, 4, bar_h), Color::rgba(255, 255, 255, 12));
+    s.fill_rect(Rect::new(bar_x, client.y + hdr_h + 10, 4, 30.min(bar_h)), Color::rgba(255, 255, 255, 50));
 }
 
 fn mouse(dx: i32, dy: i32, left: bool) -> ffi::MouseState {
