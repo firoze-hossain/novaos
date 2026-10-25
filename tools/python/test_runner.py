@@ -270,6 +270,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wm_font_antialiasing_selftest",
               r"\[wm-selftest\] PASS: real multi-size font rendering and antialiasing",
               "Month 2 Compositor: real multi-size font rendering and subpixel antialiasing"),
+    Assertion("wm_cursor_chrome_selftest",
+              r"\[wm-selftest\] PASS: cursor themes and redesigned window chrome",
+              "Month 2 Compositor: cursor themes and redesigned window chrome"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

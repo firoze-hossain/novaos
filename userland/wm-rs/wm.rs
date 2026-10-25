@@ -114,6 +114,7 @@ pub struct Wm {
     pub drag_offset_x: i32,
     pub drag_offset_y: i32,
     pub prev_left_button: bool,
+    pub cursor_theme: CursorTheme,
 }
 
 impl Wm {
@@ -139,6 +140,7 @@ impl Wm {
             drag_offset_x: 0,
             drag_offset_y: 0,
             prev_left_button: false,
+            cursor_theme: CursorTheme::Classic,
         }
     }
 
@@ -170,6 +172,7 @@ impl Wm {
             drag_offset_x: 0,
             drag_offset_y: 0,
             prev_left_button: false,
+            cursor_theme: CursorTheme::Classic,
         }
     }
 
@@ -214,6 +217,41 @@ impl Wm {
             return None;
         }
         Some((px / button_w) as usize)
+    }
+
+    /// Evaluates dynamic cursor shape based on current pointer coordinates.
+    pub fn cursor_shape_at(&self, cx: i32, cy: i32) -> CursorShape {
+        if self.dragging.is_some() {
+            return CursorShape::Move;
+        }
+        if self.taskbar_button_at(cx, cy).is_some() {
+            return CursorShape::Pointer;
+        }
+        for i in (0..MAX_WINDOWS).rev() {
+            let win_idx = self.z_order[i];
+            let w = &self.windows[win_idx];
+            if point_in_rect(cx, cy, w.x, w.y, w.w, w.h) {
+                if cy < w.y + self.titlebar_h {
+                    if self.titlebar_h >= 14 && w.w >= 80 {
+                        let btn_size = if self.titlebar_h >= 20 { 12 } else { 8 };
+                        let btn_y = w.y + (self.titlebar_h - btn_size) / 2;
+                        let close_x = w.x + w.w - btn_size - 8;
+                        let min_ctrl_x = close_x - (btn_size + 6) * 2;
+                        if cy >= btn_y && cy < btn_y + btn_size && cx >= min_ctrl_x && cx < close_x + btn_size {
+                            return CursorShape::Pointer;
+                        }
+                    }
+                    return CursorShape::Move;
+                }
+                // Client area: Console and Editor use I-Beam text selection cursor
+                if w.label == 1 || w.label == 3 {
+                    return CursorShape::IBeam;
+                } else {
+                    return CursorShape::Arrow;
+                }
+            }
+        }
+        CursorShape::Arrow
     }
 
     pub fn on_left_press(&mut self, px: i32, py: i32) {
@@ -310,6 +348,12 @@ impl Wm {
                 (w.titlebar_color.darken(40), palette.border_normal)
             };
 
+            // Window outer drop shadow for active window on high-res
+            if is_active && self.titlebar_h >= 20 && w.snap == SnapState::Normal {
+                surface.fill_rect(Rect::new(w.x + 3, w.y + w.h, w.w - 1, 2), Color::rgba(0, 0, 0, 45));
+                surface.fill_rect(Rect::new(w.x + w.w, w.y + 3, 2, w.h), Color::rgba(0, 0, 0, 45));
+            }
+
             // Window client body
             let body_y = w.y + self.titlebar_h;
             let body_h = w.h - self.titlebar_h;
@@ -318,42 +362,82 @@ impl Wm {
             }
 
             // Window titlebar
-            surface.fill_rect(Rect::new(w.x, w.y, w.w, self.titlebar_h), tb_color);
+            if self.titlebar_h >= 20 {
+                let half_h = self.titlebar_h / 2;
+                surface.fill_rect(Rect::new(w.x, w.y, w.w, half_h), tb_color.lighten(12));
+                surface.fill_rect(Rect::new(w.x, w.y + half_h, w.w, self.titlebar_h - half_h), tb_color);
+            } else {
+                surface.fill_rect(Rect::new(w.x, w.y, w.w, self.titlebar_h), tb_color);
+            }
 
-            // Titlebar separator
+            // Titlebar top highlight sheen & bottom separator
             if self.titlebar_h > 1 {
+                let sheen_col = if is_active { tb_color.lighten(35) } else { tb_color.lighten(15) };
+                surface.fill_rect(Rect::new(w.x + 1, w.y, w.w - 2, 1), sheen_col);
                 surface.fill_rect(Rect::new(w.x, w.y + self.titlebar_h - 1, w.w, 1), palette.border_subtle);
             }
 
             // Window border outline
             ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 1, border_col);
+            if is_active && self.titlebar_h >= 20 {
+                ui::draw::draw_rect_outline(surface, Rect::new(w.x + 1, w.y + 1, w.w - 2, w.h - 2), 1, Color::rgba(255, 255, 255, 20));
+            }
 
-            // Window title text (real multi-size font with antialiasing)
+            // Application Icon & Title Text
             let text_col = if is_active { palette.text_primary } else { palette.text_muted };
             if self.titlebar_h >= 20 {
+                let icon_size = 12;
+                let icon_x = w.x + 8;
+                let icon_y = w.y + (self.titlebar_h - icon_size) / 2;
+                draw_app_icon(surface, icon_x, icon_y, w.label, &palette);
+
                 let font = Font::regular();
+                let text_x = icon_x + icon_size + 6;
                 let text_y = w.y + (self.titlebar_h - font.line_height()) / 2;
                 let title_str = match w.label {
-                    1 => "Window 1 - Console",
-                    2 => "Window 2 - Files",
-                    3 => "Window 3 - Editor",
-                    _ => "Window 4 - System",
+                    1 => "Console - NovaOS Shell",
+                    2 => "Files - Root Directory",
+                    3 => "Editor - Scratchpad",
+                    _ => "System - Diagnostics",
                 };
-                ui::font::draw_text_font(surface, w.x + 8, text_y, title_str, text_col, &font);
+                ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
             } else {
                 let font = Font::small();
                 let text_y = w.y + (self.titlebar_h - 8).max(0) / 2;
                 ui::font::draw_char_font(surface, w.x + 4, text_y, b'0' + w.label, text_col, &font);
             }
 
-            // Modern window control pills if titlebar is high-res
+            // Redesigned Window Control Buttons (Close, Maximize, Minimize)
             if self.titlebar_h >= 14 && w.w >= 80 {
-                let ctrl_size = 8;
-                let ctrl_y = w.y + (self.titlebar_h - ctrl_size) / 2;
-                let close_x = w.x + w.w - ctrl_size - 6;
-                let min_x = close_x - ctrl_size - 4;
-                surface.fill_rect(Rect::new(close_x, ctrl_y, ctrl_size, ctrl_size), palette.status_danger);
-                surface.fill_rect(Rect::new(min_x, ctrl_y, ctrl_size, ctrl_size), palette.text_secondary);
+                let btn_size = if self.titlebar_h >= 20 { 12 } else { 8 };
+                let btn_y = w.y + (self.titlebar_h - btn_size) / 2;
+                let close_x = w.x + w.w - btn_size - 8;
+                let max_x = close_x - btn_size - 6;
+                let min_x = max_x - btn_size - 6;
+
+                // Close Button ('X')
+                let close_col = if is_active { palette.status_danger } else { palette.status_danger.darken(35) };
+                ui::draw::draw_rounded_rect(surface, Rect::new(close_x, btn_y, btn_size, btn_size), 2, close_col);
+                let x_span = ((btn_size - 4) / 2).max(1);
+                let cx = close_x + btn_size / 2;
+                let cy = btn_y + btn_size / 2;
+                ui::draw::draw_line(surface, cx - x_span, cy - x_span, cx + x_span, cy + x_span, Color::WHITE);
+                ui::draw::draw_line(surface, cx + x_span, cy - x_span, cx - x_span, cy + x_span, Color::WHITE);
+
+                // Maximize Button ('[]')
+                let max_col = if is_active { palette.status_success } else { palette.status_success.darken(35) };
+                ui::draw::draw_rounded_rect(surface, Rect::new(max_x, btn_y, btn_size, btn_size), 2, max_col);
+                let sq_size = (btn_size - 6).max(3);
+                let sq_x = max_x + (btn_size - sq_size) / 2;
+                let sq_y = btn_y + (btn_size - sq_size) / 2;
+                ui::draw::draw_rect_outline(surface, Rect::new(sq_x, sq_y, sq_size, sq_size), 1, Color::WHITE);
+
+                // Minimize Button ('-')
+                let min_col = if is_active { palette.status_warning } else { palette.status_warning.darken(35) };
+                ui::draw::draw_rounded_rect(surface, Rect::new(min_x, btn_y, btn_size, btn_size), 2, min_col);
+                let bar_w = (btn_size - 4).max(3);
+                let bar_x = min_x + (btn_size - bar_w) / 2;
+                surface.fill_rect(Rect::new(bar_x, cy, bar_w, 1), Color::WHITE);
             }
         }
 
@@ -396,15 +480,41 @@ impl Wm {
         }
 
         // 4. Mouse cursor
-        draw_cursor(surface, self.cursor_x, self.cursor_y);
+        let shape = self.cursor_shape_at(self.cursor_x, self.cursor_y);
+        ui::cursor::draw_cursor_sprite(surface, self.cursor_x, self.cursor_y, shape, self.cursor_theme);
     }
 }
 
-fn draw_cursor<S: Surface + ?Sized>(s: &mut S, cx: i32, cy: i32) {
-    const CURSOR_SIZE: i32 = 7;
-    for row in 0..CURSOR_SIZE {
-        for col in 0..=row {
-            s.put_pixel(cx + col, cy + row, Color::WHITE);
+fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, palette: &ThemePalette) {
+    match label {
+        1 => {
+            // Terminal prompt `>_`
+            ui::draw::draw_rounded_rect(s, Rect::new(x, y, 12, 12), 2, palette.surface_sunken);
+            ui::draw::draw_line(s, x + 3, y + 3, x + 5, y + 5, palette.status_success);
+            ui::draw::draw_line(s, x + 5, y + 5, x + 3, y + 7, palette.status_success);
+            s.fill_rect(Rect::new(x + 7, y + 7, 3, 1), Color::WHITE);
+        }
+        2 => {
+            // Folder icon
+            let folder_col = Color::rgb(245, 180, 50);
+            s.fill_rect(Rect::new(x + 2, y + 2, 4, 2), folder_col.lighten(20));
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 4, 10, 7), 1, folder_col);
+        }
+        3 => {
+            // Document sheet icon
+            let doc_col = Color::WHITE;
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 2, y + 1, 8, 10), 1, doc_col);
+            s.put_pixel(x + 9, y + 1, palette.surface_sunken);
+            s.fill_rect(Rect::new(x + 4, y + 4, 4, 1), palette.text_muted);
+            s.fill_rect(Rect::new(x + 4, y + 6, 4, 1), palette.text_muted);
+            s.fill_rect(Rect::new(x + 4, y + 8, 3, 1), palette.text_muted);
+        }
+        _ => {
+            // System gear icon
+            let gear_col = Color::rgb(140, 160, 180);
+            s.fill_rect(Rect::new(x + 4, y + 2, 4, 8), gear_col);
+            s.fill_rect(Rect::new(x + 2, y + 4, 8, 4), gear_col);
+            s.fill_rect(Rect::new(x + 5, y + 5, 2, 2), palette.titlebar_active);
         }
     }
 }
@@ -512,6 +622,8 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 6 (Month 2 Compositor): Verify framebuffer surface rendering via BufferSurface32
+    wm.cursor_x = wm.screen_w / 2;
+    wm.cursor_y = wm.desktop_h / 2;
     static mut TEST_BUF: [u32; 320 * 200] = [0u32; 320 * 200];
     let test_buf: &mut [u32] = unsafe {
         core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_BUF) as *mut u32, 320 * 200)
@@ -549,6 +661,65 @@ pub fn run_selftest() -> i32 {
     } else {
         unsafe { ffi::sys_write(b"[wm-selftest] FAIL: font rendering\n\0".as_ptr()) };
         code |= 128;
+    }
+
+    // Case 8 (Month 2 Compositor): Verify cursor themes and redesigned window chrome
+    let mut wm_hires = Wm::new_for_display(1024, 768);
+    wm_hires.raise(0); // Make window 0 active/topmost
+
+    // Reuse test_buf (500 * 70 = 35,000 u32s <= 64,000) for testing high-res chrome
+    test_buf[..500 * 70].fill(0);
+    let mut hr_surface = ui::draw::BufferSurface32::new(&mut test_buf[..500 * 70], 500, 70);
+    wm_hires.render(&mut hr_surface);
+
+    // 1. Verify titlebar top highlight sheen exists on active window 0 (x=40..400, y=40..68)
+    let sheen_pixel = hr_surface.buffer[40 * 500 + 100];
+    let body_pixel = hr_surface.buffer[55 * 500 + 100];
+    let has_sheen = sheen_pixel != body_pixel && sheen_pixel != 0;
+
+    // 2. Verify window control buttons are rendered with distinct status colors
+    // Window 0 is at x=40, w=360 (right edge at 400).
+    // Close, Maximize, and Minimize buttons are within x in 330..400, y in 42..66
+    let mut has_close_red = false;
+    let mut has_max_green = false;
+    let mut has_min_amber = false;
+    for y in 42..66 {
+        for x in 330..400 {
+            let p = hr_surface.buffer[y * 500 + x];
+            if p == palette.status_danger.to_xrgb() {
+                has_close_red = true;
+            } else if p == palette.status_success.to_xrgb() {
+                has_max_green = true;
+            } else if p == palette.status_warning.to_xrgb() {
+                has_min_amber = true;
+            }
+        }
+    }
+
+    // 3. Verify dynamic cursor shape detection across various screen contexts
+    let shape_desktop = wm_hires.cursor_shape_at(5, 5);
+    let shape_taskbar = wm_hires.cursor_shape_at(100, 750);
+    let shape_titlebar = wm_hires.cursor_shape_at(100, 50);
+    let shape_close_btn = wm_hires.cursor_shape_at(385, 48);
+    let shape_console = wm_hires.cursor_shape_at(100, 100);
+
+    let shapes_ok = shape_desktop == CursorShape::Arrow
+        && shape_taskbar == CursorShape::Pointer
+        && shape_titlebar == CursorShape::Move
+        && shape_close_btn == CursorShape::Pointer
+        && shape_console == CursorShape::IBeam;
+
+    // 4. Verify cursor theme sprite rendering into BufferSurface32
+    let mut cur_buf = [0u32; 16 * 16];
+    let mut cur_surface = ui::draw::BufferSurface32::new(&mut cur_buf, 16, 16);
+    ui::cursor::draw_cursor_sprite(&mut cur_surface, 0, 0, CursorShape::Arrow, CursorTheme::Classic);
+    let cur_rendered_ok = cur_surface.buffer[0] == 0x00000000 && cur_surface.buffer[2 * 16 + 1] == 0x00FFFFFF;
+
+    if has_sheen && has_close_red && has_max_green && has_min_amber && shapes_ok && cur_rendered_ok {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: cursor themes and redesigned window chrome\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: cursor themes and window chrome\n\0".as_ptr()) };
+        code |= 256;
     }
 
     if code == 0 {
@@ -739,5 +910,65 @@ mod tests {
 
         assert!(non_zero_pixels > 50, "Window titlebar should contain rendered text pixels");
         assert!(aa_pixels > 0, "Window titlebar should contain antialiased blended pixels");
+    }
+
+    #[test]
+    fn test_wm_cursor_shapes() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0); // Window 0 is at (40, 40, 360, 250)
+
+        // Desktop corner
+        assert_eq!(wm.cursor_shape_at(5, 5), CursorShape::Arrow);
+
+        // Taskbar at bottom
+        assert_eq!(wm.cursor_shape_at(200, 750), CursorShape::Pointer);
+
+        // Window 0 titlebar
+        assert_eq!(wm.cursor_shape_at(100, 50), CursorShape::Move);
+
+        // Window 0 close button (right side of titlebar, around x=385, y=48)
+        assert_eq!(wm.cursor_shape_at(385, 48), CursorShape::Pointer);
+
+        // Window 0 console body (x=100, y=100)
+        assert_eq!(wm.cursor_shape_at(100, 100), CursorShape::IBeam);
+
+        // When dragging, cursor shape is always Move
+        wm.dragging = Some(0);
+        assert_eq!(wm.cursor_shape_at(5, 5), CursorShape::Move);
+    }
+
+    #[test]
+    fn test_wm_window_chrome_buttons() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0);
+        let mut buf = vec![0u32; 1024 * 80];
+        let mut surface = ui::draw::BufferSurface32::new(&mut buf, 1024, 80);
+        wm.render(&mut surface);
+
+        let palette = Theme::Dark.palette();
+        let danger_red = palette.status_danger.to_xrgb();
+        let success_green = palette.status_success.to_xrgb();
+        let warning_amber = palette.status_warning.to_xrgb();
+
+        let mut found_red = false;
+        let mut found_green = false;
+        let mut found_amber = false;
+
+        for y in 40..68 {
+            for x in 330..400 {
+                let p = surface.buffer[(y * 1024 + x) as usize];
+                if p == danger_red {
+                    found_red = true;
+                } else if p == success_green {
+                    found_green = true;
+                } else if p == warning_amber {
+                    found_amber = true;
+                }
+            }
+        }
+
+        assert!(found_red, "Active window should have a red Close button");
+        assert!(found_green, "Active window should have a green Maximize button");
+        assert!(found_amber, "Active window should have an amber Minimize button");
     }
 }

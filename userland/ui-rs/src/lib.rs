@@ -7,6 +7,7 @@
 #![no_std]
 
 pub mod color;
+pub mod cursor;
 pub mod draw;
 pub mod font;
 pub mod font_data;
@@ -17,6 +18,9 @@ pub mod widget;
 
 pub mod prelude {
     pub use crate::color::{Color, Theme, ThemePalette, BLACK, TRANSPARENT, WHITE};
+    pub use crate::cursor::{
+        draw_cursor_sprite, CursorColors, CursorShape, CursorSprite, CursorTheme,
+    };
     pub use crate::draw::{
         draw_button, draw_char, draw_checkbox, draw_line, draw_progress_bar, draw_rect_outline,
         draw_rounded_rect, draw_text, draw_text_aligned, draw_window_frame, BufferSurface32,
@@ -131,6 +135,37 @@ pub fn run_design_system_selftest() -> i32 {
         let has_intermediate = font_pixels.iter().any(|&p| p != 0 && p != 0x00FFFFFF);
         if !has_intermediate {
             failures |= 2048;
+        }
+    }
+
+    // 8. Cursor Themes and Shapes Invariants (Month 2 Compositor)
+    let c_classic = CursorTheme::Classic.colors();
+    let c_dark = CursorTheme::ModernDark.colors();
+    let c_light = CursorTheme::ModernLight.colors();
+    let c_amber = CursorTheme::Amber.colors();
+    if c_classic.outline == c_dark.outline || c_classic.fill == c_dark.fill || c_light.accent == c_amber.accent {
+        failures |= 4096;
+    }
+
+    let arrow = CursorShape::Arrow.sprite();
+    let pointer = CursorShape::Pointer.sprite();
+    let move_sp = CursorShape::Move.sprite();
+    if arrow.width != 16 || arrow.height != 16 || arrow.hotspot_x != 0 || arrow.hotspot_y != 0 {
+        failures |= 8192;
+    }
+    if pointer.hotspot_x != 4 || pointer.hotspot_y != 0 || move_sp.hotspot_x != 7 || move_sp.hotspot_y != 7 {
+        failures |= 8192;
+    }
+
+    let mut cursor_pixels = [0u32; 16 * 16];
+    {
+        let mut surface = BufferSurface32::new(&mut cursor_pixels, 16, 16);
+        draw_cursor_sprite(&mut surface, 0, 0, CursorShape::Arrow, CursorTheme::Classic);
+        let has_outline = cursor_pixels[0] == 0x00000000;
+        let has_fill = cursor_pixels[2 * 16 + 1] == 0x00FFFFFF;
+        let has_transparent = cursor_pixels[15] == 0;
+        if !has_outline || !has_fill || !has_transparent {
+            failures |= 16384;
         }
     }
 
@@ -345,5 +380,53 @@ mod tests {
         // Intermediate coverage present from analytical distance falloff
         let aa_pixels = surface.buffer.iter().filter(|&&p| p != 0 && p != 0x00FFFFFF).count();
         assert!(aa_pixels > 0, "Vector rasterizer should produce antialiased edges");
+    }
+
+    #[test]
+    fn test_cursor_sprite_rendering() {
+        let mut buf = [0u32; 16 * 16];
+        let mut surface = BufferSurface32::new(&mut buf, 16, 16);
+        draw_cursor_sprite(&mut surface, 0, 0, CursorShape::Arrow, CursorTheme::Classic);
+
+        // Hotspot pixel (0, 0) should be outline (black in Classic theme)
+        assert_eq!(surface.buffer[0], 0x00000000, "Hotspot pixel should be black outline");
+
+        // Pixel (1, 2) in Arrow sprite is '.' (fill = white)
+        assert_eq!(surface.buffer[2 * 16 + 1], 0x00FFFFFF, "Interior should be white fill");
+
+        // Transparent pixel (e.g. at (15, 0)) should remain untouched (0)
+        assert_eq!(surface.buffer[15], 0, "Outside pixels should be transparent");
+    }
+
+    #[test]
+    fn test_cursor_shapes_and_themes() {
+        let shapes = [
+            CursorShape::Arrow,
+            CursorShape::Pointer,
+            CursorShape::IBeam,
+            CursorShape::Move,
+            CursorShape::ResizeNS,
+            CursorShape::ResizeEW,
+            CursorShape::ResizeNWSE,
+            CursorShape::ResizeNESW,
+            CursorShape::Wait,
+            CursorShape::Crosshair,
+        ];
+
+        for shape in &shapes {
+            let sp = shape.sprite();
+            assert!(sp.width > 0 && sp.height > 0);
+            assert!(sp.hotspot_x >= 0 && sp.hotspot_x < sp.width);
+            assert!(sp.hotspot_y >= 0 && sp.hotspot_y < sp.height);
+            assert_eq!(sp.rows.len(), sp.height as usize);
+        }
+
+        let c_classic = CursorTheme::Classic.colors();
+        let c_dark = CursorTheme::ModernDark.colors();
+        let c_light = CursorTheme::ModernLight.colors();
+        let c_amber = CursorTheme::Amber.colors();
+
+        assert_ne!(c_classic.outline, c_dark.outline);
+        assert_ne!(c_light.accent, c_amber.accent);
     }
 }

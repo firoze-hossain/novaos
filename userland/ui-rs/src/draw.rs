@@ -290,21 +290,22 @@ pub fn draw_button<S: Surface + ?Sized>(
 
     match variant {
         ButtonVariant::WindowControl(kind) => {
-            // Draw standard window control icon
+            // Draw standard window control icon scaled to button dimensions
             let center = rect.center();
+            let r_span = ((rect.w.min(rect.h) - 4) / 2).max(2);
             match kind {
                 WindowControlKind::Close => {
                     // X icon
-                    draw_line(s, center.x - 3, center.y - 3, center.x + 3, center.y + 3, colors.text);
-                    draw_line(s, center.x + 3, center.y - 3, center.x - 3, center.y + 3, colors.text);
+                    draw_line(s, center.x - r_span, center.y - r_span, center.x + r_span, center.y + r_span, colors.text);
+                    draw_line(s, center.x + r_span, center.y - r_span, center.x - r_span, center.y + r_span, colors.text);
                 }
                 WindowControlKind::Minimize => {
                     // - icon
-                    draw_line(s, center.x - 3, center.y, center.x + 3, center.y, colors.text);
+                    draw_line(s, center.x - r_span, center.y, center.x + r_span, center.y, colors.text);
                 }
                 WindowControlKind::Maximize => {
                     // Square icon
-                    draw_rect_outline(s, Rect::new(center.x - 3, center.y - 3, 7, 7), 1, colors.text);
+                    draw_rect_outline(s, Rect::new(center.x - r_span, center.y - r_span, r_span * 2 + 1, r_span * 2 + 1), 1, colors.text);
                 }
             }
         }
@@ -336,6 +337,8 @@ pub fn draw_window_frame<S: Surface + ?Sized>(
     draw_rounded_rect(s, titlebar_rect, RADIUS_MD, tb_bg);
     // Square off the bottom of titlebar
     s.fill_rect(Rect::new(rect.x, rect.y + TITLEBAR_HEIGHT - RADIUS_MD, rect.w, RADIUS_MD), tb_bg);
+    // Top highlight bevel line on titlebar for elevation
+    s.fill_rect(Rect::new(rect.x + RADIUS_MD, rect.y, rect.w - 2 * RADIUS_MD, 1), tb_bg.lighten(35));
     s.fill_rect(Rect::new(rect.x, rect.y + TITLEBAR_HEIGHT, rect.w, 1), palette.border_subtle);
 
     // Window controls (macOS style left or Windows style right; standard NovaOS has control buttons)
