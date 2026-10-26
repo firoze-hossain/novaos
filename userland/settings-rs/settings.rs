@@ -873,6 +873,289 @@ impl ServicesConfig {
 }
 
 // ===========================================================================
+// Month 4: Live Service Supervision Manager Models (novainit PID 1)
+// ===========================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceViewMode {
+    LiveDashboard = 0,
+    ConfigFile = 1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceLiveState {
+    pub name: [u8; ffi::NOVA_SVC_MAX_NAME],
+    pub exec_path: [u8; ffi::NOVA_SVC_MAX_PATH],
+    pub arg: [u8; ffi::NOVA_SVC_MAX_ARG],
+    pub depends_on: [u8; ffi::NOVA_SVC_MAX_NAME],
+    pub pid: i32,
+    pub state: u32,
+    pub restart_policy: u32,
+    pub restart_count: u32,
+    pub uptime_ticks: u32,
+    pub trusted: bool,
+    pub last_exit_code: i32,
+}
+
+impl ServiceLiveState {
+    pub const fn empty() -> Self {
+        ServiceLiveState {
+            name: [0u8; ffi::NOVA_SVC_MAX_NAME],
+            exec_path: [0u8; ffi::NOVA_SVC_MAX_PATH],
+            arg: [0u8; ffi::NOVA_SVC_MAX_ARG],
+            depends_on: [0u8; ffi::NOVA_SVC_MAX_NAME],
+            pid: -1,
+            state: ffi::NOVA_SVC_STATE_STOPPED,
+            restart_policy: 0,
+            restart_count: 0,
+            uptime_ticks: 0,
+            trusted: false,
+            last_exit_code: 0,
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_NAME && self.name[len] != 0 {
+            len += 1;
+        }
+        core::str::from_utf8(&self.name[..len]).unwrap_or("")
+    }
+
+    pub fn exec_str(&self) -> &str {
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_PATH && self.exec_path[len] != 0 {
+            len += 1;
+        }
+        core::str::from_utf8(&self.exec_path[..len]).unwrap_or("")
+    }
+
+    pub fn arg_str(&self) -> &str {
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_ARG && self.arg[len] != 0 {
+            len += 1;
+        }
+        if len == 0 {
+            "-"
+        } else {
+            core::str::from_utf8(&self.arg[..len]).unwrap_or("-")
+        }
+    }
+
+    pub fn depends_str(&self) -> &str {
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_NAME && self.depends_on[len] != 0 {
+            len += 1;
+        }
+        if len == 0 {
+            "-"
+        } else {
+            core::str::from_utf8(&self.depends_on[..len]).unwrap_or("-")
+        }
+    }
+
+    pub fn state_str(&self) -> &'static str {
+        match self.state {
+            ffi::NOVA_SVC_STATE_RUNNING => "RUNNING",
+            ffi::NOVA_SVC_STATE_RESTARTING => "RESTARTING",
+            ffi::NOVA_SVC_STATE_CRASHED => "CRASHED",
+            ffi::NOVA_SVC_STATE_BLOCKED => "WAITING",
+            _ => "STOPPED",
+        }
+    }
+
+    pub fn state_color(&self, palette: &ThemePalette) -> Color {
+        match self.state {
+            ffi::NOVA_SVC_STATE_RUNNING => palette.status_success,
+            ffi::NOVA_SVC_STATE_RESTARTING => palette.status_warning,
+            ffi::NOVA_SVC_STATE_CRASHED => palette.status_danger,
+            ffi::NOVA_SVC_STATE_BLOCKED => palette.status_info,
+            _ => palette.text_muted,
+        }
+    }
+
+    pub fn policy_str(&self) -> &'static str {
+        match self.restart_policy {
+            0 => "never",
+            1 => "on-crash",
+            2 => "always",
+            _ => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceManager {
+    pub view_mode: ServiceViewMode,
+    pub count: usize,
+    pub supervisor_pid: u32,
+    pub supervisor_uptime: u32,
+    pub generation: u32,
+    pub services: [ServiceLiveState; ffi::NOVA_SVC_MAX_SERVICES],
+    pub selected_idx: usize,
+    pub live_loaded: bool,
+}
+
+impl ServiceManager {
+    pub const fn empty() -> Self {
+        ServiceManager {
+            view_mode: ServiceViewMode::LiveDashboard,
+            count: 0,
+            supervisor_pid: 1,
+            supervisor_uptime: 0,
+            generation: 0,
+            services: [ServiceLiveState::empty(); ffi::NOVA_SVC_MAX_SERVICES],
+            selected_idx: 0,
+            live_loaded: false,
+        }
+    }
+
+    pub fn new() -> Self {
+        let mut mgr = Self::empty();
+        mgr.seed_defaults();
+        mgr
+    }
+
+    pub fn seed_defaults(&mut self) {
+        self.count = 3;
+        self.supervisor_pid = 1;
+
+        // network-check
+        let s0 = &mut self.services[0];
+        s0.name[..13].copy_from_slice(b"network-check");
+        s0.exec_path[..8].copy_from_slice(b"PING.ELF");
+        s0.arg[..8].copy_from_slice(b"10.0.2.2");
+        s0.pid = 12;
+        s0.state = ffi::NOVA_SVC_STATE_RUNNING;
+        s0.restart_policy = 2; // always
+        s0.restart_count = 0;
+        s0.trusted = false;
+
+        // greeting
+        let s1 = &mut self.services[1];
+        s1.name[..8].copy_from_slice(b"greeting");
+        s1.exec_path[..9].copy_from_slice(b"HELLO.ELF");
+        s1.depends_on[..13].copy_from_slice(b"network-check");
+        s1.pid = -1;
+        s1.state = ffi::NOVA_SVC_STATE_STOPPED;
+        s1.restart_policy = 0; // never
+        s1.restart_count = 0;
+        s1.trusted = false;
+
+        // shell
+        let s2 = &mut self.services[2];
+        s2.name[..5].copy_from_slice(b"shell");
+        s2.exec_path[..9].copy_from_slice(b"SHELL.ELF");
+        s2.pid = 15;
+        s2.state = ffi::NOVA_SVC_STATE_RUNNING;
+        s2.restart_policy = 2; // always
+        s2.restart_count = 0;
+        s2.trusted = true;
+    }
+
+    pub fn sync_from_kernel(&mut self) -> bool {
+        let mut st = ffi::NovaServiceStatus::empty();
+        let rc = unsafe { ffi::sys_service_query(&mut st) };
+        if rc == 0 && st.count > 0 {
+            let n = (st.count as usize).min(ffi::NOVA_SVC_MAX_SERVICES);
+            self.count = n;
+            self.supervisor_pid = st.supervisor_pid;
+            self.supervisor_uptime = st.supervisor_uptime_ticks;
+            self.generation = st.generation;
+            for i in 0..n {
+                let src = &st.services[i];
+                let dst = &mut self.services[i];
+                dst.name = src.name;
+                dst.exec_path = src.exec_path;
+                dst.arg = src.arg;
+                dst.depends_on = src.depends_on;
+                dst.pid = src.pid;
+                dst.state = src.state;
+                dst.restart_policy = src.restart_policy;
+                dst.restart_count = src.restart_count;
+                dst.uptime_ticks = src.uptime_ticks;
+                dst.trusted = src.trusted != 0;
+                dst.last_exit_code = src.last_exit_code;
+            }
+            if self.selected_idx >= self.count && self.count > 0 {
+                self.selected_idx = 0;
+            }
+            self.live_loaded = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn restart_service(&mut self, idx: usize) -> bool {
+        if idx >= self.count {
+            return false;
+        }
+        let mut c_name = [0u8; ffi::NOVA_SVC_MAX_NAME + 1];
+        let n = self.services[idx].name;
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_NAME && n[len] != 0 {
+            c_name[len] = n[len];
+            len += 1;
+        }
+        c_name[len] = 0;
+        let rc = unsafe { ffi::sys_service_control(ffi::NOVA_SVC_ACTION_RESTART, c_name.as_ptr()) };
+        let _ = self.sync_from_kernel();
+        rc == 0
+    }
+
+    pub fn stop_service(&mut self, idx: usize) -> bool {
+        if idx >= self.count {
+            return false;
+        }
+        let mut c_name = [0u8; ffi::NOVA_SVC_MAX_NAME + 1];
+        let n = self.services[idx].name;
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_NAME && n[len] != 0 {
+            c_name[len] = n[len];
+            len += 1;
+        }
+        c_name[len] = 0;
+        let rc = unsafe { ffi::sys_service_control(ffi::NOVA_SVC_ACTION_STOP, c_name.as_ptr()) };
+        let _ = self.sync_from_kernel();
+        rc == 0
+    }
+
+    pub fn start_service(&mut self, idx: usize) -> bool {
+        if idx >= self.count {
+            return false;
+        }
+        let mut c_name = [0u8; ffi::NOVA_SVC_MAX_NAME + 1];
+        let n = self.services[idx].name;
+        let mut len = 0;
+        while len < ffi::NOVA_SVC_MAX_NAME && n[len] != 0 {
+            c_name[len] = n[len];
+            len += 1;
+        }
+        c_name[len] = 0;
+        let rc = unsafe { ffi::sys_service_control(ffi::NOVA_SVC_ACTION_START, c_name.as_ptr()) };
+        let _ = self.sync_from_kernel();
+        rc == 0
+    }
+
+    pub fn running_count(&self) -> usize {
+        self.services.iter().take(self.count).filter(|s| s.state == ffi::NOVA_SVC_STATE_RUNNING).count()
+    }
+
+    pub fn restarting_count(&self) -> usize {
+        self.services.iter().take(self.count).filter(|s| s.state == ffi::NOVA_SVC_STATE_RESTARTING).count()
+    }
+
+    pub fn crashed_count(&self) -> usize {
+        self.services.iter().take(self.count).filter(|s| s.state == ffi::NOVA_SVC_STATE_CRASHED).count()
+    }
+
+    pub fn stopped_count(&self) -> usize {
+        self.services.iter().take(self.count).filter(|s| s.state == ffi::NOVA_SVC_STATE_STOPPED).count()
+    }
+}
+
+// ===========================================================================
 // Month 4: Network & Firewall Data Models
 // ===========================================================================
 
@@ -1594,6 +1877,12 @@ pub enum SettingsAction {
     UsersFormPreset(usize),
     UsersAddDemo,
     // Services Actions
+    ServicesSelectRow(usize),
+    ServicesToggleViewMode,
+    ServicesRefresh,
+    ServicesRestart(usize),
+    ServicesStop(usize),
+    ServicesStart(usize),
     ServicesToggleRestart(usize),
     // Firewall Actions
     FirewallSelectSubtab(usize), // 0 = Rules, 1 = Network, 2 = Stats
@@ -1621,6 +1910,7 @@ pub struct SettingsApp {
     pub users_cfg: UsersConfig,
     pub users_ui: UsersUiState,
     pub services_cfg: ServicesConfig,
+    pub service_mgr: ServiceManager,
     pub firewall_cfg: FirewallConfig,
     pub network_cfg: NetworkConfig,
     pub display_cfg: DisplayConfig,
@@ -1642,6 +1932,7 @@ impl SettingsApp {
             users_cfg: UsersConfig::empty(),
             users_ui: UsersUiState::new(),
             services_cfg: ServicesConfig::empty(),
+            service_mgr: ServiceManager::empty(),
             firewall_cfg: FirewallConfig::empty(),
             network_cfg: NetworkConfig::empty(),
             display_cfg: DisplayConfig::empty(),
@@ -1660,6 +1951,7 @@ impl SettingsApp {
         self.users_cfg = UsersConfig::new();
         self.users_ui = UsersUiState::new();
         self.services_cfg = ServicesConfig::new();
+        self.service_mgr = ServiceManager::new();
         self.firewall_cfg = FirewallConfig::new();
         self.network_cfg = NetworkConfig::new();
         self.display_cfg = DisplayConfig::new();
@@ -1872,6 +2164,7 @@ impl SettingsApp {
         self.load_users_cfg();
         self.load_services_cfg();
         self.load_firewall_cfg();
+        self.service_mgr.sync_from_kernel();
         self.dirty = false;
     }
 
@@ -1935,16 +2228,7 @@ impl SettingsApp {
                 return self.button_at_users(px, py, content_x, content_y);
             }
             PanelKind::Services => {
-                let row_h = 24;
-                let list_y = content_y + 36;
-                for i in 0..self.services_cfg.count {
-                    let ry = list_y + (i as i32 * row_h);
-                    if py >= ry && py < ry + row_h {
-                        if px >= content_x + 220 && px < content_x + 310 {
-                            return Some(SettingsAction::ServicesToggleRestart(i));
-                        }
-                    }
-                }
+                return self.button_at_services(px, py, content_x, content_y);
             }
             PanelKind::Firewall => {
                 return self.button_at_firewall(px, py, content_x, content_y);
@@ -1961,6 +2245,68 @@ impl SettingsApp {
             }
         }
 
+        None
+    }
+
+    fn button_at_services(&self, px: i32, py: i32, content_x: i32, content_y: i32) -> Option<SettingsAction> {
+        let subtab_w = 110;
+        let subtab_h = 24;
+        // Subtab 0: Live Supervision Dashboard
+        if point_in_rect(px, py, content_x, content_y, subtab_w, subtab_h) {
+            if self.service_mgr.view_mode != ServiceViewMode::LiveDashboard {
+                return Some(SettingsAction::ServicesToggleViewMode);
+            }
+        }
+        // Subtab 1: SERVICES.CFG Editor
+        if point_in_rect(px, py, content_x + subtab_w + 6, content_y, subtab_w, subtab_h) {
+            if self.service_mgr.view_mode != ServiceViewMode::ConfigFile {
+                return Some(SettingsAction::ServicesToggleViewMode);
+            }
+        }
+
+        match self.service_mgr.view_mode {
+            ServiceViewMode::LiveDashboard => {
+                // Refresh button at content_x + 380, content_y + 30, 80, 22
+                if point_in_rect(px, py, content_x + 380, content_y + 30, 80, 22) {
+                    return Some(SettingsAction::ServicesRefresh);
+                }
+
+                // Table rows
+                let row_h = 22;
+                let list_y = content_y + 78;
+                for i in 0..self.service_mgr.count {
+                    let ry = list_y + (i as i32 * row_h);
+                    if point_in_rect(px, py, content_x, ry, 470, row_h) {
+                        return Some(SettingsAction::ServicesSelectRow(i));
+                    }
+                }
+
+                // Selected service inspector control buttons
+                let insp_y = content_y + 196;
+                let btn_y = insp_y + 54;
+                if point_in_rect(px, py, content_x + 10, btn_y, 110, 22) {
+                    return Some(SettingsAction::ServicesRestart(self.service_mgr.selected_idx));
+                }
+                if point_in_rect(px, py, content_x + 126, btn_y, 90, 22) {
+                    return Some(SettingsAction::ServicesStop(self.service_mgr.selected_idx));
+                }
+                if point_in_rect(px, py, content_x + 222, btn_y, 90, 22) {
+                    return Some(SettingsAction::ServicesStart(self.service_mgr.selected_idx));
+                }
+            }
+            ServiceViewMode::ConfigFile => {
+                let row_h = 24;
+                let list_y = content_y + 44;
+                for i in 0..self.services_cfg.count {
+                    let ry = list_y + (i as i32 * row_h);
+                    if py >= ry && py < ry + row_h {
+                        if px >= content_x + 220 && px < content_x + 310 {
+                            return Some(SettingsAction::ServicesToggleRestart(i));
+                        }
+                    }
+                }
+            }
+        }
         None
     }
 
@@ -2316,6 +2662,51 @@ impl SettingsApp {
                         self.set_status("User table full (8 max)");
                     }
                 }
+                SettingsAction::ServicesSelectRow(idx) => {
+                    if idx < self.service_mgr.count {
+                        self.service_mgr.selected_idx = idx;
+                        self.set_status("Selected service");
+                    }
+                }
+                SettingsAction::ServicesToggleViewMode => {
+                    self.service_mgr.view_mode = match self.service_mgr.view_mode {
+                        ServiceViewMode::LiveDashboard => ServiceViewMode::ConfigFile,
+                        ServiceViewMode::ConfigFile => ServiceViewMode::LiveDashboard,
+                    };
+                    self.set_status(if self.service_mgr.view_mode == ServiceViewMode::LiveDashboard {
+                        "Switched to Live Supervision Dashboard"
+                    } else {
+                        "Switched to SERVICES.CFG Config Editor"
+                    });
+                }
+                SettingsAction::ServicesRefresh => {
+                    if self.service_mgr.sync_from_kernel() {
+                        self.set_status("Live service telemetry updated from PID 1");
+                    } else {
+                        self.set_status("Service status refresh completed");
+                    }
+                }
+                SettingsAction::ServicesRestart(idx) => {
+                    if self.service_mgr.restart_service(idx) {
+                        self.set_status("Service restart requested from supervisor");
+                    } else {
+                        self.set_status("Failed to request service restart");
+                    }
+                }
+                SettingsAction::ServicesStop(idx) => {
+                    if self.service_mgr.stop_service(idx) {
+                        self.set_status("Service stop requested from supervisor");
+                    } else {
+                        self.set_status("Failed to stop service");
+                    }
+                }
+                SettingsAction::ServicesStart(idx) => {
+                    if self.service_mgr.start_service(idx) {
+                        self.set_status("Service start requested from supervisor");
+                    } else {
+                        self.set_status("Failed to start service");
+                    }
+                }
                 SettingsAction::ServicesToggleRestart(idx) => {
                     if idx < self.services_cfg.count {
                         let cur = self.services_cfg.services[idx].restart;
@@ -2516,33 +2907,7 @@ impl SettingsApp {
             }
 
             PanelKind::Services => {
-                ui::font::draw_text_font(s, content_x, content_y, "Supervisor Services & Policies (SERVICES.CFG)", palette.accent_primary, &font);
-
-                let tbl_y = content_y + 24;
-                s.fill_rect(Rect::new(content_x, tbl_y, 440, 20), palette.surface_raised);
-                ui::font::draw_text_font(s, content_x + 8, tbl_y + 3, "Service Name", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 130, tbl_y + 3, "Target Binary", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 230, tbl_y + 3, "Restart Policy", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 330, tbl_y + 3, "Privilege", palette.text_muted, &f_small);
-
-                let mut ry = tbl_y + 22;
-                for i in 0..self.services_cfg.count {
-                    let svc = &self.services_cfg.services[i];
-                    let r_rect = Rect::new(content_x, ry, 440, 22);
-                    if i % 2 == 1 { s.fill_rect(r_rect, palette.surface_raised.darken(10)); }
-
-                    ui::font::draw_text_font(s, content_x + 8, ry + 4, svc.name_str(), palette.text_primary, &f_small);
-                    ui::font::draw_text_font(s, content_x + 130, ry + 4, svc.exec_path_str(), palette.text_secondary, &f_small);
-
-                    let pill_rect = Rect::new(content_x + 226, ry + 2, 70, 18);
-                    ui::draw::draw_rounded_rect(s, pill_rect, RADIUS_XS, palette.surface_sunken);
-                    ui::draw::draw_rect_outline(s, pill_rect, 1, palette.accent_primary);
-                    ui::font::draw_text_font(s, pill_rect.x + 6, pill_rect.y + 2, svc.restart.as_str(), palette.accent_primary, &f_small);
-
-                    let (priv_text, priv_col) = if svc.trusted { ("Trusted", palette.status_warning) } else { ("Standard", palette.text_muted) };
-                    ui::font::draw_text_font(s, content_x + 330, ry + 4, priv_text, priv_col, &f_small);
-                    ry += 24;
-                }
+                self.render_services_panel(s, content_x, content_y, viewport, &palette, &font, &f_small);
             }
 
             PanelKind::Firewall => {
@@ -2586,6 +2951,248 @@ impl SettingsApp {
         s.fill_rect(Rect::new(hdr_x, stat_rect.y, hdr_w, 1), palette.border_subtle);
 
         ui::font::draw_text_font(s, stat_rect.x + 12, stat_rect.y + 5, self.status_str(), palette.text_secondary, &f_small);
+    }
+
+    fn render_services_panel<S: Surface + ?Sized>(
+        &self,
+        s: &mut S,
+        content_x: i32,
+        content_y: i32,
+        _viewport: Rect,
+        palette: &ThemePalette,
+        font: &Font,
+        f_small: &Font,
+    ) {
+        // 1. Subtab Switcher: [Live Supervision] vs [SERVICES.CFG Editor]
+        let subtab_w = 120;
+        let subtab_h = 24;
+        let subtabs = ["Live Supervision", "SERVICES.CFG Editor"];
+        for (i, &st_name) in subtabs.iter().enumerate() {
+            let st_rect = Rect::new(content_x + (i as i32 * (subtab_w + 6)), content_y, subtab_w, subtab_h);
+            let is_act = (i == 0 && self.service_mgr.view_mode == ServiceViewMode::LiveDashboard)
+                || (i == 1 && self.service_mgr.view_mode == ServiceViewMode::ConfigFile);
+            if is_act {
+                ui::draw::draw_rounded_rect(s, st_rect, RADIUS_XS, palette.accent_primary.darken(35));
+                ui::draw::draw_rect_outline(s, st_rect, 1, palette.accent_primary);
+                let sz = f_small.measure_str(st_name);
+                ui::font::draw_text_font(s, st_rect.x + (st_rect.w - sz.w) / 2, st_rect.y + 4, st_name, Color::WHITE, f_small);
+            } else {
+                ui::draw::draw_rounded_rect(s, st_rect, RADIUS_XS, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, st_rect, 1, palette.border_subtle);
+                let sz = f_small.measure_str(st_name);
+                ui::font::draw_text_font(s, st_rect.x + (st_rect.w - sz.w) / 2, st_rect.y + 4, st_name, palette.text_secondary, f_small);
+            }
+        }
+
+        match self.service_mgr.view_mode {
+            ServiceViewMode::LiveDashboard => {
+                // 2. Metrics & Status Bar (content_y + 30)
+                let bar_y = content_y + 30;
+                let sup_dot = Rect::new(content_x + 2, bar_y + 6, 8, 8);
+                ui::draw::draw_rounded_rect(s, sup_dot, RADIUS_XS, palette.status_success);
+                ui::font::draw_text_font(s, content_x + 14, bar_y + 4, "Supervisor: novainit (PID 1)", palette.text_primary, f_small);
+
+                // Counters: Running / Restarting / Crashed / Stopped
+                let mut metric_buf = [0u8; 96];
+                let mut m_off = 0;
+                m_off += copy_bytes(&mut metric_buf[m_off..], b"Running: ");
+                m_off += format_u32(self.service_mgr.running_count() as u32, &mut metric_buf[m_off..]);
+                m_off += copy_bytes(&mut metric_buf[m_off..], b" | Restarting: ");
+                m_off += format_u32(self.service_mgr.restarting_count() as u32, &mut metric_buf[m_off..]);
+                m_off += copy_bytes(&mut metric_buf[m_off..], b" | Crashed: ");
+                m_off += format_u32(self.service_mgr.crashed_count() as u32, &mut metric_buf[m_off..]);
+                m_off += copy_bytes(&mut metric_buf[m_off..], b" | Stopped: ");
+                m_off += format_u32(self.service_mgr.stopped_count() as u32, &mut metric_buf[m_off..]);
+                if let Ok(m_str) = core::str::from_utf8(&metric_buf[..m_off]) {
+                    ui::font::draw_text_font(s, content_x + 165, bar_y + 4, m_str, palette.text_secondary, f_small);
+                }
+
+                // [Refresh Telemetry] button
+                let ref_rect = Rect::new(content_x + 390, bar_y, 76, 22);
+                ui::draw::draw_rounded_rect(s, ref_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, ref_rect, 1, palette.accent_primary);
+                ui::font::draw_text_font(s, ref_rect.x + 8, ref_rect.y + 4, "Refresh", palette.accent_primary, f_small);
+
+                // 3. Live Supervision Table Header (content_y + 56)
+                let tbl_y = content_y + 56;
+                s.fill_rect(Rect::new(content_x, tbl_y, 470, 20), palette.surface_raised);
+                ui::font::draw_text_font(s, content_x + 8, tbl_y + 3, "Status", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 86, tbl_y + 3, "Service Name", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 185, tbl_y + 3, "Binary & Target", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 295, tbl_y + 3, "PID", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 348, tbl_y + 3, "Restarts", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 412, tbl_y + 3, "Policy", palette.text_muted, f_small);
+
+                // 4. Live Service Rows (content_y + 78)
+                let row_h = 22;
+                let list_y = content_y + 78;
+                for i in 0..self.service_mgr.count {
+                    let svc = &self.service_mgr.services[i];
+                    let ry = list_y + (i as i32 * row_h);
+                    let is_sel = i == self.service_mgr.selected_idx;
+                    let r_rect = Rect::new(content_x, ry, 470, row_h);
+
+                    if is_sel {
+                        s.fill_rect(r_rect, palette.surface_raised.lighten(15));
+                        ui::draw::draw_rect_outline(s, r_rect, 1, palette.accent_primary);
+                    } else if i % 2 == 1 {
+                        s.fill_rect(r_rect, palette.surface_raised.darken(10));
+                    }
+
+                    // Status pill
+                    let pill_rect = Rect::new(content_x + 6, ry + 2, 72, 18);
+                    let s_col = svc.state_color(palette);
+                    ui::draw::draw_rounded_rect(s, pill_rect, RADIUS_XS, s_col.darken(35));
+                    ui::draw::draw_rect_outline(s, pill_rect, 1, s_col);
+                    let st_str = svc.state_str();
+                    let st_sz = f_small.measure_str(st_str);
+                    ui::font::draw_text_font(s, pill_rect.x + (pill_rect.w - st_sz.w) / 2, pill_rect.y + 2, st_str, Color::WHITE, f_small);
+
+                    // Service Name
+                    ui::font::draw_text_font(s, content_x + 86, ry + 4, svc.name_str(), if is_sel { Color::WHITE } else { palette.text_primary }, f_small);
+
+                    // Binary & Target
+                    ui::font::draw_text_font(s, content_x + 185, ry + 4, svc.exec_str(), palette.text_secondary, f_small);
+
+                    // PID
+                    if svc.pid > 0 {
+                        let mut pid_buf = [0u8; 16];
+                        let mut poff = copy_bytes(&mut pid_buf, b"PID ");
+                        poff += format_u32(svc.pid as u32, &mut pid_buf[poff..]);
+                        if let Ok(pid_str) = core::str::from_utf8(&pid_buf[..poff]) {
+                            ui::font::draw_text_font(s, content_x + 295, ry + 4, pid_str, palette.status_success, f_small);
+                        }
+                    } else {
+                        ui::font::draw_text_font(s, content_x + 295, ry + 4, "-", palette.text_muted, f_small);
+                    }
+
+                    // Restarts
+                    let mut r_buf = [0u8; 16];
+                    let mut r_off = format_u32(svc.restart_count, &mut r_buf);
+                    r_off += copy_bytes(&mut r_buf[r_off..], b" / 20");
+                    if let Ok(r_str) = core::str::from_utf8(&r_buf[..r_off]) {
+                        let r_col = if svc.restart_count >= 20 {
+                            palette.status_danger
+                        } else if svc.restart_count > 0 {
+                            palette.status_warning
+                        } else {
+                            palette.text_muted
+                        };
+                        ui::font::draw_text_font(s, content_x + 348, ry + 4, r_str, r_col, f_small);
+                    }
+
+                    // Policy
+                    ui::font::draw_text_font(s, content_x + 412, ry + 4, svc.policy_str(), palette.accent_primary, f_small);
+                }
+
+                // 5. Selected Service Inspector Card (content_y + 196)
+                let insp_y = content_y + 196;
+                let insp_rect = Rect::new(content_x, insp_y, 470, 84);
+                ui::draw::draw_rounded_rect(s, insp_rect, RADIUS_SM, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, insp_rect, 1, palette.border_subtle);
+
+                if self.service_mgr.selected_idx < self.service_mgr.count {
+                    let sel = &self.service_mgr.services[self.service_mgr.selected_idx];
+
+                    // Title line: Service Inspector: <name>
+                    ui::font::draw_text_font(s, content_x + 12, insp_y + 6, "Service Inspector:", palette.text_muted, f_small);
+                    ui::font::draw_text_font(s, content_x + 104, insp_y + 6, sel.name_str(), palette.accent_primary, font);
+
+                    // Privilege tag
+                    let priv_str = if sel.trusted { "Trusted (SYS_EXEC_TRUSTED)" } else { "Standard (SYS_EXEC)" };
+                    let priv_col = if sel.trusted { palette.status_warning } else { palette.text_muted };
+                    ui::font::draw_text_font(s, content_x + 280, insp_y + 8, priv_str, priv_col, f_small);
+
+                    // Line 1: Command & Dependencies
+                    let mut cmd_buf = [0u8; 96];
+                    let mut c_off = 0;
+                    c_off += copy_bytes(&mut cmd_buf[c_off..], b"Exec: ");
+                    c_off += copy_bytes(&mut cmd_buf[c_off..], sel.exec_str().as_bytes());
+                    if sel.arg_str() != "-" {
+                        c_off += copy_bytes(&mut cmd_buf[c_off..], b" ");
+                        c_off += copy_bytes(&mut cmd_buf[c_off..], sel.arg_str().as_bytes());
+                    }
+                    c_off += copy_bytes(&mut cmd_buf[c_off..], b"  |  Depends on: ");
+                    c_off += copy_bytes(&mut cmd_buf[c_off..], sel.depends_str().as_bytes());
+                    if let Ok(cmd_str) = core::str::from_utf8(&cmd_buf[..c_off]) {
+                        ui::font::draw_text_font(s, content_x + 12, insp_y + 28, cmd_str, palette.text_secondary, f_small);
+                    }
+
+                    // Line 2: Supervision status, restarts, exit code
+                    let mut stat_buf = [0u8; 96];
+                    let mut s_off = 0;
+                    s_off += copy_bytes(&mut stat_buf[s_off..], b"Status: ");
+                    s_off += copy_bytes(&mut stat_buf[s_off..], sel.state_str().as_bytes());
+                    s_off += copy_bytes(&mut stat_buf[s_off..], b"  |  Restarts: ");
+                    s_off += format_u32(sel.restart_count, &mut stat_buf[s_off..]);
+                    s_off += copy_bytes(&mut stat_buf[s_off..], b"/20  |  Restart Policy: ");
+                    s_off += copy_bytes(&mut stat_buf[s_off..], sel.policy_str().as_bytes());
+                    if let Ok(stat_str) = core::str::from_utf8(&stat_buf[..s_off]) {
+                        ui::font::draw_text_font(s, content_x + 12, insp_y + 44, stat_str, palette.text_secondary, f_small);
+                    }
+
+                    // Action buttons
+                    let btn_y = insp_y + 58;
+                    // [Restart Service]
+                    let restart_btn = Rect::new(content_x + 10, btn_y, 108, 20);
+                    ui::draw::draw_rounded_rect(s, restart_btn, RADIUS_XS, palette.accent_primary.darken(35));
+                    ui::draw::draw_rect_outline(s, restart_btn, 1, palette.accent_primary);
+                    ui::font::draw_text_font(s, restart_btn.x + 8, restart_btn.y + 3, "Restart Service", Color::WHITE, f_small);
+
+                    // [Stop Service]
+                    let stop_btn = Rect::new(content_x + 126, btn_y, 88, 20);
+                    ui::draw::draw_rounded_rect(s, stop_btn, RADIUS_XS, palette.surface_raised);
+                    ui::draw::draw_rect_outline(s, stop_btn, 1, palette.status_danger);
+                    ui::font::draw_text_font(s, stop_btn.x + 10, stop_btn.y + 3, "Stop Service", palette.status_danger, f_small);
+
+                    // [Start Service]
+                    let start_btn = Rect::new(content_x + 222, btn_y, 88, 20);
+                    ui::draw::draw_rounded_rect(s, start_btn, RADIUS_XS, palette.surface_raised);
+                    ui::draw::draw_rect_outline(s, start_btn, 1, palette.status_success);
+                    ui::font::draw_text_font(s, start_btn.x + 8, start_btn.y + 3, "Start Service", palette.status_success, f_small);
+                }
+            }
+
+            ServiceViewMode::ConfigFile => {
+                // Config File Editor (SERVICES.CFG)
+                ui::font::draw_text_font(s, content_x, content_y + 28, "Supervisor Static Policies (SERVICES.CFG)", palette.accent_primary, font);
+
+                let tbl_y = content_y + 48;
+                s.fill_rect(Rect::new(content_x, tbl_y, 470, 20), palette.surface_raised);
+                ui::font::draw_text_font(s, content_x + 8, tbl_y + 3, "Service Name", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 130, tbl_y + 3, "Target Binary", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 230, tbl_y + 3, "Restart Policy", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 340, tbl_y + 3, "Privilege", palette.text_muted, f_small);
+
+                let mut ry = tbl_y + 22;
+                for i in 0..self.services_cfg.count {
+                    let svc = &self.services_cfg.services[i];
+                    let r_rect = Rect::new(content_x, ry, 470, 22);
+                    if i % 2 == 1 {
+                        s.fill_rect(r_rect, palette.surface_raised.darken(10));
+                    }
+
+                    ui::font::draw_text_font(s, content_x + 8, ry + 4, svc.name_str(), palette.text_primary, f_small);
+                    ui::font::draw_text_font(s, content_x + 130, ry + 4, svc.exec_path_str(), palette.text_secondary, f_small);
+
+                    let pill_rect = Rect::new(content_x + 226, ry + 2, 74, 18);
+                    ui::draw::draw_rounded_rect(s, pill_rect, RADIUS_XS, palette.surface_sunken);
+                    ui::draw::draw_rect_outline(s, pill_rect, 1, palette.accent_primary);
+                    ui::font::draw_text_font(s, pill_rect.x + 8, pill_rect.y + 2, svc.restart.as_str(), palette.accent_primary, f_small);
+
+                    let (priv_text, priv_col) = if svc.trusted {
+                        ("Trusted", palette.status_warning)
+                    } else {
+                        ("Standard", palette.text_muted)
+                    };
+                    ui::font::draw_text_font(s, content_x + 340, ry + 4, priv_text, priv_col, f_small);
+                    ry += 24;
+                }
+
+                ui::font::draw_text_font(s, content_x, content_y + 200, "Click restart policy pill to cycle policies (always, on-crash, never).", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x, content_y + 218, "Click 'Save' at top right to write changes back to SERVICES.CFG.", palette.text_muted, f_small);
+            }
+        }
     }
 
     fn render_users_panel<S: Surface + ?Sized>(
@@ -3620,6 +4227,75 @@ fn selftest_users_and_permissions(app: &mut SettingsApp, surf: &mut BufferSurfac
 }
 
 #[inline(never)]
+fn selftest_service_manager(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
+
+    // Case 18: Live service supervisor query and supervision controls
+    app.select_panel(PanelKind::Services);
+    app.service_mgr.view_mode = ServiceViewMode::LiveDashboard;
+    let query_ok = app.service_mgr.sync_from_kernel();
+    let count_ok = app.service_mgr.count >= 3;
+    let s0_ok = app.service_mgr.services[0].name_str() == "network-check";
+    let s1_ok = app.service_mgr.services[1].name_str() == "greeting";
+    let s2_ok = app.service_mgr.services[2].name_str() == "shell"
+        && app.service_mgr.services[2].trusted;
+
+    // Dispatch control action: Restart service 0 ("network-check")
+    let restart_ok = app.service_mgr.restart_service(0);
+    // Dispatch control action: Stop service 2 ("shell")
+    let stop_ok = app.service_mgr.stop_service(2);
+    // Dispatch control action: Start service 1 ("greeting")
+    let start_ok = app.service_mgr.start_service(1);
+
+    if query_ok && count_ok && s0_ok && s1_ok && s2_ok && restart_ok && stop_ok && start_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: live service supervisor query and supervision controls\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: live service supervisor query/controls\n\0".as_ptr()) };
+        code |= 131072;
+    }
+
+    // Case 19: Interactive mouse hit-testing and view modes
+    let vp = Rect::new(0, 0, 640, 480);
+    // Switch to ConfigFile editor (Subtab 1 at x: 302..422, y: 64..88)
+    app.on_left_click(310, 70, vp);
+    let config_mode_ok = app.service_mgr.view_mode == ServiceViewMode::ConfigFile;
+    // Switch back to LiveDashboard (Subtab 0 at x: 176..296, y: 64..88)
+    app.on_left_click(180, 70, vp);
+    let live_mode_ok = app.service_mgr.view_mode == ServiceViewMode::LiveDashboard;
+
+    // Click row 1 (list_y starts at 64 + 78 = 142, row 1 at y: 164..186)
+    app.on_left_click(200, 170, vp);
+    let row_sel_ok = app.service_mgr.selected_idx == 1;
+
+    if config_mode_ok && live_mode_ok && row_sel_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: Service Manager mouse hit-testing and view modes\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Service Manager mouse hit-testing\n\0".as_ptr()) };
+        code |= 262144;
+    }
+
+    // Case 20: Service Manager graphical presentation on BufferSurface32
+    app.service_mgr.view_mode = ServiceViewMode::LiveDashboard;
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let live_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    app.service_mgr.view_mode = ServiceViewMode::ConfigFile;
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let cfg_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    if live_pixels > 5000 && cfg_pixels > 5000 {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: Service Manager graphical presentation on BufferSurface32\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Service Manager graphical presentation\n\0".as_ptr()) };
+        code |= 524288;
+    }
+
+    code
+}
+
+#[inline(never)]
 pub fn run_selftest() -> i32 {
     let mut code = 0;
     unsafe { ffi::sys_write(b"[settings-selftest] starting\n\0".as_ptr()) };
@@ -3638,6 +4314,7 @@ pub fn run_selftest() -> i32 {
     code |= selftest_mouse_and_surface(app, &mut surf);
     code |= selftest_firewall_and_network(app, &mut surf);
     code |= selftest_users_and_permissions(app, &mut surf);
+    code |= selftest_service_manager(app, &mut surf);
 
     if code == 0 {
         unsafe { ffi::sys_write(b"[settings-selftest] all cases passed\n\0".as_ptr()) };
@@ -4007,5 +4684,57 @@ mod tests {
         ui.open_change_password();
         assert_eq!(ui.view_mode, UsersViewMode::ChangePassword);
         assert_eq!(ui.form_password_str(), "");
+    }
+
+    #[test]
+    fn test_service_manager_sync_and_controls() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut mgr = ServiceManager::new();
+        assert!(mgr.sync_from_kernel());
+        assert_eq!(mgr.count, 3);
+        assert_eq!(mgr.running_count(), 2);
+        assert_eq!(mgr.stopped_count(), 1);
+
+        // Check service 0
+        assert_eq!(mgr.services[0].name_str(), "network-check");
+        assert_eq!(mgr.services[0].state_str(), "RUNNING");
+        assert_eq!(mgr.services[0].policy_str(), "always");
+
+        // Restart service 0
+        assert!(mgr.restart_service(0));
+        assert_eq!(unsafe { ffi::MOCK_SVC_LAST_ACTION }, ffi::NOVA_SVC_ACTION_RESTART);
+        assert_eq!(mgr.services[0].restart_count, 1);
+
+        // Stop service 2 ("shell")
+        assert!(mgr.stop_service(2));
+        assert_eq!(unsafe { ffi::MOCK_SVC_LAST_ACTION }, ffi::NOVA_SVC_ACTION_STOP);
+        assert_eq!(mgr.services[2].state_str(), "STOPPED");
+
+        // Start service 1 ("greeting")
+        assert!(mgr.start_service(1));
+        assert_eq!(unsafe { ffi::MOCK_SVC_LAST_ACTION }, ffi::NOVA_SVC_ACTION_START);
+        assert_eq!(mgr.services[1].state_str(), "RUNNING");
+    }
+
+    #[test]
+    fn test_service_manager_surface_rendering() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut app = SettingsApp::new();
+        app.select_panel(PanelKind::Services);
+        app.service_mgr.view_mode = ServiceViewMode::LiveDashboard;
+
+        let mut buf = vec![0u32; 640 * 480];
+        let mut surf = BufferSurface32::new(&mut buf, 640, 480);
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+
+        let non_zero_live = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_live > 5000, "Should render live supervision dashboard with status pills");
+
+        // Switch to config editor view
+        app.service_mgr.view_mode = ServiceViewMode::ConfigFile;
+        surf.buffer.fill(0);
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+        let non_zero_cfg = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_cfg > 5000, "Should render SERVICES.CFG config editor");
     }
 }

@@ -45,6 +45,7 @@
 #include "../../../userland/libc/include/nova_rlimit_abi.h"
 #include "../../../userland/libc/include/nova_klog_abi.h"
 #include "../../../userland/libc/include/nova_pkgrepo_abi.h"
+#include "../../../userland/libc/include/nova_svc_abi.h"
 #include "../../include/atomic_update.h"
 #include "../../include/crashdump.h"
 #include "../../include/disk_installer.h"
@@ -1379,6 +1380,79 @@ static void handle_disk_install(registers_t* regs) {
     regs->eax = (uint32_t)DISK_INSTALL_ERR_INVALID_PARAM;
 }
 
+/* Month 4: Service supervisor status and control (SYS_SERVICE_STATUS). */
+extern int rust_service_status_publish(const nova_service_status_t* status, uint32_t caller_pid);
+extern int rust_service_status_query(nova_service_status_t* out_status);
+extern int rust_service_status_control(uint32_t action, const char* name, uint32_t name_len);
+extern int rust_service_status_get_action(uint32_t* out_action, uint8_t* out_name, uint32_t max_name_len);
+
+static void handle_service_status(registers_t* regs) {
+    uint32_t op = regs->ebx;
+    process_t* cur = process_current();
+
+    if (op == NOVA_SVC_OP_QUERY) {
+        uint32_t out_ptr = regs->ecx;
+        if (!is_user_ptr_valid(cur, out_ptr, sizeof(nova_service_status_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        regs->eax = (uint32_t)rust_service_status_query((nova_service_status_t*)out_ptr);
+        return;
+    }
+
+    if (op == NOVA_SVC_OP_PUBLISH) {
+        uint32_t in_ptr = regs->ecx;
+        if (!is_user_ptr_valid(cur, in_ptr, sizeof(nova_service_status_t), false)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        uint32_t caller_pid = cur ? (uint32_t)cur->pid : 0;
+        regs->eax = (uint32_t)rust_service_status_publish((const nova_service_status_t*)in_ptr, caller_pid);
+        return;
+    }
+
+    if (op == NOVA_SVC_OP_CONTROL) {
+        uint32_t action = (uint32_t)regs->ecx;
+        const char* name = (const char*)regs->edx;
+        uint32_t name_len = 0;
+        if (name != NULL) {
+            if (!is_user_ptr_valid(cur, (uint32_t)name, 1, false)) {
+                regs->eax = (uint32_t)-14; /* -EFAULT */
+                return;
+            }
+            while (name_len < NOVA_SVC_MAX_NAME - 1) {
+                if (!is_user_ptr_valid(cur, (uint32_t)(name + name_len), 1, false)) break;
+                if (name[name_len] == '\0') break;
+                name_len++;
+            }
+        }
+        regs->eax = (uint32_t)rust_service_status_control(action, name, name_len);
+        return;
+    }
+
+    if (op == NOVA_SVC_OP_GET_ACTION) {
+        uint32_t out_ptr = regs->ecx;
+        if (!is_user_ptr_valid(cur, out_ptr, sizeof(nova_service_action_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        nova_service_action_t act;
+        memset(&act, 0, sizeof(act));
+        uint32_t action = 0;
+        int rc = rust_service_status_get_action(&action, (uint8_t*)act.name, sizeof(act.name));
+        act.action = action;
+        if (rc == 0) {
+            memcpy((void*)out_ptr, &act, sizeof(act));
+            regs->eax = 0;
+        } else {
+            regs->eax = (uint32_t)rc;
+        }
+        return;
+    }
+
+    regs->eax = (uint32_t)-22; /* -EINVAL */
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2411,6 +2485,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_DISK_INSTALL:
             handle_disk_install(regs);
+            break;
+
+        case SYS_SERVICE_STATUS:
+            handle_service_status(regs);
             break;
 
         case SYS_FB_INFO:

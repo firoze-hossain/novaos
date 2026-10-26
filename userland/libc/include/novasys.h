@@ -11,6 +11,7 @@
 #include "nova_fw_abi.h"
 #include "nova_klog_abi.h"
 #include "nova_pkgrepo_abi.h"
+#include "nova_svc_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -451,5 +452,12 @@ int sys_sendto(int handle, const nova_udp_addr_t* addr, const void* buf,
                unsigned int len);
 int sys_recvfrom(int handle, void* buf, unsigned int max_len,
                   nova_udp_addr_t* out_addr);
+
+/* Month 4: Service supervisor status query and control (SYS_SERVICE_STATUS). */
+int sys_service_status(unsigned int op, void* arg1, void* arg2);
+int sys_service_query(nova_service_status_t* out);
+int sys_service_publish(const nova_service_status_t* status);
+int sys_service_control(unsigned int action, const char* name);
+int sys_service_get_action(nova_service_action_t* out);
 
 #endif

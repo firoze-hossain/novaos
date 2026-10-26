@@ -123,6 +123,108 @@ mod ffi {
         pub msg: *const u8,
     }
     pub unsafe fn sys_klog_write(_req: *const NovaKlogWrite) -> i32 { 0 }
+
+    pub const NOVA_SVC_STATE_STOPPED: u32 = 0;
+    pub const NOVA_SVC_STATE_RUNNING: u32 = 1;
+    pub const NOVA_SVC_STATE_RESTARTING: u32 = 2;
+    pub const NOVA_SVC_STATE_CRASHED: u32 = 3;
+    pub const NOVA_SVC_STATE_BLOCKED: u32 = 4;
+
+    pub const NOVA_SVC_ACTION_NONE: u32 = 0;
+    pub const NOVA_SVC_ACTION_RESTART: u32 = 1;
+    pub const NOVA_SVC_ACTION_STOP: u32 = 2;
+    pub const NOVA_SVC_ACTION_START: u32 = 3;
+
+    pub const NOVA_SVC_MAX_SERVICES: usize = 16;
+    pub const NOVA_SVC_MAX_NAME: usize = 24;
+    pub const NOVA_SVC_MAX_PATH: usize = 16;
+    pub const NOVA_SVC_MAX_ARG: usize = 32;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NovaServiceInfo {
+        pub name: [u8; NOVA_SVC_MAX_NAME],
+        pub exec_path: [u8; NOVA_SVC_MAX_PATH],
+        pub arg: [u8; NOVA_SVC_MAX_ARG],
+        pub depends_on: [u8; NOVA_SVC_MAX_NAME],
+        pub pid: i32,
+        pub state: u32,
+        pub restart_policy: u32,
+        pub restart_count: u32,
+        pub uptime_ticks: u32,
+        pub trusted: u32,
+        pub last_exit_code: i32,
+        pub reserved: [u32; 3],
+    }
+
+    impl NovaServiceInfo {
+        pub const fn empty() -> Self {
+            NovaServiceInfo {
+                name: [0u8; NOVA_SVC_MAX_NAME],
+                exec_path: [0u8; NOVA_SVC_MAX_PATH],
+                arg: [0u8; NOVA_SVC_MAX_ARG],
+                depends_on: [0u8; NOVA_SVC_MAX_NAME],
+                pid: -1,
+                state: NOVA_SVC_STATE_STOPPED,
+                restart_policy: 0,
+                restart_count: 0,
+                uptime_ticks: 0,
+                trusted: 0,
+                last_exit_code: 0,
+                reserved: [0u32; 3],
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NovaServiceStatus {
+        pub count: u32,
+        pub supervisor_pid: u32,
+        pub supervisor_uptime_ticks: u32,
+        pub generation: u32,
+        pub pending_action: u32,
+        pub pending_name: [u8; NOVA_SVC_MAX_NAME],
+        pub services: [NovaServiceInfo; NOVA_SVC_MAX_SERVICES],
+    }
+
+    impl NovaServiceStatus {
+        pub const fn empty() -> Self {
+            NovaServiceStatus {
+                count: 0,
+                supervisor_pid: 1,
+                supervisor_uptime_ticks: 0,
+                generation: 0,
+                pending_action: NOVA_SVC_ACTION_NONE,
+                pending_name: [0u8; NOVA_SVC_MAX_NAME],
+                services: [NovaServiceInfo::empty(); NOVA_SVC_MAX_SERVICES],
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct NovaServiceAction {
+        pub action: u32,
+        pub name: [u8; NOVA_SVC_MAX_NAME],
+    }
+
+    impl NovaServiceAction {
+        pub const fn empty() -> Self {
+            NovaServiceAction {
+                action: NOVA_SVC_ACTION_NONE,
+                name: [0u8; NOVA_SVC_MAX_NAME],
+            }
+        }
+    }
+
+    pub unsafe fn sys_service_publish(_status: *const NovaServiceStatus) -> i32 { 0 }
+    pub unsafe fn sys_service_get_action(out: *mut NovaServiceAction) -> i32 {
+        if !out.is_null() {
+            (*out).action = NOVA_SVC_ACTION_NONE;
+        }
+        0
+    }
 }
 
 #[cfg(not(test))]
@@ -535,6 +637,114 @@ fn start_service(svc: &mut Service) {
     }
 }
 
+fn name_matches(fixed: &FixedStr<MAX_NAME>, target: &[u8; ffi::NOVA_SVC_MAX_NAME]) -> bool {
+    let mut len = 0;
+    while len < ffi::NOVA_SVC_MAX_NAME && target[len] != 0 {
+        len += 1;
+    }
+    fixed.eq_slice(&target[..len])
+}
+
+static mut STATUS_BUF: ffi::NovaServiceStatus = ffi::NovaServiceStatus::empty();
+static mut SUPERVISOR_GEN: u32 = 0;
+
+fn process_pending_actions(services: &mut [Service; MAX_SERVICES], count: usize) -> bool {
+    let mut act = ffi::NovaServiceAction::empty();
+    let res = unsafe { ffi::sys_service_get_action(&mut act) };
+    if res == 0 && act.action != ffi::NOVA_SVC_ACTION_NONE {
+        for i in 0..count {
+            if name_matches(&services[i].name, &act.name) {
+                match act.action {
+                    ffi::NOVA_SVC_ACTION_RESTART => {
+                        services[i].gave_up = false;
+                        services[i].restart_count = 0;
+                        write_service_msg(b"novainit: operator requested RESTART of '", services[i].name.as_slice(), b"'\n");
+                        start_service(&mut services[i]);
+                        return true;
+                    }
+                    ffi::NOVA_SVC_ACTION_STOP => {
+                        services[i].gave_up = true;
+                        services[i].pid = -1;
+                        write_service_msg(b"novainit: operator requested STOP of '", services[i].name.as_slice(), b"'\n");
+                        return true;
+                    }
+                    ffi::NOVA_SVC_ACTION_START => {
+                        services[i].gave_up = false;
+                        services[i].restart_count = 0;
+                        write_service_msg(b"novainit: operator requested START of '", services[i].name.as_slice(), b"'\n");
+                        start_service(&mut services[i]);
+                        return true;
+                    }
+                    _ => {}
+                }
+                break;
+            }
+        }
+    }
+    false
+}
+
+fn publish_supervision_status(services: &[Service; MAX_SERVICES], count: usize) {
+    unsafe {
+        let status = &mut *core::ptr::addr_of_mut!(STATUS_BUF);
+        SUPERVISOR_GEN = SUPERVISOR_GEN.wrapping_add(1);
+        status.count = (count as u32).min(ffi::NOVA_SVC_MAX_SERVICES as u32);
+        status.supervisor_pid = 1;
+        status.generation = SUPERVISOR_GEN;
+        status.supervisor_uptime_ticks = 0;
+
+        for i in 0..count {
+            let s = &mut status.services[i];
+            let src = &services[i];
+            let name_s = src.name.as_slice();
+            s.name = [0u8; ffi::NOVA_SVC_MAX_NAME];
+            let n_len = name_s.len().min(ffi::NOVA_SVC_MAX_NAME);
+            s.name[..n_len].copy_from_slice(&name_s[..n_len]);
+
+            let path_s = src.exec_path.as_slice();
+            s.exec_path = [0u8; ffi::NOVA_SVC_MAX_PATH];
+            let p_len = path_s.len().min(ffi::NOVA_SVC_MAX_PATH);
+            s.exec_path[..p_len].copy_from_slice(&path_s[..p_len]);
+
+            let arg_s = src.arg.as_slice();
+            s.arg = [0u8; ffi::NOVA_SVC_MAX_ARG];
+            let a_len = arg_s.len().min(ffi::NOVA_SVC_MAX_ARG);
+            s.arg[..a_len].copy_from_slice(&arg_s[..a_len]);
+
+            let dep_s = src.depends_on.as_slice();
+            s.depends_on = [0u8; ffi::NOVA_SVC_MAX_NAME];
+            let d_len = dep_s.len().min(ffi::NOVA_SVC_MAX_NAME);
+            s.depends_on[..d_len].copy_from_slice(&dep_s[..d_len]);
+
+            s.pid = src.pid;
+            s.state = if src.pid > 0 {
+                ffi::NOVA_SVC_STATE_RUNNING
+            } else if src.gave_up {
+                ffi::NOVA_SVC_STATE_CRASHED
+            } else if !dependency_satisfied(src, services, count) {
+                ffi::NOVA_SVC_STATE_BLOCKED
+            } else if src.started && src.restart != RestartPolicy::Never {
+                ffi::NOVA_SVC_STATE_RESTARTING
+            } else {
+                ffi::NOVA_SVC_STATE_STOPPED
+            };
+
+            s.restart_policy = match src.restart {
+                RestartPolicy::Never => 0,
+                RestartPolicy::OnCrash => 1,
+                RestartPolicy::Always => 2,
+            };
+            s.restart_count = src.restart_count;
+            s.trusted = if src.trusted { 1 } else { 0 };
+            s.last_exit_code = 0;
+        }
+        for i in count..ffi::NOVA_SVC_MAX_SERVICES {
+            status.services[i] = ffi::NovaServiceInfo::empty();
+        }
+        ffi::sys_service_publish(status);
+    }
+}
+
 /// One real supervision pass over every service: start whatever's
 /// eligible to start and isn't running yet, and check whatever *is*
 /// running for whether it just exited - restarting it if its own
@@ -543,6 +753,8 @@ fn start_service(svc: &mut Service) {
 /// the identical, real logic both actually use, not a simplified
 /// stand-in the self-test alone runs.
 fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
+    let mut changed = process_pending_actions(services, count);
+
     for i in 0..count {
         if services[i].pid < 0 {
             let svc = &services[i];
@@ -583,6 +795,7 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
             };
             if eligible && dependency_satisfied(&services[i], services, count) {
                 start_service(&mut services[i]);
+                changed = true;
             }
             continue;
         }
@@ -592,6 +805,7 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
         if status == 0 {
             // Terminated - decide, from its own real restart policy
             // and its own real exit code, whether to bring it back.
+            changed = true;
             let svc = &mut services[i];
             let should_restart = should_restart_after_exit(svc.restart, exit_code);
             svc.pid = -1;
@@ -615,6 +829,10 @@ fn supervise_pass(services: &mut [Service; MAX_SERVICES], count: usize) {
         // status == -1 (still running) or -2 (no such process,
         // shouldn't genuinely happen here) both leave this service's
         // own pid untouched - checked again next pass.
+    }
+
+    if changed {
+        publish_supervision_status(services, count);
     }
 }
 
@@ -848,6 +1066,9 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     // scheduler lets this process run at all, for as long as the
     // system stays up - which, now that this loop no longer has its
     // own accidental 30-pass ceiling, could be indefinitely long.
+    // Publish initial status table snapshot before entering loop
+    publish_supervision_status(&services, count);
+
     loop {
         supervise_pass(&mut services, count);
         unsafe { ffi::sys_yield() };

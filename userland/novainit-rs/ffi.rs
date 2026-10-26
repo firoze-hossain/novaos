@@ -57,6 +57,106 @@ extern "C" {
 
     /// Phase 89: writes a structured log entry into the kernel logging ring buffer.
     pub fn sys_klog_write(req: *const NovaKlogWrite) -> i32;
+
+    /// Month 4: publishes supervisor service status snapshot to kernel table.
+    pub fn sys_service_publish(status: *const NovaServiceStatus) -> i32;
+
+    /// Month 4: retrieves any pending operator control action (restart, stop, start).
+    pub fn sys_service_get_action(out: *mut NovaServiceAction) -> i32;
+}
+
+pub const NOVA_SVC_STATE_STOPPED: u32 = 0;
+pub const NOVA_SVC_STATE_RUNNING: u32 = 1;
+pub const NOVA_SVC_STATE_RESTARTING: u32 = 2;
+pub const NOVA_SVC_STATE_CRASHED: u32 = 3;
+pub const NOVA_SVC_STATE_BLOCKED: u32 = 4;
+
+pub const NOVA_SVC_ACTION_NONE: u32 = 0;
+pub const NOVA_SVC_ACTION_RESTART: u32 = 1;
+pub const NOVA_SVC_ACTION_STOP: u32 = 2;
+pub const NOVA_SVC_ACTION_START: u32 = 3;
+
+pub const NOVA_SVC_MAX_SERVICES: usize = 16;
+pub const NOVA_SVC_MAX_NAME: usize = 24;
+pub const NOVA_SVC_MAX_PATH: usize = 16;
+pub const NOVA_SVC_MAX_ARG: usize = 32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NovaServiceInfo {
+    pub name: [u8; NOVA_SVC_MAX_NAME],
+    pub exec_path: [u8; NOVA_SVC_MAX_PATH],
+    pub arg: [u8; NOVA_SVC_MAX_ARG],
+    pub depends_on: [u8; NOVA_SVC_MAX_NAME],
+    pub pid: i32,
+    pub state: u32,
+    pub restart_policy: u32,
+    pub restart_count: u32,
+    pub uptime_ticks: u32,
+    pub trusted: u32,
+    pub last_exit_code: i32,
+    pub reserved: [u32; 3],
+}
+
+impl NovaServiceInfo {
+    pub const fn empty() -> Self {
+        NovaServiceInfo {
+            name: [0u8; NOVA_SVC_MAX_NAME],
+            exec_path: [0u8; NOVA_SVC_MAX_PATH],
+            arg: [0u8; NOVA_SVC_MAX_ARG],
+            depends_on: [0u8; NOVA_SVC_MAX_NAME],
+            pid: -1,
+            state: NOVA_SVC_STATE_STOPPED,
+            restart_policy: 0,
+            restart_count: 0,
+            uptime_ticks: 0,
+            trusted: 0,
+            last_exit_code: 0,
+            reserved: [0u32; 3],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NovaServiceStatus {
+    pub count: u32,
+    pub supervisor_pid: u32,
+    pub supervisor_uptime_ticks: u32,
+    pub generation: u32,
+    pub pending_action: u32,
+    pub pending_name: [u8; NOVA_SVC_MAX_NAME],
+    pub services: [NovaServiceInfo; NOVA_SVC_MAX_SERVICES],
+}
+
+impl NovaServiceStatus {
+    pub const fn empty() -> Self {
+        NovaServiceStatus {
+            count: 0,
+            supervisor_pid: 1,
+            supervisor_uptime_ticks: 0,
+            generation: 0,
+            pending_action: NOVA_SVC_ACTION_NONE,
+            pending_name: [0u8; NOVA_SVC_MAX_NAME],
+            services: [NovaServiceInfo::empty(); NOVA_SVC_MAX_SERVICES],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NovaServiceAction {
+    pub action: u32,
+    pub name: [u8; NOVA_SVC_MAX_NAME],
+}
+
+impl NovaServiceAction {
+    pub const fn empty() -> Self {
+        NovaServiceAction {
+            action: NOVA_SVC_ACTION_NONE,
+            name: [0u8; NOVA_SVC_MAX_NAME],
+        }
+    }
 }
 
 #[repr(C)]

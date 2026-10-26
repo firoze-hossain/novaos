@@ -192,6 +192,99 @@ extern "C" {
     // Firewall syscalls (SYS_FW_INFO, SYS_FW_CTL)
     pub fn sys_fw_info(out: *mut NovaFwInfo) -> i32;
     pub fn sys_fw_ctl(req: *mut NovaFwReq) -> i32;
+
+    // Service Manager syscalls (SYS_SERVICE_STATUS)
+    pub fn sys_service_query(out: *mut NovaServiceStatus) -> i32;
+    pub fn sys_service_control(action: u32, name: *const u8) -> i32;
+}
+
+// ===========================================================================
+// Service Supervisor ABI (nova_svc_abi.h)
+// ===========================================================================
+
+pub const NOVA_SYS_SERVICE_STATUS: u32 = 82;
+
+pub const NOVA_SVC_OP_QUERY: u32 = 1;
+pub const NOVA_SVC_OP_PUBLISH: u32 = 2;
+pub const NOVA_SVC_OP_CONTROL: u32 = 3;
+pub const NOVA_SVC_OP_GET_ACTION: u32 = 4;
+
+pub const NOVA_SVC_STATE_STOPPED: u32 = 0;
+pub const NOVA_SVC_STATE_RUNNING: u32 = 1;
+pub const NOVA_SVC_STATE_RESTARTING: u32 = 2;
+pub const NOVA_SVC_STATE_CRASHED: u32 = 3;
+pub const NOVA_SVC_STATE_BLOCKED: u32 = 4;
+
+pub const NOVA_SVC_ACTION_NONE: u32 = 0;
+pub const NOVA_SVC_ACTION_RESTART: u32 = 1;
+pub const NOVA_SVC_ACTION_STOP: u32 = 2;
+pub const NOVA_SVC_ACTION_START: u32 = 3;
+
+pub const NOVA_SVC_MAX_SERVICES: usize = 16;
+pub const NOVA_SVC_MAX_NAME: usize = 24;
+pub const NOVA_SVC_MAX_PATH: usize = 16;
+pub const NOVA_SVC_MAX_ARG: usize = 32;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NovaServiceInfo {
+    pub name: [u8; NOVA_SVC_MAX_NAME],
+    pub exec_path: [u8; NOVA_SVC_MAX_PATH],
+    pub arg: [u8; NOVA_SVC_MAX_ARG],
+    pub depends_on: [u8; NOVA_SVC_MAX_NAME],
+    pub pid: i32,
+    pub state: u32,
+    pub restart_policy: u32,
+    pub restart_count: u32,
+    pub uptime_ticks: u32,
+    pub trusted: u32,
+    pub last_exit_code: i32,
+    pub reserved: [u32; 3],
+}
+
+impl NovaServiceInfo {
+    pub const fn empty() -> Self {
+        NovaServiceInfo {
+            name: [0u8; NOVA_SVC_MAX_NAME],
+            exec_path: [0u8; NOVA_SVC_MAX_PATH],
+            arg: [0u8; NOVA_SVC_MAX_ARG],
+            depends_on: [0u8; NOVA_SVC_MAX_NAME],
+            pid: -1,
+            state: NOVA_SVC_STATE_STOPPED,
+            restart_policy: 0,
+            restart_count: 0,
+            uptime_ticks: 0,
+            trusted: 0,
+            last_exit_code: 0,
+            reserved: [0u32; 3],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NovaServiceStatus {
+    pub count: u32,
+    pub supervisor_pid: u32,
+    pub supervisor_uptime_ticks: u32,
+    pub generation: u32,
+    pub pending_action: u32,
+    pub pending_name: [u8; NOVA_SVC_MAX_NAME],
+    pub services: [NovaServiceInfo; NOVA_SVC_MAX_SERVICES],
+}
+
+impl NovaServiceStatus {
+    pub const fn empty() -> Self {
+        NovaServiceStatus {
+            count: 0,
+            supervisor_pid: 1,
+            supervisor_uptime_ticks: 0,
+            generation: 0,
+            pending_action: NOVA_SVC_ACTION_NONE,
+            pending_name: [0u8; NOVA_SVC_MAX_NAME],
+            services: [NovaServiceInfo::empty(); NOVA_SVC_MAX_SERVICES],
+        }
+    }
 }
 
 // ===========================================================================
@@ -216,6 +309,12 @@ pub static mut MOCK_VFS_FILE_SAVED: [u8; 1024] = [0; 1024];
 pub static mut MOCK_VFS_SAVED_LEN: usize = 0;
 #[cfg(test)]
 pub static mut MOCK_VFS_USERS_DATA: [u8; 716] = [0; 716];
+#[cfg(test)]
+pub static mut MOCK_SVC_STATUS: NovaServiceStatus = NovaServiceStatus::empty();
+#[cfg(test)]
+pub static mut MOCK_SVC_LAST_ACTION: u32 = 0;
+#[cfg(test)]
+pub static mut MOCK_SVC_LAST_NAME: [u8; NOVA_SVC_MAX_NAME] = [0u8; NOVA_SVC_MAX_NAME];
 
 #[cfg(test)]
 pub unsafe fn reset_mock_environment() {
@@ -262,6 +361,55 @@ pub unsafe fn reset_mock_environment() {
     MOCK_VFS_USERS_DATA[off1 + 1..off1 + 1 + u1.len()].copy_from_slice(u1);
     MOCK_VFS_USERS_DATA[off1 + 33..off1 + 37].copy_from_slice(&800u32.to_le_bytes());
     MOCK_VFS_USERS_DATA[off1 + 37..off1 + 41].copy_from_slice(&0u32.to_le_bytes());
+
+    // Default Supervised Services Status
+    MOCK_SVC_LAST_ACTION = 0;
+    MOCK_SVC_LAST_NAME = [0u8; NOVA_SVC_MAX_NAME];
+    MOCK_SVC_STATUS = NovaServiceStatus::empty();
+    MOCK_SVC_STATUS.count = 3;
+    MOCK_SVC_STATUS.supervisor_pid = 1;
+    MOCK_SVC_STATUS.supervisor_uptime_ticks = 1200;
+    MOCK_SVC_STATUS.generation = 1;
+
+    // Service 0: network-check (RUNNING, PID 12)
+    let s0 = &mut MOCK_SVC_STATUS.services[0];
+    let n0 = b"network-check";
+    s0.name[..n0.len()].copy_from_slice(n0);
+    let p0 = b"PING.ELF";
+    s0.exec_path[..p0.len()].copy_from_slice(p0);
+    let a0 = b"10.0.2.2";
+    s0.arg[..a0.len()].copy_from_slice(a0);
+    s0.pid = 12;
+    s0.state = NOVA_SVC_STATE_RUNNING;
+    s0.restart_policy = 2; // Always
+    s0.restart_count = 0;
+    s0.trusted = 0;
+
+    // Service 1: greeting (STOPPED, clean exit)
+    let s1 = &mut MOCK_SVC_STATUS.services[1];
+    let n1 = b"greeting";
+    s1.name[..n1.len()].copy_from_slice(n1);
+    let p1 = b"HELLO.ELF";
+    s1.exec_path[..p1.len()].copy_from_slice(p1);
+    let d1 = b"network-check";
+    s1.depends_on[..d1.len()].copy_from_slice(d1);
+    s1.pid = -1;
+    s1.state = NOVA_SVC_STATE_STOPPED;
+    s1.restart_policy = 0; // Never
+    s1.restart_count = 0;
+    s1.trusted = 0;
+
+    // Service 2: shell (RUNNING, PID 15, Trusted)
+    let s2 = &mut MOCK_SVC_STATUS.services[2];
+    let n2 = b"shell";
+    s2.name[..n2.len()].copy_from_slice(n2);
+    let p2 = b"SHELL.ELF";
+    s2.exec_path[..p2.len()].copy_from_slice(p2);
+    s2.pid = 15;
+    s2.state = NOVA_SVC_STATE_RUNNING;
+    s2.restart_policy = 2; // Always
+    s2.restart_count = 0;
+    s2.trusted = 1;
 }
 
 #[cfg(test)]
@@ -482,4 +630,47 @@ pub unsafe fn sys_fw_ctl(req: *mut NovaFwReq) -> i32 {
         }
         _ => -22, // EINVAL
     }
+}
+
+#[cfg(test)]
+pub unsafe fn sys_service_query(out: *mut NovaServiceStatus) -> i32 {
+    if out.is_null() {
+        return -14;
+    }
+    *out = MOCK_SVC_STATUS;
+    0
+}
+
+#[cfg(test)]
+pub unsafe fn sys_service_control(action: u32, name: *const u8) -> i32 {
+    MOCK_SVC_LAST_ACTION = action;
+    MOCK_SVC_LAST_NAME = [0u8; NOVA_SVC_MAX_NAME];
+    if !name.is_null() {
+        let mut len = 0;
+        while *name.add(len) != 0 && len < NOVA_SVC_MAX_NAME - 1 {
+            len += 1;
+        }
+        MOCK_SVC_LAST_NAME[..len].copy_from_slice(core::slice::from_raw_parts(name, len));
+
+        for i in 0..MOCK_SVC_STATUS.count as usize {
+            let sname = &MOCK_SVC_STATUS.services[i].name;
+            let mut slen = 0;
+            while slen < NOVA_SVC_MAX_NAME && sname[slen] != 0 { slen += 1; }
+            if &sname[..slen] == &MOCK_SVC_LAST_NAME[..len] {
+                if action == NOVA_SVC_ACTION_RESTART {
+                    MOCK_SVC_STATUS.services[i].state = NOVA_SVC_STATE_RUNNING;
+                    MOCK_SVC_STATUS.services[i].pid = 99;
+                    MOCK_SVC_STATUS.services[i].restart_count += 1;
+                } else if action == NOVA_SVC_ACTION_STOP {
+                    MOCK_SVC_STATUS.services[i].state = NOVA_SVC_STATE_STOPPED;
+                    MOCK_SVC_STATUS.services[i].pid = -1;
+                } else if action == NOVA_SVC_ACTION_START {
+                    MOCK_SVC_STATUS.services[i].state = NOVA_SVC_STATE_RUNNING;
+                    MOCK_SVC_STATUS.services[i].pid = 101;
+                }
+                break;
+            }
+        }
+    }
+    0
 }

@@ -553,4 +553,31 @@ int sys_disk_install(int op, void* arg1, void* arg2) {
     return r;
 }
 
+/* Month 4: Service supervisor status and control (SYS_SERVICE_STATUS). */
+int sys_service_status(unsigned int op, void* arg1, void* arg2) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(NOVA_SYS_SERVICE_STATUS), "b"(op), "c"((unsigned int)arg1), "d"((unsigned int)arg2)
+                      : "memory");
+    return r;
+}
+
+int sys_service_query(nova_service_status_t* out) {
+    return sys_service_status(NOVA_SVC_OP_QUERY, (void*)out, (void*)0);
+}
+
+int sys_service_publish(const nova_service_status_t* status) {
+    return sys_service_status(NOVA_SVC_OP_PUBLISH, (void*)status, (void*)0);
+}
+
+int sys_service_control(unsigned int action, const char* name) {
+    return sys_service_status(NOVA_SVC_OP_CONTROL, (void*)action, (void*)name);
+}
+
+int sys_service_get_action(nova_service_action_t* out) {
+    return sys_service_status(NOVA_SVC_OP_GET_ACTION, (void*)out, (void*)0);
+}
+
+
 

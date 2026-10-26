@@ -309,6 +309,14 @@ ASSERTIONS: list[Assertion] = [
               r"settings-selftest. PASS: user role privilege toggle and last-administrator safeguard",
               "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
               "user role privilege toggle and last-administrator safeguard in settings panel"),
+    Assertion("service_manager_panel_passed",
+              r"settings-selftest. PASS: live service supervisor query and supervision controls",
+              "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
+              "graphical service manager panel querying novainit status and dispatching restart/stop controls"),
+    Assertion("service_manager_rendering_passed",
+              r"settings-selftest. PASS: Service Manager graphical presentation on BufferSurface32",
+              "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
+              "Service Manager live dashboard presentation on 32-bit framebuffer surface"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",

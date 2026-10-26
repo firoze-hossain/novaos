@@ -669,6 +669,11 @@
  * formatting, and triggers self-tests. Live formatting requires root (uid 0). */
 #define SYS_DISK_INSTALL  81
 
+/* Month 4 / Phase 91: Service supervisor query and control (see nova_svc_abi.h).
+ * SYS_SERVICE_STATUS publishes supervisor service state from PID 1 (novainit)
+ * and queries live service status and requests service control actions (restart/stop/start). */
+#define SYS_SERVICE_STATUS 82
+
 /* Month 6 / Phase 98: Full kernel security audit helper prototypes */
 struct process;
 bool process_has_capability(const struct process* p, const char* filename);
