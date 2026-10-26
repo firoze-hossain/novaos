@@ -837,7 +837,9 @@ impl Wm {
                     draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 3 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_editor_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
-                } else if (w.label == 4 || w.label == 5) && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                } else if w.label == 4 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_store_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                } else if w.label == 5 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 }
             }
@@ -879,6 +881,7 @@ impl Wm {
                     1 => "Console - NovaOS Shell",
                     2 => "Files - Root Directory",
                     3 => "Editor - Scratchpad",
+                    4 => "Software Store - Packages",
                     5 => "Settings - Control Panel",
                     _ => "System - Diagnostics",
                 };
@@ -1040,6 +1043,10 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 4, y + 4, 4, 1), palette.text_muted);
             s.fill_rect(Rect::new(x + 4, y + 6, 4, 1), palette.text_muted);
             s.fill_rect(Rect::new(x + 4, y + 8, 3, 1), palette.text_muted);
+        }
+        4 => {
+            // Store shopping bag / package icon
+            ui::dock::draw_dock_app_icon(s, x, y, ui::dock::APP_ID_STORE, palette);
         }
         5 => {
             // Settings sliders icon
@@ -1433,6 +1440,107 @@ fn draw_editor_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palett
     if y4 + line_h < sb_y {
         ui::font::draw_text_font(s, client.x + 16, y4, "4", Color::rgb(110, 118, 129), &font_small);
         ui::font::draw_text_font(s, text_x, y4, "}", Color::rgb(240, 246, 252), &font_mono);
+    }
+}
+
+/// Renders the Software Store & App Launcher client view inside Window 3 / Software Store - Packages.
+fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
+    let font_regular = Font::regular();
+    let font_small = Font::small();
+
+    // 1. Dark background
+    let bg_color = Color::rgb(13, 17, 23);
+    s.fill_rect(client, bg_color);
+
+    // 2. Tab strip
+    let tb_h = 24;
+    let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
+    s.fill_rect(tb_rect, Color::rgb(22, 27, 34));
+    s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), Color::rgb(48, 54, 61));
+
+    // Tabs: [All Packages] [Installed] [Repo Server] [Security]
+    let tabs: [(&str, i32, bool); 4] = [
+        ("All Packages", 84, true),
+        ("Installed", 68, false),
+        ("Repo Server", 76, false),
+        ("Security", 60, false),
+    ];
+    let mut bx = client.x + 8;
+    for (lbl, bw, is_active) in &tabs {
+        if bx + bw > client.right() - 8 { break; }
+        if *is_active {
+            s.fill_rect(Rect::new(bx, client.y + 2, *bw, tb_h - 4), Color::rgb(33, 38, 45));
+            s.fill_rect(Rect::new(bx, client.y + tb_h - 2, *bw, 2), palette.accent_primary);
+            ui::font::draw_text_font(s, bx + 6, client.y + 7, lbl, Color::WHITE, &font_small);
+        } else {
+            ui::font::draw_text_font(s, bx + 6, client.y + 7, lbl, palette.text_muted, &font_small);
+        }
+        bx += bw + 6;
+    }
+
+    // 3. Status Bar at bottom
+    let sb_h = 18;
+    let sb_y = client.bottom() - sb_h;
+    if sb_y > client.y + tb_h + 30 {
+        let sb_rect = Rect::new(client.x, sb_y, client.w, sb_h);
+        s.fill_rect(sb_rect, Color::rgb(22, 27, 34));
+        s.fill_rect(Rect::new(client.x, sb_y, client.w, 1), Color::rgb(48, 54, 61));
+        ui::font::draw_text_font(s, client.x + 8, sb_y + 3, "6 packages available | 2 installed", palette.accent_primary, &font_small);
+        let repo_str = "HTTP Repo: 8080 Active | HMAC-SHA256";
+        let r_sz = font_small.measure_str(repo_str);
+        ui::font::draw_text_font(s, client.right() - r_sz.w - 10, sb_y + 3, repo_str, palette.status_success, &font_small);
+    }
+
+    // 4. Package rows
+    let row_y = client.y + tb_h + 6;
+    let row_h = 36;
+    let rows: [(&str, &str, &str, bool, Color); 3] = [
+        ("Editor", "v1.0", "Tiny text editor (demo package)", true, Color::rgb(88, 166, 255)),
+        ("Game", "v2.1", "Tiny game (demo package)", false, Color::rgb(245, 180, 50)),
+        ("Calc", "v1.2", "Scientific calculator utility", false, Color::rgb(57, 211, 83)),
+    ];
+
+    for (i, (name, ver, desc, is_installed, col)) in rows.iter().enumerate() {
+        let ry = row_y + (i as i32 * (row_h + 4));
+        if ry + row_h >= sb_y { break; }
+
+        let r_rect = Rect::new(client.x + 8, ry, client.w - 16, row_h);
+        s.fill_rect(r_rect, Color::rgb(22, 27, 34));
+        s.fill_rect(Rect::new(r_rect.x, r_rect.y, 1, row_h), Color::rgb(48, 54, 61));
+        s.fill_rect(Rect::new(r_rect.right() - 1, r_rect.y, 1, row_h), Color::rgb(48, 54, 61));
+        s.fill_rect(Rect::new(r_rect.x, r_rect.y, r_rect.w, 1), Color::rgb(48, 54, 61));
+        s.fill_rect(Rect::new(r_rect.x, r_rect.bottom() - 1, r_rect.w, 1), Color::rgb(48, 54, 61));
+
+        // Color indicator pill
+        s.fill_rect(Rect::new(r_rect.x + 4, ry + 4, 3, row_h - 8), *col);
+
+        // App Name & Version
+        ui::font::draw_text_font(s, r_rect.x + 12, ry + 6, name, Color::WHITE, &font_regular);
+        ui::font::draw_text_font(s, r_rect.x + 64, ry + 8, ver, palette.text_muted, &font_small);
+
+        // Description
+        ui::font::draw_text_font(s, r_rect.x + 12, ry + 22, desc, palette.text_muted, &font_small);
+
+        // Verified Badge
+        let badge_x = r_rect.right() - 160;
+        if badge_x > r_rect.x + 120 {
+            ui::font::draw_text_font(s, badge_x, ry + 6, "[✓] Verified", palette.status_success, &font_small);
+        }
+
+        // Action Button
+        let btn_w = 46;
+        let btn_h = 18;
+        let btn_x = r_rect.right() - btn_w - 8;
+        let btn_y = ry + (row_h - btn_h) / 2;
+        let b_rect = Rect::new(btn_x, btn_y, btn_w, btn_h);
+
+        if *is_installed {
+            s.fill_rect(b_rect, palette.status_success);
+            ui::font::draw_text_font(s, btn_x + 6, btn_y + 3, "Launch", Color::WHITE, &font_small);
+        } else {
+            s.fill_rect(b_rect, palette.accent_primary);
+            ui::font::draw_text_font(s, btn_x + 6, btn_y + 3, "Install", Color::WHITE, &font_small);
+        }
     }
 }
 

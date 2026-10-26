@@ -307,6 +307,11 @@ ASSERTIONS: list[Assertion] = [
               r"font rendering, and file IO roundtrip all behaved correctly",
               "Month 3 Core desktop apps: userland/edit-rs/editor.rs - "
               "graphical text editor with multi-line buffer, font scaling, toolbar, and VFS file operations"),
+    Assertion("store_selftest_passed",
+              r"sandbox. PASS: STORE\.ELF --selftest - package manifest parsing, "
+              r"HMAC-SHA256 signature verification, install database state, and UI presentation all behaved correctly",
+              "Month 3 Core desktop apps: userland/store-rs/store.rs - "
+              "graphical software store and app launcher front-end for signed packages with HTTP repository telemetry"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

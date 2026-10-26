@@ -441,6 +441,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: EDIT.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 3 - Core desktop apps: STORE.ELF --selftest.
+     * Proves package manifest parsing, HMAC-SHA256 signature verification,
+     * install database record management (install/remove), repository catalog search,
+     * in-kernel package repository HTTP telemetry (SYS_PKGREPO_CTL), and graphical store presentation. */
+    static const char* const store_all[] = {"STORE.ELF", "--selftest"};
+    int pid_store = sys_exec_trusted("STORE.ELF", (char**)store_all, 2);
+    int code_store = (pid_store >= 0) ? sys_wait(pid_store) : -1;
+    sys_write(pid_store >= 0 && code_store == 0
+                  ? "[sandbox] PASS: STORE.ELF --selftest - package manifest parsing, "
+                    "HMAC-SHA256 signature verification, install database state, and UI presentation all behaved correctly.\n"
+                  : "[sandbox] FAIL: STORE.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

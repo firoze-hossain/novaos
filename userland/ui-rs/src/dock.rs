@@ -6,7 +6,7 @@
 //! glowing running indicator pips, and launch-on-click dispatch.
 
 use crate::color::{Color, ThemePalette, WHITE};
-use crate::draw::{draw_rect_outline, draw_rounded_rect, Surface};
+use crate::draw::{draw_line, draw_rect_outline, draw_rounded_rect, Surface};
 use crate::font::{draw_text_font, Font};
 use crate::geom::Rect;
 use crate::spacing::*;
@@ -17,6 +17,7 @@ pub const APP_ID_FILES: u8    = 2;
 pub const APP_ID_EDITOR: u8   = 3;
 pub const APP_ID_SYSTEM: u8   = 4;
 pub const APP_ID_SETTINGS: u8 = 5;
+pub const APP_ID_STORE: u8    = 6;
 
 pub const MAX_PINNED_APPS: usize = 8;
 
@@ -57,6 +58,7 @@ pub fn app_for_id(id: u8) -> Option<DockApp> {
         APP_ID_EDITOR   => Some(DEFAULT_PINNED_APPS[2]),
         APP_ID_SYSTEM   => Some(DEFAULT_PINNED_APPS[3]),
         APP_ID_SETTINGS => Some(DEFAULT_PINNED_APPS[4]),
+        APP_ID_STORE    => Some(DockApp::new(APP_ID_STORE, "Store", "STORE.ELF", true)),
         _ => None,
     }
 }
@@ -166,6 +168,15 @@ pub fn draw_dock_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, app_id
             // Track 2
             s.fill_rect(Rect::new(x + 3, y + 9, 8, 1), set_col);
             s.fill_rect(Rect::new(x + 8, y + 8, 3, 3), palette.status_success);
+        }
+        APP_ID_STORE => {
+            // Shopping bag / package icon
+            let bag_col = Color::rgb(137, 87, 229);
+            draw_rounded_rect(s, Rect::new(x + 1, y + 4, 12, 9), 1, bag_col);
+            draw_line(s, x + 4, y + 4, x + 4, y + 2, WHITE);
+            draw_line(s, x + 4, y + 2, x + 10, y + 2, WHITE);
+            draw_line(s, x + 10, y + 2, x + 10, y + 4, WHITE);
+            s.fill_rect(Rect::new(x + 6, y + 5, 2, 8), WHITE);
         }
         _ => {
             // System Gear icon
