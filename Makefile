@@ -460,12 +460,10 @@ mac-test:
 fw-test:
 	@sh tools/tests/run_fw_tests.sh
 
-# Phase 89: structured, queryable kernel logging subsystem. `klog-test` runs
-# the Rust engine (kernel/rust/klog.rs) on the host: ring-buffer storage,
-# wrap-around and gap detection, monotonic sequence numbers, incremental
-# streaming, severity filtering, facility filtering, and concurrency safety.
-# No QEMU; a few seconds. The in-OS conformance test is KLOGTEST.ELF, part of
-# `make test`.
+# Phase 89 & Month 4: structured kernel logging subsystem & graphical log viewer.
+# `klog-test` runs the host suite for both kernel/rust/klog.rs and userland/klog-rs/klog.rs:
+# ring-buffer storage, wrap-around and gap detection, monotonic sequence numbers,
+# incremental streaming, severity/facility filtering, keyword search, and BufferSurface32 rendering.
 klog-test:
 	@sh tools/tests/run_klog_tests.sh
 

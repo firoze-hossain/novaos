@@ -329,6 +329,27 @@ ASSERTIONS: list[Assertion] = [
               r"SYS_LOGIN authentication, identity transition, and login UI presentation all behaved correctly",
               "Month 3 Core desktop apps: userland/login-rs/login.rs - "
               "graphical login screen and display manager with multi-account switcher, bullet masking, and hero clock"),
+    Assertion("klog_selftest_passed",
+              r"sandbox. PASS: KLOG\.ELF --selftest - structured log query, "
+              r"telemetry, filtering, search, and inspector UI all behaved correctly",
+              "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
+              "graphical structured kernel log viewer with telemetry, severity & facility filtering, search, and inspector"),
+    Assertion("klog_telemetry_passed",
+              r"klog-selftest. PASS: SYS_KLOG_INFO ring buffer telemetry query",
+              "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
+              "SYS_KLOG_INFO ring buffer telemetry query and capacity check"),
+    Assertion("klog_roundtrip_passed",
+              r"klog-selftest. PASS: SYS_KLOG_WRITE and SYS_KLOG_READ roundtrip",
+              "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
+              "SYS_KLOG_WRITE and SYS_KLOG_READ structured record roundtrip"),
+    Assertion("klog_filtering_passed",
+              r"klog-selftest. PASS: severity threshold filtering",
+              "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
+              "severity threshold filtering suppressing lower priority entries"),
+    Assertion("klog_search_passed",
+              r"klog-selftest. PASS: real-time keyword search and substring highlighting engine",
+              "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
+              "real-time keyword search and substring highlighting engine"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

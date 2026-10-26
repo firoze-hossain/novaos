@@ -469,6 +469,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: LOGIN.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 4 - Server & admin UI: KLOG.ELF --selftest.
+     * Proves structured kernel logging query, telemetry, severity and facility
+     * filtering, incremental streaming, real-time keyword search, and
+     * zero-syscall BufferSurface32 rasterization from ring 3. */
+    static const char* const klog_app_all[] = {"KLOG.ELF", "--selftest"};
+    int pid_klog_app = sys_exec_trusted("KLOG.ELF", (const char**)klog_app_all, 2);
+    int code_klog_app = (pid_klog_app >= 0) ? sys_wait(pid_klog_app) : -1;
+    sys_write(pid_klog_app >= 0 && code_klog_app == 0
+                  ? "[sandbox] PASS: KLOG.ELF --selftest - structured log query, "
+                    "telemetry, filtering, search, and inspector UI all behaved correctly.\n"
+                  : "[sandbox] FAIL: KLOG.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel
