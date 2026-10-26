@@ -454,6 +454,20 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: STORE.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 3 - Core desktop apps: LOGIN.ELF --selftest.
+     * Proves USERS.CFG/SYSTEM.CFG parsing, SYS_LOGIN credentials authentication,
+     * identity isolation & privilege transition (persisted uid 700, admin uid 800),
+     * password buffer handling and masking, hero digital clock, session selector,
+     * and graphical login presentation on BufferSurface32. */
+    static const char* const login_all[] = {"LOGIN.ELF", "--selftest"};
+    int pid_login = sys_exec_trusted("LOGIN.ELF", (char**)login_all, 2);
+    int code_login = (pid_login >= 0) ? sys_wait(pid_login) : -1;
+    sys_write(pid_login >= 0 && code_login == 0
+                  ? "[sandbox] PASS: LOGIN.ELF --selftest - user account parsing, "
+                    "SYS_LOGIN authentication, identity transition, and login UI presentation all behaved correctly.\n"
+                  : "[sandbox] FAIL: LOGIN.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

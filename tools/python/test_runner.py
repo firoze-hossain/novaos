@@ -312,6 +312,11 @@ ASSERTIONS: list[Assertion] = [
               r"HMAC-SHA256 signature verification, install database state, and UI presentation all behaved correctly",
               "Month 3 Core desktop apps: userland/store-rs/store.rs - "
               "graphical software store and app launcher front-end for signed packages with HTTP repository telemetry"),
+    Assertion("login_selftest_passed",
+              r"sandbox. PASS: LOGIN\.ELF --selftest - user account parsing, "
+              r"SYS_LOGIN authentication, identity transition, and login UI presentation all behaved correctly",
+              "Month 3 Core desktop apps: userland/login-rs/login.rs - "
+              "graphical login screen and display manager with multi-account switcher, bullet masking, and hero clock"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

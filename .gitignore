@@ -48,6 +48,8 @@ tools/rust-sysroot/nightly-build-std-project/
 serial.log
 qemu.log
 test-results/
+__pycache__/
+*.pyc
 
 # ---- JetBrains / IntelliJ / CLion (do not commit) ----
 .idea/
