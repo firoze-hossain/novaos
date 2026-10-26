@@ -214,6 +214,8 @@ pub static mut MOCK_FW_RULES: [[u32; 18]; 32] = [[0; 18]; 32];
 pub static mut MOCK_VFS_FILE_SAVED: [u8; 1024] = [0; 1024];
 #[cfg(test)]
 pub static mut MOCK_VFS_SAVED_LEN: usize = 0;
+#[cfg(test)]
+pub static mut MOCK_VFS_USERS_DATA: [u8; 716] = [0; 716];
 
 #[cfg(test)]
 pub unsafe fn reset_mock_environment() {
@@ -224,6 +226,7 @@ pub unsafe fn reset_mock_environment() {
     MOCK_FW_RULES_COUNT = 2;
     MOCK_FW_RULES = [[0; 18]; 32];
     MOCK_VFS_SAVED_LEN = 0;
+    MOCK_VFS_USERS_DATA = [0; 716];
 
     // Default Rule 0: rule accept in state established,related
     MOCK_FW_RULES[0][NOVA_FW_RL_DIR] = NOVA_FW_DIR_IN;
@@ -242,6 +245,23 @@ pub unsafe fn reset_mock_environment() {
     MOCK_FW_RULES[1][NOVA_FW_RL_MISC] = NOVA_FW_ST_NEW | (1 << 8) | (8 << 16); // icmp_set=1, type=8
     MOCK_FW_RULES[1][NOVA_FW_RL_HITS] = 14;
     MOCK_FW_RULES[1][NOVA_FW_RL_BYTES] = 1176;
+
+    // Default USERS.CFG: magic "NVUS", User 0: persisted (700, 700), User 1: admin (800, 0)
+    MOCK_VFS_USERS_DATA[0..4].copy_from_slice(b"NVUS");
+    // persisted
+    let off0 = 4;
+    MOCK_VFS_USERS_DATA[off0] = 9; // in_use
+    let u0 = b"persisted\0";
+    MOCK_VFS_USERS_DATA[off0 + 1..off0 + 1 + u0.len()].copy_from_slice(u0);
+    MOCK_VFS_USERS_DATA[off0 + 33..off0 + 37].copy_from_slice(&700u32.to_le_bytes());
+    MOCK_VFS_USERS_DATA[off0 + 37..off0 + 41].copy_from_slice(&700u32.to_le_bytes());
+    // admin
+    let off1 = 4 + 89;
+    MOCK_VFS_USERS_DATA[off1] = 5; // in_use
+    let u1 = b"admin\0";
+    MOCK_VFS_USERS_DATA[off1 + 1..off1 + 1 + u1.len()].copy_from_slice(u1);
+    MOCK_VFS_USERS_DATA[off1 + 33..off1 + 37].copy_from_slice(&800u32.to_le_bytes());
+    MOCK_VFS_USERS_DATA[off1 + 37..off1 + 41].copy_from_slice(&0u32.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -259,6 +279,9 @@ pub unsafe fn sys_open(filename: *const u8) -> i32 {
         len += 1;
     }
     let name = core::slice::from_raw_parts(filename, len);
+    if name == b"USERS.CFG" {
+        return 2;
+    }
     if name == b"FIREWALL.CFG" {
         return 4;
     }
@@ -267,6 +290,13 @@ pub unsafe fn sys_open(filename: *const u8) -> i32 {
 
 #[cfg(test)]
 pub unsafe fn sys_read(handle: i32, buf: *mut u8, max_len: i32) -> i32 {
+    if handle == 2 {
+        let len = 716.min(max_len as usize);
+        if !buf.is_null() && len > 0 {
+            buf.copy_from_nonoverlapping(MOCK_VFS_USERS_DATA.as_ptr(), len);
+        }
+        return len as i32;
+    }
     if handle == 4 {
         let fw_data = b"# FIREWALL.CFG\npolicy in drop\npolicy out accept\nrule accept in state established,related\nrule accept in proto icmp icmp-type 8 from 10.0.2.0/24 state new\n";
         let len = fw_data.len().min(max_len as usize);
@@ -296,11 +326,20 @@ pub unsafe fn sys_list_files(buf: *mut u8, buf_size: i32) -> i32 {
 }
 
 #[cfg(test)]
-pub unsafe fn sys_write_file(_filename: *const u8, data: *const u8, size: u32) -> i32 {
+pub unsafe fn sys_write_file(filename: *const u8, data: *const u8, size: u32) -> i32 {
     let s = (size as usize).min(1024);
     if !data.is_null() && s > 0 {
         MOCK_VFS_FILE_SAVED[..s].copy_from_slice(core::slice::from_raw_parts(data, s));
         MOCK_VFS_SAVED_LEN = s;
+
+        let mut nlen = 0;
+        while *filename.add(nlen) != 0 && nlen < 64 {
+            nlen += 1;
+        }
+        let name = core::slice::from_raw_parts(filename, nlen);
+        if name == b"USERS.CFG" && s >= 716 {
+            MOCK_VFS_USERS_DATA.copy_from_slice(&core::slice::from_raw_parts(data, 716)[..716]);
+        }
     }
     0
 }

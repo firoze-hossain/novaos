@@ -25,6 +25,7 @@
 extern crate ui;
 use ui::prelude::*;
 
+mod crypto;
 mod ffi;
 
 #[cfg(not(test))]
@@ -61,6 +62,14 @@ pub fn copy_bytes(dst: &mut [u8], src: &[u8]) -> usize {
     let len = dst.len().min(src.len());
     dst[..len].copy_from_slice(&src[..len]);
     len
+}
+
+pub fn to_hex_digit(b: u8) -> u8 {
+    if b < 10 {
+        b'0' + b
+    } else {
+        b'a' + (b - 10)
+    }
 }
 
 pub fn format_u32(mut val: u32, out: &mut [u8]) -> usize {
@@ -136,6 +145,15 @@ pub struct SystemConfig {
 }
 
 impl SystemConfig {
+    pub const fn empty() -> Self {
+        SystemConfig {
+            magic: *b"NVCF",
+            hostname: [0; 32],
+            username: [0; 32],
+            init_path: [0; 13],
+        }
+    }
+
     pub fn new() -> Self {
         let mut cfg = SystemConfig {
             magic: *b"NVCF",
@@ -149,23 +167,24 @@ impl SystemConfig {
         cfg
     }
 
+    pub fn parse_into(&mut self, bytes: &[u8]) -> bool {
+        if bytes.len() < 81 || &bytes[0..4] != b"NVCF" {
+            return false;
+        }
+        self.magic = *b"NVCF";
+        self.hostname.copy_from_slice(&bytes[4..36]);
+        self.username.copy_from_slice(&bytes[36..68]);
+        self.init_path.copy_from_slice(&bytes[68..81]);
+        true
+    }
+
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 81 {
-            return None;
+        let mut cfg = SystemConfig::empty();
+        if cfg.parse_into(bytes) {
+            Some(cfg)
+        } else {
+            None
         }
-        if &bytes[0..4] != b"NVCF" {
-            return None;
-        }
-        let mut cfg = SystemConfig {
-            magic: *b"NVCF",
-            hostname: [0; 32],
-            username: [0; 32],
-            init_path: [0; 13],
-        };
-        cfg.hostname.copy_from_slice(&bytes[4..36]);
-        cfg.username.copy_from_slice(&bytes[36..68]);
-        cfg.init_path.copy_from_slice(&bytes[68..81]);
-        Some(cfg)
     }
 
     pub fn to_bytes(&self, out: &mut [u8]) -> usize {
@@ -241,7 +260,7 @@ pub struct UserRecord {
 }
 
 impl UserRecord {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         UserRecord {
             in_use: 0,
             username: [0; 32],
@@ -266,6 +285,42 @@ impl UserRecord {
         let len = bytes.len().min(31);
         self.username[..len].copy_from_slice(&bytes[..len]);
     }
+
+    pub fn is_admin(&self) -> bool {
+        self.in_use != 0 && self.gid == 0
+    }
+
+    pub fn role_str(&self) -> &'static str {
+        if self.is_admin() {
+            "Administrator"
+        } else {
+            "Standard User"
+        }
+    }
+
+    pub fn set_admin(&mut self, admin: bool) {
+        if admin {
+            self.gid = 0;
+        } else {
+            self.gid = if self.uid != 0 { self.uid } else { 1000 };
+        }
+    }
+
+    pub fn set_password(&mut self, password: &[u8], seed: u32) {
+        let name_bytes = self.username_str().as_bytes();
+        let salt = crypto::derive_salt(seed, name_bytes);
+        let hash = crypto::pbkdf2_hmac_sha256(password, &salt, crypto::PBKDF2_ITERATIONS);
+        self.salt = salt;
+        self.password_hash = hash;
+    }
+
+    pub fn verify_password(&self, password: &[u8]) -> bool {
+        if self.in_use == 0 {
+            return false;
+        }
+        let computed = crypto::pbkdf2_hmac_sha256(password, &self.salt, crypto::PBKDF2_ITERATIONS);
+        crypto::constant_time_eq(&computed, &self.password_hash)
+    }
 }
 
 /// Matches `tools/fixtures/USERS.CFG` (716 bytes).
@@ -277,40 +332,161 @@ pub struct UsersConfig {
 }
 
 impl UsersConfig {
+    pub const fn empty() -> Self {
+        UsersConfig {
+            magic: *b"NVUS",
+            count: 0,
+            accounts: [UserRecord::empty(); MAX_USERS],
+        }
+    }
+
     pub fn new() -> Self {
         let mut cfg = UsersConfig {
             magic: *b"NVUS",
             count: 0,
             accounts: [UserRecord::empty(); MAX_USERS],
         };
-        cfg.add_user("root", 0, 0);
-        cfg.add_user("firoze", 1000, 1000);
+        // Shipped baseline accounts matching tools/fixtures/USERS.CFG:
+        // 1. persisted: uid 700, gid 700, password "persisted-pw"
+        let _ = cfg.add_user_with_credentials("persisted", 700, false, b"persisted-pw", 0x1234_5678);
+        // 2. admin: uid 800, gid 0, password "admin-correct-password"
+        let _ = cfg.add_user_with_credentials("admin", 800, true, b"admin-correct-password", 0x8765_4321);
         cfg
     }
 
+    pub fn find_user(&self, name: &str) -> Option<usize> {
+        for i in 0..self.count {
+            if self.accounts[i].in_use != 0 && self.accounts[i].username_str() == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn admin_count(&self) -> usize {
+        let mut count = 0;
+        for i in 0..self.count {
+            if self.accounts[i].is_admin() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn next_available_uid(&self) -> u32 {
+        let mut max_uid = 999u32;
+        for i in 0..self.count {
+            if self.accounts[i].in_use != 0 && self.accounts[i].uid >= max_uid {
+                max_uid = self.accounts[i].uid;
+            }
+        }
+        max_uid + 1
+    }
+
     pub fn add_user(&mut self, name: &str, uid: u32, gid: u32) -> bool {
-        if self.count >= MAX_USERS {
+        if self.count >= MAX_USERS || name.is_empty() || name.len() > 31 {
             return false;
         }
+        if self.find_user(name).is_some() {
+            return false;
+        }
+        let is_admin = gid == 0;
+        let seed = uid.wrapping_mul(0x9E37_79B9) ^ 0x55AA_55AA;
+        let default_pw = b"novaos";
+        self.add_user_with_credentials(name, uid, is_admin, default_pw, seed).is_ok()
+    }
+
+    pub fn add_user_with_credentials(
+        &mut self,
+        name: &str,
+        uid: u32,
+        is_admin: bool,
+        password: &[u8],
+        seed: u32,
+    ) -> Result<usize, &'static str> {
+        if name.is_empty() {
+            return Err("Username cannot be empty");
+        }
+        if name.len() > 31 {
+            return Err("Username exceeds 31 characters");
+        }
+        if self.find_user(name).is_some() {
+            return Err("Username already exists");
+        }
+        if password.is_empty() {
+            return Err("Password cannot be empty");
+        }
+        if self.count >= MAX_USERS {
+            return Err("User table is full (max 8 accounts)");
+        }
+
+        let idx = self.count;
         let mut rec = UserRecord::empty();
         rec.in_use = 1;
         rec.set_username(name);
         rec.uid = uid;
-        rec.gid = gid;
-        self.accounts[self.count] = rec;
+        rec.set_admin(is_admin);
+        rec.set_password(password, seed);
+
+        self.accounts[idx] = rec;
         self.count += 1;
-        true
+        Ok(idx)
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < USERS_TOTAL_SIZE || &bytes[0..4] != b"NVUS" {
-            return None;
+    pub fn delete_account(&mut self, idx: usize) -> Result<(), &'static str> {
+        if idx >= self.count || self.accounts[idx].in_use == 0 {
+            return Err("Invalid user index");
         }
-        let mut cfg = UsersConfig {
-            magic: *b"NVUS",
-            count: 0,
-            accounts: [UserRecord::empty(); MAX_USERS],
-        };
+        if self.count <= 1 {
+            return Err("Cannot delete the only remaining account");
+        }
+        if self.accounts[idx].is_admin() && self.admin_count() <= 1 {
+            return Err("Cannot delete the last Administrator account");
+        }
+
+        for i in idx..self.count - 1 {
+            self.accounts[i] = self.accounts[i + 1];
+        }
+        self.accounts[self.count - 1] = UserRecord::empty();
+        self.count -= 1;
+        Ok(())
+    }
+
+    pub fn toggle_admin(&mut self, idx: usize) -> Result<bool, &'static str> {
+        if idx >= self.count || self.accounts[idx].in_use == 0 {
+            return Err("Invalid user index");
+        }
+        let currently_admin = self.accounts[idx].is_admin();
+        if currently_admin {
+            if self.admin_count() <= 1 {
+                return Err("Cannot revoke Administrator rights from the last Administrator");
+            }
+            self.accounts[idx].set_admin(false);
+            Ok(false)
+        } else {
+            self.accounts[idx].set_admin(true);
+            Ok(true)
+        }
+    }
+
+    pub fn set_user_password(&mut self, idx: usize, password: &[u8], seed: u32) -> Result<(), &'static str> {
+        if idx >= self.count || self.accounts[idx].in_use == 0 {
+            return Err("Invalid user index");
+        }
+        if password.is_empty() {
+            return Err("Password cannot be empty");
+        }
+        self.accounts[idx].set_password(password, seed);
+        Ok(())
+    }
+
+    pub fn parse_into(&mut self, bytes: &[u8]) -> bool {
+        if bytes.len() < USERS_TOTAL_SIZE || &bytes[0..4] != b"NVUS" {
+            return false;
+        }
+        self.magic = *b"NVUS";
+        self.count = 0;
+        self.accounts = [UserRecord::empty(); MAX_USERS];
         let mut cur = 4;
         for _i in 0..MAX_USERS {
             let mut rec = UserRecord::empty();
@@ -321,12 +497,21 @@ impl UsersConfig {
             rec.salt.copy_from_slice(&bytes[cur + 41..cur + 57]);
             rec.password_hash.copy_from_slice(&bytes[cur + 57..cur + 89]);
             if rec.in_use != 0 {
-                cfg.accounts[cfg.count] = rec;
-                cfg.count += 1;
+                self.accounts[self.count] = rec;
+                self.count += 1;
             }
             cur += USER_RECORD_SIZE;
         }
-        Some(cfg)
+        true
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut cfg = UsersConfig::empty();
+        if cfg.parse_into(bytes) {
+            Some(cfg)
+        } else {
+            None
+        }
     }
 
     pub fn to_bytes(&self, out: &mut [u8]) -> usize {
@@ -346,6 +531,129 @@ impl UsersConfig {
             cur += USER_RECORD_SIZE;
         }
         USERS_TOTAL_SIZE
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsersViewMode {
+    List,
+    CreateAccount,
+    ChangePassword,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsersUiState {
+    pub view_mode: UsersViewMode,
+    pub selected_idx: usize,
+    // Add user form fields
+    pub form_username: [u8; 32],
+    pub form_username_len: usize,
+    pub form_password: [u8; 32],
+    pub form_password_len: usize,
+    pub form_confirm: [u8; 32],
+    pub form_confirm_len: usize,
+    pub form_is_admin: bool,
+    pub form_uid: u32,
+    pub form_active_field: usize,
+    // Status feedback
+    pub status_msg: [u8; 64],
+    pub status_msg_len: usize,
+    pub status_is_error: bool,
+}
+
+impl UsersUiState {
+    pub const fn new() -> Self {
+        UsersUiState {
+            view_mode: UsersViewMode::List,
+            selected_idx: 0,
+            form_username: [0; 32],
+            form_username_len: 0,
+            form_password: [0; 32],
+            form_password_len: 0,
+            form_confirm: [0; 32],
+            form_confirm_len: 0,
+            form_is_admin: false,
+            form_uid: 1000,
+            form_active_field: 0,
+            status_msg: [0; 64],
+            status_msg_len: 0,
+            status_is_error: false,
+        }
+    }
+
+    pub fn set_status(&mut self, msg: &str, is_err: bool) {
+        self.status_msg.fill(0);
+        let bytes = msg.as_bytes();
+        let len = bytes.len().min(63);
+        self.status_msg[..len].copy_from_slice(&bytes[..len]);
+        self.status_msg_len = len;
+        self.status_is_error = is_err;
+    }
+
+    pub fn status_str(&self) -> &str {
+        if self.status_msg_len == 0 {
+            return "";
+        }
+        core::str::from_utf8(&self.status_msg[..self.status_msg_len]).unwrap_or("")
+    }
+
+    pub fn open_create_form(&mut self, next_uid: u32) {
+        self.view_mode = UsersViewMode::CreateAccount;
+        self.form_username.fill(0);
+        self.form_username_len = 0;
+        self.form_password.fill(0);
+        self.form_password_len = 0;
+        self.form_confirm.fill(0);
+        self.form_confirm_len = 0;
+        self.form_is_admin = false;
+        self.form_uid = next_uid;
+        self.form_active_field = 0;
+        self.set_status("Enter account details or click a preset", false);
+    }
+
+    pub fn open_change_password(&mut self) {
+        self.view_mode = UsersViewMode::ChangePassword;
+        self.form_password.fill(0);
+        self.form_password_len = 0;
+        self.form_confirm.fill(0);
+        self.form_confirm_len = 0;
+        self.form_active_field = 0;
+        self.set_status("Enter new password for selected account", false);
+    }
+
+    pub fn set_form_preset(&mut self, name: &str, is_admin: bool, password: &str) {
+        self.form_username.fill(0);
+        let n_bytes = name.as_bytes();
+        let n_len = n_bytes.len().min(31);
+        self.form_username[..n_len].copy_from_slice(&n_bytes[..n_len]);
+        self.form_username_len = n_len;
+
+        self.form_is_admin = is_admin;
+
+        self.form_password.fill(0);
+        let p_bytes = password.as_bytes();
+        let p_len = p_bytes.len().min(31);
+        self.form_password[..p_len].copy_from_slice(&p_bytes[..p_len]);
+        self.form_password_len = p_len;
+
+        self.form_confirm.fill(0);
+        self.form_confirm[..p_len].copy_from_slice(&p_bytes[..p_len]);
+        self.form_confirm_len = p_len;
+        self.set_status("Preset applied - click Create Account to commit", false);
+    }
+
+    pub fn form_username_str(&self) -> &str {
+        if self.form_username_len == 0 {
+            return "";
+        }
+        core::str::from_utf8(&self.form_username[..self.form_username_len]).unwrap_or("")
+    }
+
+    pub fn form_password_str(&self) -> &str {
+        if self.form_password_len == 0 {
+            return "";
+        }
+        core::str::from_utf8(&self.form_password[..self.form_password_len]).unwrap_or("")
     }
 }
 
@@ -388,7 +696,7 @@ pub struct ServiceRecord {
 }
 
 impl ServiceRecord {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         ServiceRecord {
             name: [0; 32],
             exec_path: [0; 32],
@@ -431,6 +739,13 @@ pub struct ServicesConfig {
 }
 
 impl ServicesConfig {
+    pub const fn empty() -> Self {
+        ServicesConfig {
+            count: 0,
+            services: [ServiceRecord::empty(); MAX_SERVICES],
+        }
+    }
+
     pub fn new() -> Self {
         let mut cfg = ServicesConfig {
             count: 0,
@@ -474,12 +789,10 @@ impl ServicesConfig {
         true
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let text = core::str::from_utf8(bytes).ok()?;
-        let mut cfg = ServicesConfig {
-            count: 0,
-            services: [ServiceRecord::empty(); MAX_SERVICES],
-        };
+    pub fn parse_into(&mut self, bytes: &[u8]) -> bool {
+        let Ok(text) = core::str::from_utf8(bytes) else { return false; };
+        self.count = 0;
+        self.services = [ServiceRecord::empty(); MAX_SERVICES];
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with("name|") {
@@ -495,7 +808,7 @@ impl ServicesConfig {
             }
             if p_idx >= 5 {
                 let trusted = p_idx > 5 && (parts[5] == "yes" || parts[5] == "true");
-                cfg.add_service(
+                self.add_service(
                     parts[0],
                     parts[1],
                     parts[2],
@@ -505,7 +818,16 @@ impl ServicesConfig {
                 );
             }
         }
-        Some(cfg)
+        true
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut cfg = ServicesConfig::empty();
+        if cfg.parse_into(bytes) {
+            Some(cfg)
+        } else {
+            None
+        }
     }
 
     pub fn to_bytes(&self, out: &mut [u8]) -> usize {
@@ -604,6 +926,30 @@ impl Default for FirewallRule {
 }
 
 impl FirewallRule {
+    pub const fn empty() -> Self {
+        FirewallRule {
+            dir: 0,
+            proto: 0,
+            accept: true,
+            log: false,
+            src_ip: 0,
+            src_mask: 0,
+            dst_ip: 0,
+            dst_mask: 0,
+            sp_set: false,
+            sp_lo: 0,
+            sp_hi: 0,
+            dp_set: false,
+            dp_lo: 0,
+            dp_hi: 0,
+            states: 0,
+            icmp_set: false,
+            icmp_type: 0,
+            hits: 0,
+            bytes: 0,
+        }
+    }
+
     pub fn from_raw(raw: &[u32; 18]) -> Self {
         let misc = raw[ffi::NOVA_FW_RL_MISC];
         FirewallRule {
@@ -748,6 +1094,26 @@ pub struct FirewallConfig {
 }
 
 impl FirewallConfig {
+    pub const fn empty() -> Self {
+        FirewallConfig {
+            enabled: false,
+            locked: false,
+            inbound_drop: true,
+            policy_out_accept: true,
+            allow_established: false,
+            allow_ping: false,
+            allow_dns: false,
+            rules: [FirewallRule::empty(); 32],
+            rule_count: 0,
+            conns_count: 0,
+            accepted_in: 0,
+            dropped_in: 0,
+            accepted_out: 0,
+            selected_rule: 0,
+            active_subtab: 0,
+        }
+    }
+
     pub fn new() -> Self {
         let mut cfg = FirewallConfig {
             enabled: true,
@@ -965,21 +1331,20 @@ impl FirewallConfig {
         cur
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let text = core::str::from_utf8(bytes).ok()?;
-        let mut cfg = FirewallConfig::new();
-        cfg.rule_count = 0;
+    pub fn parse_into(&mut self, bytes: &[u8]) -> bool {
+        let Ok(text) = core::str::from_utf8(bytes) else { return false; };
+        self.rule_count = 0;
 
-        cfg.inbound_drop = text.contains("policy in drop");
-        cfg.policy_out_accept = !text.contains("policy out drop");
-        cfg.allow_established = text.contains("established,related");
-        cfg.allow_ping = text.contains("icmp");
-        cfg.allow_dns = text.contains("53");
+        self.inbound_drop = text.contains("policy in drop");
+        self.policy_out_accept = !text.contains("policy out drop");
+        self.allow_established = text.contains("established,related");
+        self.allow_ping = text.contains("icmp");
+        self.allow_dns = text.contains("53");
 
         for line in text.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("rule ") {
-                if cfg.rule_count < 32 {
+                if self.rule_count < 32 {
                     let mut r = FirewallRule::default();
                     r.accept = !trimmed.contains(" drop");
                     r.dir = if trimmed.contains(" out") {
@@ -1020,15 +1385,24 @@ impl FirewallConfig {
                     if trimmed.contains(" log") {
                         r.log = true;
                     }
-                    cfg.rules[cfg.rule_count] = r;
-                    cfg.rule_count += 1;
+                    self.rules[self.rule_count] = r;
+                    self.rule_count += 1;
                 }
             }
         }
-        if cfg.rule_count == 0 {
-            cfg.init_defaults();
+        if self.rule_count == 0 {
+            self.init_defaults();
         }
-        Some(cfg)
+        true
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut cfg = FirewallConfig::empty();
+        if cfg.parse_into(bytes) {
+            Some(cfg)
+        } else {
+            None
+        }
     }
 }
 
@@ -1048,6 +1422,21 @@ pub struct NetworkConfig {
 }
 
 impl NetworkConfig {
+    pub const fn empty() -> Self {
+        NetworkConfig {
+            if_name: [0; 8],
+            if_name_len: 0,
+            ip_addr: [0; 4],
+            netmask: [0; 4],
+            gateway: [0; 4],
+            dns_server: [0; 4],
+            mac_addr: [0; 6],
+            link_up: false,
+            speed_mbps: 0,
+            is_dhcp: false,
+        }
+    }
+
     pub fn new() -> Self {
         let mut cfg = NetworkConfig {
             if_name: [0; 8],
@@ -1110,6 +1499,15 @@ pub struct DisplayConfig {
 }
 
 impl DisplayConfig {
+    pub const fn empty() -> Self {
+        DisplayConfig {
+            theme: Theme::Dark,
+            cursor_theme: CursorTheme::ModernDark,
+            titlebar_sheen: true,
+            window_shadows: true,
+        }
+    }
+
     pub fn new() -> Self {
         DisplayConfig {
             theme: Theme::Dark,
@@ -1183,8 +1581,21 @@ pub enum SettingsAction {
     ReloadAll,
     SystemToggleInit,
     SystemPresetHostname(usize),
+    // Users & Permissions Actions
+    UsersSelectAccount(usize),
+    UsersOpenCreateForm,
+    UsersCancelForm,
+    UsersSubmitCreate,
+    UsersToggleAdmin(usize),
+    UsersDeleteAccount(usize),
+    UsersOpenChangePassword(usize),
+    UsersSubmitChangePassword,
+    UsersFormToggleAdmin,
+    UsersFormPreset(usize),
     UsersAddDemo,
+    // Services Actions
     ServicesToggleRestart(usize),
+    // Firewall Actions
     FirewallSelectSubtab(usize), // 0 = Rules, 1 = Network, 2 = Stats
     FirewallToggleEnabled,
     FirewallToggleInbound,
@@ -1208,6 +1619,7 @@ pub struct SettingsApp {
     pub active_panel: PanelKind,
     pub system_cfg: SystemConfig,
     pub users_cfg: UsersConfig,
+    pub users_ui: UsersUiState,
     pub services_cfg: ServicesConfig,
     pub firewall_cfg: FirewallConfig,
     pub network_cfg: NetworkConfig,
@@ -1220,24 +1632,50 @@ pub struct SettingsApp {
     pub dirty: bool,
 }
 
+pub static mut GLOBAL_SETTINGS: SettingsApp = SettingsApp::uninit();
+
 impl SettingsApp {
-    pub fn new() -> Self {
-        let mut app = SettingsApp {
+    pub const fn uninit() -> Self {
+        SettingsApp {
             active_panel: PanelKind::System,
-            system_cfg: SystemConfig::new(),
-            users_cfg: UsersConfig::new(),
-            services_cfg: ServicesConfig::new(),
-            firewall_cfg: FirewallConfig::new(),
-            network_cfg: NetworkConfig::new(),
-            display_cfg: DisplayConfig::new(),
+            system_cfg: SystemConfig::empty(),
+            users_cfg: UsersConfig::empty(),
+            users_ui: UsersUiState::new(),
+            services_cfg: ServicesConfig::empty(),
+            firewall_cfg: FirewallConfig::empty(),
+            network_cfg: NetworkConfig::empty(),
+            display_cfg: DisplayConfig::empty(),
             status_text: [0; 64],
             status_len: 0,
             hovered_btn: None,
             selected_user_row: 0,
             selected_service_row: 0,
             dirty: false,
-        };
-        app.set_status("Settings shell ready");
+        }
+    }
+
+    pub fn init(&mut self) {
+        self.active_panel = PanelKind::System;
+        self.system_cfg = SystemConfig::new();
+        self.users_cfg = UsersConfig::new();
+        self.users_ui = UsersUiState::new();
+        self.services_cfg = ServicesConfig::new();
+        self.firewall_cfg = FirewallConfig::new();
+        self.network_cfg = NetworkConfig::new();
+        self.display_cfg = DisplayConfig::new();
+        self.status_text = [0; 64];
+        self.status_len = 0;
+        self.hovered_btn = None;
+        self.selected_user_row = 0;
+        self.selected_service_row = 0;
+        self.dirty = false;
+        self.set_status("Settings shell ready");
+        self.reload_all();
+    }
+
+    pub fn new() -> Self {
+        let mut app = Self::uninit();
+        app.init();
         app
     }
 
@@ -1273,8 +1711,7 @@ impl SettingsApp {
         unsafe { ffi::sys_close(fd) };
         if n >= 81 {
             let slice = unsafe { core::slice::from_raw_parts(buf_ptr, n as usize) };
-            if let Some(cfg) = SystemConfig::from_bytes(slice) {
-                self.system_cfg = cfg;
+            if self.system_cfg.parse_into(slice) {
                 self.set_status("SYSTEM.CFG loaded (81 B)");
                 return true;
             }
@@ -1310,8 +1747,7 @@ impl SettingsApp {
         unsafe { ffi::sys_close(fd) };
         if n >= USERS_TOTAL_SIZE as i32 {
             let slice = unsafe { core::slice::from_raw_parts(buf_ptr, n as usize) };
-            if let Some(cfg) = UsersConfig::from_bytes(slice) {
-                self.users_cfg = cfg;
+            if self.users_cfg.parse_into(slice) {
                 self.set_status("USERS.CFG loaded");
                 return true;
             }
@@ -1347,8 +1783,7 @@ impl SettingsApp {
         unsafe { ffi::sys_close(fd) };
         if n > 0 {
             let slice = unsafe { core::slice::from_raw_parts(buf_ptr, n as usize) };
-            if let Some(cfg) = ServicesConfig::from_bytes(slice) {
-                self.services_cfg = cfg;
+            if self.services_cfg.parse_into(slice) {
                 self.set_status("SERVICES.CFG loaded");
                 return true;
             }
@@ -1390,8 +1825,7 @@ impl SettingsApp {
         unsafe { ffi::sys_close(fd) };
         if n > 0 {
             let slice = unsafe { core::slice::from_raw_parts(buf_ptr, n as usize) };
-            if let Some(cfg) = FirewallConfig::from_bytes(slice) {
-                self.firewall_cfg = cfg;
+            if self.firewall_cfg.parse_into(slice) {
                 self.set_status("FIREWALL.CFG loaded from disk");
                 return true;
             }
@@ -1498,11 +1932,7 @@ impl SettingsApp {
                 }
             }
             PanelKind::Users => {
-                // Add demo user button
-                let btn_y = content_y + 40;
-                if point_in_rect(px, py, content_x, btn_y, 130, 26) {
-                    return Some(SettingsAction::UsersAddDemo);
-                }
+                return self.button_at_users(px, py, content_x, content_y);
             }
             PanelKind::Services => {
                 let row_h = 24;
@@ -1531,6 +1961,119 @@ impl SettingsApp {
             }
         }
 
+        None
+    }
+
+    fn button_at_users(&self, px: i32, py: i32, content_x: i32, content_y: i32) -> Option<SettingsAction> {
+        match self.users_ui.view_mode {
+            UsersViewMode::List => {
+                // 1. "+ Add User" button at top right of accounts list
+                let add_btn = Rect::new(content_x + 106, content_y + 24, 94, 22);
+                if point_in_rect(px, py, add_btn.x, add_btn.y, add_btn.w, add_btn.h) {
+                    return Some(SettingsAction::UsersOpenCreateForm);
+                }
+
+                // 2. Account rows in left column (w: 200, h: 36, spacing 40)
+                let list_start_y = content_y + 52;
+                for i in 0..self.users_cfg.count {
+                    let card_y = list_start_y + (i as i32 * 40);
+                    if point_in_rect(px, py, content_x, card_y, 200, 36) {
+                        return Some(SettingsAction::UsersSelectAccount(i));
+                    }
+                }
+
+                // 3. Right column inspector buttons (rx: content_x + 212, ry: content_y + 24)
+                let sel_idx = self.users_ui.selected_idx;
+                if sel_idx < self.users_cfg.count {
+                    let rx = content_x + 212;
+                    let ry = content_y + 24;
+
+                    // Role switcher pills
+                    // [ Standard User ]
+                    let std_pill = Rect::new(rx + 12, ry + 76, 104, 24);
+                    if point_in_rect(px, py, std_pill.x, std_pill.y, std_pill.w, std_pill.h) {
+                        if self.users_cfg.accounts[sel_idx].is_admin() {
+                            return Some(SettingsAction::UsersToggleAdmin(sel_idx));
+                        }
+                    }
+                    // [ Administrator ]
+                    let adm_pill = Rect::new(rx + 122, ry + 76, 108, 24);
+                    if point_in_rect(px, py, adm_pill.x, adm_pill.y, adm_pill.w, adm_pill.h) {
+                        if !self.users_cfg.accounts[sel_idx].is_admin() {
+                            return Some(SettingsAction::UsersToggleAdmin(sel_idx));
+                        }
+                    }
+                    // [ Change Password ]
+                    let pw_btn = Rect::new(rx + 12, ry + 186, 126, 22);
+                    if point_in_rect(px, py, pw_btn.x, pw_btn.y, pw_btn.w, pw_btn.h) {
+                        return Some(SettingsAction::UsersOpenChangePassword(sel_idx));
+                    }
+                    // [ Delete Account ]
+                    let del_btn = Rect::new(rx + 12, ry + 226, 110, 22);
+                    if point_in_rect(px, py, del_btn.x, del_btn.y, del_btn.w, del_btn.h) {
+                        return Some(SettingsAction::UsersDeleteAccount(sel_idx));
+                    }
+                }
+            }
+
+            UsersViewMode::CreateAccount => {
+                let fx = content_x + 10;
+                let fy = content_y + 24;
+
+                // Preset pills: alice (0), bob (1), operator (2)
+                for i in 0..3 {
+                    let p_btn = Rect::new(fx + 76 + (i as i32 * 96), fy + 50, 90, 20);
+                    if point_in_rect(px, py, p_btn.x, p_btn.y, p_btn.w, p_btn.h) {
+                        return Some(SettingsAction::UsersFormPreset(i));
+                    }
+                }
+
+                // Role pills: Standard (fx + 216) vs Admin (fx + 318)
+                let std_btn = Rect::new(fx + 216, fy + 94, 96, 24);
+                let adm_btn = Rect::new(fx + 318, fy + 94, 100, 24);
+                if point_in_rect(px, py, std_btn.x, std_btn.y, std_btn.w, std_btn.h) {
+                    if self.users_ui.form_is_admin {
+                        return Some(SettingsAction::UsersFormToggleAdmin);
+                    }
+                }
+                if point_in_rect(px, py, adm_btn.x, adm_btn.y, adm_btn.w, adm_btn.h) {
+                    if !self.users_ui.form_is_admin {
+                        return Some(SettingsAction::UsersFormToggleAdmin);
+                    }
+                }
+
+                // Buttons: [ Create Account ], [ Cancel ]
+                let create_rect = Rect::new(fx + 16, fy + 230, 130, 26);
+                if point_in_rect(px, py, create_rect.x, create_rect.y, create_rect.w, create_rect.h) {
+                    return Some(SettingsAction::UsersSubmitCreate);
+                }
+                let cancel_rect = Rect::new(fx + 158, fy + 230, 80, 26);
+                if point_in_rect(px, py, cancel_rect.x, cancel_rect.y, cancel_rect.w, cancel_rect.h) {
+                    return Some(SettingsAction::UsersCancelForm);
+                }
+            }
+
+            UsersViewMode::ChangePassword => {
+                let fx = content_x + 10;
+                let fy = content_y + 24;
+
+                // Preset button
+                let pw_preset = Rect::new(fx + 16, fy + 52, 120, 20);
+                if point_in_rect(px, py, pw_preset.x, pw_preset.y, pw_preset.w, pw_preset.h) {
+                    return Some(SettingsAction::UsersFormPreset(3));
+                }
+
+                // Action buttons: [ Update Password ], [ Cancel ]
+                let update_rect = Rect::new(fx + 16, fy + 180, 130, 26);
+                if point_in_rect(px, py, update_rect.x, update_rect.y, update_rect.w, update_rect.h) {
+                    return Some(SettingsAction::UsersSubmitChangePassword);
+                }
+                let cancel_rect = Rect::new(fx + 158, fy + 180, 80, 26);
+                if point_in_rect(px, py, cancel_rect.x, cancel_rect.y, cancel_rect.w, cancel_rect.h) {
+                    return Some(SettingsAction::UsersCancelForm);
+                }
+            }
+        }
         None
     }
 
@@ -1631,11 +2174,143 @@ impl SettingsApp {
                         self.set_status("Updated hostname preset");
                     }
                 }
+                SettingsAction::UsersSelectAccount(idx) => {
+                    if idx < self.users_cfg.count {
+                        self.users_ui.selected_idx = idx;
+                        self.users_ui.view_mode = UsersViewMode::List;
+                        let is_adm = self.users_cfg.accounts[idx].is_admin();
+                        self.set_status(if is_adm {
+                            "Selected Administrator account"
+                        } else {
+                            "Selected Standard User account"
+                        });
+                    }
+                }
+                SettingsAction::UsersOpenCreateForm => {
+                    let next_uid = self.users_cfg.next_available_uid();
+                    self.users_ui.open_create_form(next_uid);
+                    self.set_status("Create User Account (useradd)");
+                }
+                SettingsAction::UsersCancelForm => {
+                    self.users_ui.view_mode = UsersViewMode::List;
+                    self.set_status("User management");
+                }
+                SettingsAction::UsersFormToggleAdmin => {
+                    self.users_ui.form_is_admin = !self.users_ui.form_is_admin;
+                    self.users_ui.set_status(
+                        if self.users_ui.form_is_admin {
+                            "Role: Administrator (gid 0)"
+                        } else {
+                            "Role: Standard User"
+                        },
+                        false,
+                    );
+                }
+                SettingsAction::UsersFormPreset(idx) => {
+                    match idx {
+                        0 => self.users_ui.set_form_preset("alice", false, "alicepass"),
+                        1 => self.users_ui.set_form_preset("bob", true, "bobpass123"),
+                        2 => self.users_ui.set_form_preset("operator", false, "oppassword"),
+                        _ => self.users_ui.set_form_preset("guest", false, "novapass456"),
+                    }
+                }
+                SettingsAction::UsersSubmitCreate => {
+                    let name_str = core::str::from_utf8(&self.users_ui.form_username[..self.users_ui.form_username_len]).unwrap_or("");
+                    let pw = &self.users_ui.form_password[..self.users_ui.form_password_len];
+                    let confirm = &self.users_ui.form_confirm[..self.users_ui.form_confirm_len];
+
+                    if name_str.is_empty() {
+                        self.users_ui.set_status("Error: Username cannot be empty", true);
+                    } else if pw.is_empty() {
+                        self.users_ui.set_status("Error: Password cannot be empty", true);
+                    } else if pw != confirm {
+                        self.users_ui.set_status("Error: Passwords do not match", true);
+                    } else {
+                        let seed = self.users_ui.form_uid.wrapping_mul(0x9E37_79B9) ^ 0xA5A5_5A5A;
+                        let is_admin = self.users_ui.form_is_admin;
+                        let uid = self.users_ui.form_uid;
+                        match self.users_cfg.add_user_with_credentials(name_str, uid, is_admin, pw, seed) {
+                            Ok(new_idx) => {
+                                self.users_ui.selected_idx = new_idx;
+                                self.users_ui.view_mode = UsersViewMode::List;
+                                self.dirty = true;
+                                self.save_users_cfg();
+                                self.set_status("User account created and saved to USERS.CFG");
+                            }
+                            Err(err_msg) => {
+                                self.users_ui.set_status(err_msg, true);
+                            }
+                        }
+                    }
+                }
+                SettingsAction::UsersToggleAdmin(idx) => {
+                    match self.users_cfg.toggle_admin(idx) {
+                        Ok(is_admin) => {
+                            self.dirty = true;
+                            self.save_users_cfg();
+                            if is_admin {
+                                self.set_status("Granted Administrator privileges (gid 0)");
+                            } else {
+                                self.set_status("Revoked Administrator privileges (Standard User)");
+                            }
+                        }
+                        Err(err_msg) => {
+                            self.set_status(err_msg);
+                        }
+                    }
+                }
+                SettingsAction::UsersDeleteAccount(idx) => {
+                    match self.users_cfg.delete_account(idx) {
+                        Ok(()) => {
+                            if self.users_ui.selected_idx >= self.users_cfg.count && self.users_cfg.count > 0 {
+                                self.users_ui.selected_idx = self.users_cfg.count - 1;
+                            }
+                            self.dirty = true;
+                            self.save_users_cfg();
+                            self.set_status("Account deleted from USERS.CFG");
+                        }
+                        Err(err_msg) => {
+                            self.set_status(err_msg);
+                        }
+                    }
+                }
+                SettingsAction::UsersOpenChangePassword(idx) => {
+                    if idx < self.users_cfg.count {
+                        self.users_ui.selected_idx = idx;
+                        self.users_ui.open_change_password();
+                        self.set_status("Change Account Password");
+                    }
+                }
+                SettingsAction::UsersSubmitChangePassword => {
+                    let idx = self.users_ui.selected_idx;
+                    let pw = &self.users_ui.form_password[..self.users_ui.form_password_len];
+                    let confirm = &self.users_ui.form_confirm[..self.users_ui.form_confirm_len];
+
+                    if pw.is_empty() {
+                        self.users_ui.set_status("Error: Password cannot be empty", true);
+                    } else if pw != confirm {
+                        self.users_ui.set_status("Error: Passwords do not match", true);
+                    } else {
+                        let seed = (idx as u32).wrapping_mul(0x1F2E_3D4C) ^ 0xBEEF_CAFE;
+                        match self.users_cfg.set_user_password(idx, pw, seed) {
+                            Ok(()) => {
+                                self.users_ui.view_mode = UsersViewMode::List;
+                                self.dirty = true;
+                                self.save_users_cfg();
+                                self.set_status("Password updated and saved to USERS.CFG");
+                            }
+                            Err(err_msg) => {
+                                self.users_ui.set_status(err_msg, true);
+                            }
+                        }
+                    }
+                }
                 SettingsAction::UsersAddDemo => {
                     if self.users_cfg.count < MAX_USERS {
-                        let uid = 1000 + self.users_cfg.count as u32;
-                        self.users_cfg.add_user("guest", uid, uid);
+                        let uid = self.users_cfg.next_available_uid();
+                        let _ = self.users_cfg.add_user_with_credentials("guest", uid, false, b"guest-pw", 0x1234_5678);
                         self.dirty = true;
+                        self.save_users_cfg();
                         self.set_status("Added guest user account");
                     } else {
                         self.set_status("User table full (8 max)");
@@ -1837,40 +2512,7 @@ impl SettingsApp {
             }
 
             PanelKind::Users => {
-                ui::font::draw_text_font(s, content_x, content_y, "User Accounts & Authentication (USERS.CFG)", palette.accent_primary, &font);
-                let add_btn = Rect::new(content_x, content_y + 24, 130, 26);
-                ui::draw::draw_rounded_rect(s, add_btn, RADIUS_XS, palette.accent_primary);
-                ui::font::draw_text_font(s, add_btn.x + 10, add_btn.y + 5, "+ Add User", Color::WHITE, &f_small);
-
-                let tbl_y = content_y + 64;
-                s.fill_rect(Rect::new(content_x, tbl_y, 400, 20), palette.surface_raised);
-                ui::font::draw_text_font(s, content_x + 8, tbl_y + 3, "Username", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 120, tbl_y + 3, "UID", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 180, tbl_y + 3, "GID", palette.text_muted, &f_small);
-                ui::font::draw_text_font(s, content_x + 240, tbl_y + 3, "Status", palette.text_muted, &f_small);
-
-                let mut uy = tbl_y + 22;
-                for i in 0..self.users_cfg.count {
-                    let u = &self.users_cfg.accounts[i];
-                    let r_rect = Rect::new(content_x, uy, 400, 20);
-                    if i % 2 == 1 { s.fill_rect(r_rect, palette.surface_raised.darken(10)); }
-                    ui::font::draw_text_font(s, content_x + 8, uy + 3, u.username_str(), palette.text_primary, &f_small);
-
-                    let mut num_buf = [0u8; 10];
-                    let uid_len = format_u32(u.uid, &mut num_buf);
-                    if let Ok(uid_str) = core::str::from_utf8(&num_buf[..uid_len]) {
-                        ui::font::draw_text_font(s, content_x + 120, uy + 3, uid_str, palette.text_secondary, &f_small);
-                    }
-                    let gid_len = format_u32(u.gid, &mut num_buf);
-                    if let Ok(gid_str) = core::str::from_utf8(&num_buf[..gid_len]) {
-                        ui::font::draw_text_font(s, content_x + 180, uy + 3, gid_str, palette.text_secondary, &f_small);
-                    }
-
-                    let status_str = if u.uid == 0 { "Administrator" } else { "Standard" };
-                    let st_col = if u.uid == 0 { palette.accent_primary } else { palette.text_secondary };
-                    ui::font::draw_text_font(s, content_x + 240, uy + 3, status_str, st_col, &f_small);
-                    uy += 22;
-                }
+                self.render_users_panel(s, content_x, content_y, &font, &f_small, &palette);
             }
 
             PanelKind::Services => {
@@ -1944,6 +2586,355 @@ impl SettingsApp {
         s.fill_rect(Rect::new(hdr_x, stat_rect.y, hdr_w, 1), palette.border_subtle);
 
         ui::font::draw_text_font(s, stat_rect.x + 12, stat_rect.y + 5, self.status_str(), palette.text_secondary, &f_small);
+    }
+
+    fn render_users_panel<S: Surface + ?Sized>(
+        &self,
+        s: &mut S,
+        content_x: i32,
+        content_y: i32,
+        font: &Font,
+        f_small: &Font,
+        palette: &ThemePalette,
+    ) {
+        ui::font::draw_text_font(s, content_x, content_y, "User Accounts & Permissions (USERS.CFG)", palette.accent_primary, font);
+
+        // Top right capacity badge: "Capacity: X / 8 Users"
+        let count_str_x = content_x + 320;
+        let mut cnt_buf = [0u8; 32];
+        let mut off = copy_bytes(&mut cnt_buf, b"Capacity: ");
+        off += format_u32(self.users_cfg.count as u32, &mut cnt_buf[off..]);
+        off += copy_bytes(&mut cnt_buf[off..], b" / 8 Users");
+        if let Ok(c_txt) = core::str::from_utf8(&cnt_buf[..off]) {
+            let badge_rect = Rect::new(count_str_x, content_y - 2, 130, 20);
+            ui::draw::draw_rounded_rect(s, badge_rect, RADIUS_XS, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, badge_rect, 1, palette.border_subtle);
+            ui::font::draw_text_font(s, count_str_x + 8, content_y + 2, c_txt, palette.text_secondary, f_small);
+        }
+
+        match self.users_ui.view_mode {
+            UsersViewMode::List => {
+                // Left Column: Accounts List (width 200)
+                let lx = content_x;
+                let ly = content_y + 24;
+                ui::font::draw_text_font(s, lx, ly + 5, "Registered Accounts:", palette.text_secondary, f_small);
+
+                // [+ Add User] button
+                let add_btn = Rect::new(lx + 106, ly, 94, 22);
+                ui::draw::draw_rounded_rect(s, add_btn, RADIUS_XS, palette.accent_primary);
+                ui::font::draw_text_font(s, add_btn.x + 8, add_btn.y + 4, "+ Add User", Color::WHITE, f_small);
+
+                let list_start_y = ly + 28;
+                for i in 0..self.users_cfg.count {
+                    let u = &self.users_cfg.accounts[i];
+                    let card_y = list_start_y + (i as i32 * 40);
+                    let card_rect = Rect::new(lx, card_y, 200, 36);
+                    let is_sel = i == self.users_ui.selected_idx;
+
+                    let bg_col = if is_sel {
+                        palette.accent_primary.darken(35)
+                    } else if i % 2 == 1 {
+                        palette.surface_raised.darken(10)
+                    } else {
+                        palette.surface_raised
+                    };
+                    ui::draw::draw_rounded_rect(s, card_rect, RADIUS_XS, bg_col);
+                    ui::draw::draw_rect_outline(s, card_rect, 1, if is_sel { palette.accent_primary } else { palette.border_subtle });
+
+                    // Avatar badge (square with rounded corners)
+                    let av_rect = Rect::new(lx + 6, card_y + 6, 24, 24);
+                    let av_bg = if u.is_admin() { palette.accent_primary } else { palette.surface_sunken };
+                    ui::draw::draw_rounded_rect(s, av_rect, RADIUS_XS, av_bg);
+                    let initial = if u.username[0] != 0 { u.username[0].to_ascii_uppercase() } else { b'?' };
+                    let init_str = [initial];
+                    if let Ok(c_init) = core::str::from_utf8(&init_str) {
+                        ui::font::draw_text_font(s, av_rect.x + 8, av_rect.y + 4, c_init, Color::WHITE, f_small);
+                    }
+
+                    // Username
+                    ui::font::draw_text_font(s, lx + 36, card_y + 4, u.username_str(), if is_sel { Color::WHITE } else { palette.text_primary }, f_small);
+
+                    // Role & UID
+                    let mut role_buf = [0u8; 32];
+                    let mut r_off = 0;
+                    if u.is_admin() {
+                        r_off += copy_bytes(&mut role_buf, b"Admin (UID ");
+                    } else {
+                        r_off += copy_bytes(&mut role_buf, b"User (UID ");
+                    }
+                    r_off += format_u32(u.uid, &mut role_buf[r_off..]);
+                    r_off += copy_bytes(&mut role_buf[r_off..], b")");
+                    if let Ok(r_txt) = core::str::from_utf8(&role_buf[..r_off]) {
+                        let col = if u.is_admin() { palette.accent_primary.lighten(30) } else { palette.text_muted };
+                        ui::font::draw_text_font(s, lx + 36, card_y + 19, r_txt, col, f_small);
+                    }
+                }
+
+                // Right Column: Account Details & Permissions Inspector
+                let rx = content_x + 212;
+                let ry = content_y + 24;
+                let insp_rect = Rect::new(rx, ry, 242, 280);
+                ui::draw::draw_rounded_rect(s, insp_rect, RADIUS_SM, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, insp_rect, 1, palette.border_subtle);
+
+                let sel_idx = self.users_ui.selected_idx;
+                if sel_idx < self.users_cfg.count {
+                    let u = &self.users_cfg.accounts[sel_idx];
+
+                    // Large Avatar
+                    let big_av = Rect::new(rx + 12, ry + 12, 32, 32);
+                    let big_av_bg = if u.is_admin() { palette.accent_primary } else { palette.surface_raised };
+                    ui::draw::draw_rounded_rect(s, big_av, RADIUS_SM, big_av_bg);
+                    let init_c = if u.username[0] != 0 { u.username[0].to_ascii_uppercase() } else { b'?' };
+                    let big_init = [init_c];
+                    if let Ok(bi) = core::str::from_utf8(&big_init) {
+                        ui::font::draw_text_font(s, big_av.x + 11, big_av.y + 6, bi, Color::WHITE, font);
+                    }
+
+                    // Account name & identity
+                    ui::font::draw_text_font(s, rx + 52, ry + 10, u.username_str(), palette.text_primary, font);
+
+                    let mut id_buf = [0u8; 32];
+                    let mut id_off = copy_bytes(&mut id_buf, b"UID: ");
+                    id_off += format_u32(u.uid, &mut id_buf[id_off..]);
+                    id_off += copy_bytes(&mut id_buf[id_off..], b"  GID: ");
+                    id_off += format_u32(u.gid, &mut id_buf[id_off..]);
+                    if let Ok(id_txt) = core::str::from_utf8(&id_buf[..id_off]) {
+                        ui::font::draw_text_font(s, rx + 52, ry + 28, id_txt, palette.text_secondary, f_small);
+                    }
+
+                    // Divider
+                    ui::draw::draw_line(s, rx + 12, ry + 52, rx + 230, ry + 52, palette.border_subtle);
+
+                    // Section 1: Role & Privileges
+                    ui::font::draw_text_font(s, rx + 12, ry + 58, "Security Role & Privileges:", palette.text_secondary, f_small);
+
+                    // Role switcher pills
+                    // [ Standard User ]
+                    let std_pill = Rect::new(rx + 12, ry + 76, 104, 24);
+                    let is_std = !u.is_admin();
+                    let std_bg = if is_std { palette.accent_primary.darken(35) } else { palette.surface_raised };
+                    ui::draw::draw_rounded_rect(s, std_pill, RADIUS_XS, std_bg);
+                    ui::draw::draw_rect_outline(s, std_pill, 1, if is_std { palette.accent_primary } else { palette.border_subtle });
+                    ui::font::draw_text_font(s, std_pill.x + 10, std_pill.y + 5, "Standard User", if is_std { Color::WHITE } else { palette.text_secondary }, f_small);
+
+                    // [ Administrator ]
+                    let adm_pill = Rect::new(rx + 122, ry + 76, 108, 24);
+                    let is_adm = u.is_admin();
+                    let adm_bg = if is_adm { palette.accent_primary } else { palette.surface_raised };
+                    ui::draw::draw_rounded_rect(s, adm_pill, RADIUS_XS, adm_bg);
+                    ui::draw::draw_rect_outline(s, adm_pill, 1, if is_adm { palette.accent_primary } else { palette.border_subtle });
+                    ui::font::draw_text_font(s, adm_pill.x + 10, adm_pill.y + 5, "Administrator", if is_adm { Color::WHITE } else { palette.text_secondary }, f_small);
+
+                    // Privilege description
+                    let priv_desc = if is_adm {
+                        "Admin: gid 0 (sudo, firewall, updates)"
+                    } else {
+                        "Standard: unprivileged, sandboxed task"
+                    };
+                    ui::font::draw_text_font(s, rx + 12, ry + 106, priv_desc, palette.text_muted, f_small);
+
+                    // Divider
+                    ui::draw::draw_line(s, rx + 12, ry + 124, rx + 230, ry + 124, palette.border_subtle);
+
+                    // Section 2: Credentials & PBKDF2
+                    ui::font::draw_text_font(s, rx + 12, ry + 130, "Authentication & Hash (PBKDF2):", palette.text_secondary, f_small);
+                    ui::font::draw_text_font(s, rx + 12, ry + 148, "* * * * * * * *  (4096 iter)", palette.accent_primary, f_small);
+
+                    // Salt preview (hex of first 4 bytes)
+                    let mut salt_buf = [0u8; 32];
+                    let mut s_off = copy_bytes(&mut salt_buf, b"Salt: 0x");
+                    for b in &u.salt[..4] {
+                        salt_buf[s_off] = to_hex_digit(b >> 4);
+                        salt_buf[s_off + 1] = to_hex_digit(b & 0xF);
+                        s_off += 2;
+                    }
+                    s_off += copy_bytes(&mut salt_buf[s_off..], b"...");
+                    if let Ok(s_txt) = core::str::from_utf8(&salt_buf[..s_off]) {
+                        ui::font::draw_text_font(s, rx + 12, ry + 166, s_txt, palette.text_muted, f_small);
+                    }
+
+                    // Change password button
+                    let pw_btn = Rect::new(rx + 12, ry + 186, 126, 22);
+                    ui::draw::draw_rounded_rect(s, pw_btn, RADIUS_XS, palette.surface_raised);
+                    ui::draw::draw_rect_outline(s, pw_btn, 1, palette.border_subtle);
+                    ui::font::draw_text_font(s, pw_btn.x + 8, pw_btn.y + 4, "Change Password", palette.text_primary, f_small);
+
+                    // Divider
+                    ui::draw::draw_line(s, rx + 12, ry + 216, rx + 230, ry + 216, palette.border_subtle);
+
+                    // Section 3: Account Deletion
+                    if u.is_admin() && self.users_cfg.admin_count() <= 1 {
+                        ui::font::draw_text_font(s, rx + 12, ry + 226, "Protected (Last Administrator)", palette.text_muted, f_small);
+                    } else if self.users_cfg.count <= 1 {
+                        ui::font::draw_text_font(s, rx + 12, ry + 226, "Protected (Sole Account)", palette.text_muted, f_small);
+                    } else {
+                        let del_btn = Rect::new(rx + 12, ry + 226, 110, 22);
+                        ui::draw::draw_rounded_rect(s, del_btn, RADIUS_XS, palette.surface_raised);
+                        ui::draw::draw_rect_outline(s, del_btn, 1, palette.status_danger);
+                        ui::font::draw_text_font(s, del_btn.x + 8, del_btn.y + 4, "- Delete User", palette.status_danger, f_small);
+                    }
+                }
+            }
+
+            UsersViewMode::CreateAccount => {
+                // Useradd Form Card (width 434, height 280)
+                let fx = content_x + 10;
+                let fy = content_y + 24;
+                let form_rect = Rect::new(fx, fy, 434, 280);
+                ui::draw::draw_rounded_rect(s, form_rect, RADIUS_SM, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, form_rect, 1, palette.accent_primary);
+
+                ui::font::draw_text_font(s, fx + 16, fy + 12, "Create User Account (useradd)", palette.accent_primary, font);
+                ui::font::draw_text_font(s, fx + 16, fy + 32, "Sets username, UID/GID security role, and credentials in USERS.CFG", palette.text_secondary, f_small);
+
+                // Quick presets row
+                ui::font::draw_text_font(s, fx + 16, fy + 52, "Presets:", palette.text_muted, f_small);
+                let p_names = ["alice (std)", "bob (admin)", "operator"];
+                for i in 0..3 {
+                    let p_btn = Rect::new(fx + 76 + (i as i32 * 96), fy + 50, 90, 20);
+                    ui::draw::draw_rounded_rect(s, p_btn, RADIUS_XS, palette.surface_raised);
+                    ui::draw::draw_rect_outline(s, p_btn, 1, palette.border_subtle);
+                    ui::font::draw_text_font(s, p_btn.x + 6, p_btn.y + 3, p_names[i], palette.text_primary, f_small);
+                }
+
+                // Field 1: Username
+                ui::font::draw_text_font(s, fx + 16, fy + 78, "Username:", palette.text_secondary, f_small);
+                let un_rect = Rect::new(fx + 16, fy + 94, 180, 24);
+                ui::draw::draw_rounded_rect(s, un_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, un_rect, 1, palette.border_subtle);
+                if self.users_ui.form_username_len > 0 {
+                    if let Ok(un_str) = core::str::from_utf8(&self.users_ui.form_username[..self.users_ui.form_username_len]) {
+                        ui::font::draw_text_font(s, un_rect.x + 8, un_rect.y + 4, un_str, Color::WHITE, f_small);
+                    }
+                } else {
+                    ui::font::draw_text_font(s, un_rect.x + 8, un_rect.y + 4, "type or click preset", palette.text_muted, f_small);
+                }
+
+                // Field 2: Role Switch
+                ui::font::draw_text_font(s, fx + 216, fy + 78, "Account Type / Role:", palette.text_secondary, f_small);
+                let std_btn = Rect::new(fx + 216, fy + 94, 96, 24);
+                let is_std = !self.users_ui.form_is_admin;
+                ui::draw::draw_rounded_rect(s, std_btn, RADIUS_XS, if is_std { palette.accent_primary.darken(35) } else { palette.surface_raised });
+                ui::draw::draw_rect_outline(s, std_btn, 1, if is_std { palette.accent_primary } else { palette.border_subtle });
+                ui::font::draw_text_font(s, std_btn.x + 6, std_btn.y + 4, "Standard", if is_std { Color::WHITE } else { palette.text_secondary }, f_small);
+
+                let adm_btn = Rect::new(fx + 318, fy + 94, 100, 24);
+                let is_adm = self.users_ui.form_is_admin;
+                ui::draw::draw_rounded_rect(s, adm_btn, RADIUS_XS, if is_adm { palette.accent_primary } else { palette.surface_raised });
+                ui::draw::draw_rect_outline(s, adm_btn, 1, if is_adm { palette.accent_primary } else { palette.border_subtle });
+                ui::font::draw_text_font(s, adm_btn.x + 6, adm_btn.y + 4, "Admin (gid 0)", if is_adm { Color::WHITE } else { palette.text_secondary }, f_small);
+
+                // Field 3: Assigned UID
+                let mut uid_buf = [0u8; 32];
+                let mut u_off = copy_bytes(&mut uid_buf, b"Assigned UID: ");
+                u_off += format_u32(self.users_ui.form_uid, &mut uid_buf[u_off..]);
+                if let Ok(uid_str) = core::str::from_utf8(&uid_buf[..u_off]) {
+                    ui::font::draw_text_font(s, fx + 16, fy + 128, uid_str, palette.accent_primary.lighten(30), f_small);
+                }
+
+                // Field 4: Password
+                ui::font::draw_text_font(s, fx + 16, fy + 148, "Password:", palette.text_secondary, f_small);
+                let pw_rect = Rect::new(fx + 16, fy + 164, 180, 24);
+                ui::draw::draw_rounded_rect(s, pw_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, pw_rect, 1, palette.border_subtle);
+                if self.users_ui.form_password_len > 0 {
+                    ui::font::draw_text_font(s, pw_rect.x + 8, pw_rect.y + 4, "* * * * * * * *", palette.accent_primary, f_small);
+                } else {
+                    ui::font::draw_text_font(s, pw_rect.x + 8, pw_rect.y + 4, "required", palette.text_muted, f_small);
+                }
+
+                // Field 5: Confirm Password
+                ui::font::draw_text_font(s, fx + 216, fy + 148, "Confirm Password:", palette.text_secondary, f_small);
+                let cpw_rect = Rect::new(fx + 216, fy + 164, 180, 24);
+                ui::draw::draw_rounded_rect(s, cpw_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, cpw_rect, 1, palette.border_subtle);
+                if self.users_ui.form_confirm_len > 0 {
+                    ui::font::draw_text_font(s, cpw_rect.x + 8, cpw_rect.y + 4, "* * * * * * * *", palette.accent_primary, f_small);
+                } else {
+                    ui::font::draw_text_font(s, cpw_rect.x + 8, cpw_rect.y + 4, "retype password", palette.text_muted, f_small);
+                }
+
+                // Status message
+                let st_msg = self.users_ui.status_str();
+                if !st_msg.is_empty() {
+                    let col = if self.users_ui.status_is_error { palette.status_danger } else { palette.status_success };
+                    ui::font::draw_text_font(s, fx + 16, fy + 200, st_msg, col, f_small);
+                }
+
+                // Action buttons
+                let create_rect = Rect::new(fx + 16, fy + 230, 130, 26);
+                ui::draw::draw_rounded_rect(s, create_rect, RADIUS_XS, palette.accent_primary);
+                ui::font::draw_text_font(s, create_rect.x + 12, create_rect.y + 5, "Create Account", Color::WHITE, f_small);
+
+                let cancel_rect = Rect::new(fx + 158, fy + 230, 80, 26);
+                ui::draw::draw_rounded_rect(s, cancel_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, cancel_rect, 1, palette.border_subtle);
+                ui::font::draw_text_font(s, cancel_rect.x + 16, cancel_rect.y + 5, "Cancel", palette.text_primary, f_small);
+            }
+
+            UsersViewMode::ChangePassword => {
+                let fx = content_x + 10;
+                let fy = content_y + 24;
+                let form_rect = Rect::new(fx, fy, 434, 250);
+                ui::draw::draw_rounded_rect(s, form_rect, RADIUS_SM, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, form_rect, 1, palette.accent_primary);
+
+                let u_name = if self.users_ui.selected_idx < self.users_cfg.count {
+                    self.users_cfg.accounts[self.users_ui.selected_idx].username_str()
+                } else {
+                    "account"
+                };
+
+                let mut title_buf = [0u8; 64];
+                let mut t_off = copy_bytes(&mut title_buf, b"Change Password for '");
+                t_off += copy_bytes(&mut title_buf[t_off..], u_name.as_bytes());
+                t_off += copy_bytes(&mut title_buf[t_off..], b"'");
+                if let Ok(t_str) = core::str::from_utf8(&title_buf[..t_off]) {
+                    ui::font::draw_text_font(s, fx + 16, fy + 12, t_str, palette.accent_primary, font);
+                }
+                ui::font::draw_text_font(s, fx + 16, fy + 32, "Derives a fresh salt and re-hashes credentials with PBKDF2 (4096 iter)", palette.text_secondary, f_small);
+
+                // Preset button
+                let pw_preset = Rect::new(fx + 16, fy + 52, 140, 20);
+                ui::draw::draw_rounded_rect(s, pw_preset, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, pw_preset, 1, palette.border_subtle);
+                ui::font::draw_text_font(s, pw_preset.x + 8, pw_preset.y + 3, "preset: novapass456", palette.text_primary, f_small);
+
+                // Fields
+                ui::font::draw_text_font(s, fx + 16, fy + 82, "New Password:", palette.text_secondary, f_small);
+                let pw_rect = Rect::new(fx + 16, fy + 98, 180, 24);
+                ui::draw::draw_rounded_rect(s, pw_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, pw_rect, 1, palette.border_subtle);
+                if self.users_ui.form_password_len > 0 {
+                    ui::font::draw_text_font(s, pw_rect.x + 8, pw_rect.y + 4, "* * * * * * * *", palette.accent_primary, f_small);
+                }
+
+                ui::font::draw_text_font(s, fx + 216, fy + 82, "Confirm New Password:", palette.text_secondary, f_small);
+                let cpw_rect = Rect::new(fx + 216, fy + 98, 180, 24);
+                ui::draw::draw_rounded_rect(s, cpw_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, cpw_rect, 1, palette.border_subtle);
+                if self.users_ui.form_confirm_len > 0 {
+                    ui::font::draw_text_font(s, cpw_rect.x + 8, cpw_rect.y + 4, "* * * * * * * *", palette.accent_primary, f_small);
+                }
+
+                let st_msg = self.users_ui.status_str();
+                if !st_msg.is_empty() {
+                    let col = if self.users_ui.status_is_error { palette.status_danger } else { palette.status_success };
+                    ui::font::draw_text_font(s, fx + 16, fy + 140, st_msg, col, f_small);
+                }
+
+                // Action buttons
+                let update_rect = Rect::new(fx + 16, fy + 180, 130, 26);
+                ui::draw::draw_rounded_rect(s, update_rect, RADIUS_XS, palette.accent_primary);
+                ui::font::draw_text_font(s, update_rect.x + 10, update_rect.y + 5, "Update Password", Color::WHITE, f_small);
+
+                let cancel_rect = Rect::new(fx + 158, fy + 180, 80, 26);
+                ui::draw::draw_rounded_rect(s, cancel_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, cancel_rect, 1, palette.border_subtle);
+                ui::font::draw_text_font(s, cancel_rect.x + 16, cancel_rect.y + 5, "Cancel", palette.text_primary, f_small);
+            }
+        }
     }
 
     fn render_firewall_panel<S: Surface + ?Sized>(
@@ -2211,11 +3202,13 @@ impl SettingsApp {
 // Selftest Suite
 // ===========================================================================
 
-pub fn run_selftest() -> i32 {
-    let mut code = 0;
-    unsafe { ffi::sys_write(b"[settings-selftest] starting\n\0".as_ptr()) };
+static mut TEST_RENDER_BUF: [u32; 640 * 240] = [0u32; 640 * 240];
+static mut TEST_USERS_BUF: [u8; USERS_TOTAL_SIZE] = [0u8; USERS_TOTAL_SIZE];
+static mut TEST_FW_BUF: [u8; 1024] = [0u8; 1024];
 
-    let mut app = SettingsApp::new();
+#[inline(never)]
+fn selftest_system_and_config(app: &mut SettingsApp) -> i32 {
+    let mut code = 0;
 
     // Case 1: Plugin panel registration & category switching
     let all_panels = PanelKind::all();
@@ -2262,12 +3255,12 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 3: USERS.CFG parsing, account addition, and binary serialization
-    let mut users_buf = [0u8; USERS_TOTAL_SIZE];
-    let u_len = app.users_cfg.to_bytes(&mut users_buf);
+    let users_buf = unsafe { &mut *core::ptr::addr_of_mut!(TEST_USERS_BUF) };
+    let u_len = app.users_cfg.to_bytes(users_buf);
     let users_bytes_ok = u_len == USERS_TOTAL_SIZE && &users_buf[0..4] == b"NVUS";
 
     let add_ok = app.users_cfg.add_user("testuser", 1002, 1002);
-    let u_len2 = app.users_cfg.to_bytes(&mut users_buf);
+    let u_len2 = app.users_cfg.to_bytes(users_buf);
     let parsed_users = UsersConfig::from_bytes(&users_buf[..u_len2]).unwrap();
     let user_found = parsed_users.accounts.iter().take(parsed_users.count).any(|u| u.username_str() == "testuser");
 
@@ -2295,6 +3288,13 @@ pub fn run_selftest() -> i32 {
         code |= 8;
     }
 
+    code
+}
+
+#[inline(never)]
+fn selftest_mouse_and_surface(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
+
     // Case 5: Mouse hit-testing, action dispatch, and dynamic cursor shapes
     let vp = Rect::new(0, 0, 640, 480);
     let hit_tab1 = app.button_at(50, 95, vp) == Some(SettingsAction::SelectPanel(PanelKind::Users));
@@ -2317,15 +3317,9 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 6: Graphical surface rendering via BufferSurface32
-    static mut TEST_RENDER_BUF: [u32; 640 * 240] = [0u32; 640 * 240];
-    let render_slice = unsafe {
-        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_RENDER_BUF) as *mut u32, 640 * 240)
-    };
-    render_slice.fill(0);
-
-    let mut surf = BufferSurface32::new(render_slice, 640, 240);
+    surf.buffer.fill(0);
     app.select_panel(PanelKind::System);
-    app.render(&mut surf, Rect::new(0, 0, 640, 240));
+    app.render(surf, Rect::new(0, 0, 640, 240));
 
     let palette = Theme::Dark.palette();
     let sidebar_pixel = surf.buffer[10 * 640 + 10];
@@ -2345,9 +3339,12 @@ pub fn run_selftest() -> i32 {
         code |= 32;
     }
 
-    // =======================================================================
-    // Month 4: Network & Firewall Selftest Cases
-    // =======================================================================
+    code
+}
+
+#[inline(never)]
+fn selftest_firewall_and_network(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
 
     // Case 7: Live firewall query via SYS_FW_INFO
     app.select_panel(PanelKind::Firewall);
@@ -2379,13 +3376,10 @@ pub fn run_selftest() -> i32 {
     let pol_ok = if !app.firewall_cfg.locked {
         let pol_in_toggled = app.firewall_cfg.apply_policy_to_kernel(ffi::NOVA_FW_DIR_IN, true);
         let pol_in_verified = !app.firewall_cfg.inbound_drop;
-        // Restore default drop
         let pol_in_restored = app.firewall_cfg.apply_policy_to_kernel(ffi::NOVA_FW_DIR_IN, false);
         let pol_restored_verified = app.firewall_cfg.inbound_drop;
         pol_in_toggled && pol_in_verified && pol_in_restored && pol_restored_verified
     } else {
-        // When firewall is permanently locked by the kernel, live policy mutations
-        // must be rejected (-EPERM) while preserving the locked state and existing policy.
         let prev_drop = app.firewall_cfg.inbound_drop;
         let mutation_rejected = !app.firewall_cfg.apply_policy_to_kernel(ffi::NOVA_FW_DIR_IN, true);
         mutation_rejected && app.firewall_cfg.inbound_drop == prev_drop && app.firewall_cfg.locked
@@ -2410,7 +3404,6 @@ pub fn run_selftest() -> i32 {
         let del_ok = del_rule_ok && count_after_del == count_before;
         added_ok && del_ok
     } else {
-        // When locked, rule addition and deletion must be rejected (-EPERM), preserving rule table count.
         let count_before = app.firewall_cfg.rule_count;
         let add_rejected = !app.firewall_cfg.add_rule_kernel("rule accept in proto tcp dport 22 state new log");
         let del_rejected = !app.firewall_cfg.delete_rule_kernel(0);
@@ -2448,8 +3441,8 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 12: FIREWALL.CFG file serialization roundtrip
-    let mut fw_buf = [0u8; 1024];
-    let fw_len = app.firewall_cfg.to_bytes(&mut fw_buf);
+    let fw_buf = unsafe { &mut *core::ptr::addr_of_mut!(TEST_FW_BUF) };
+    let fw_len = app.firewall_cfg.to_bytes(fw_buf);
     let fw_serialized_ok = fw_len > 0 && fw_buf[..fw_len].starts_with(b"# FIREWALL.CFG");
     let parsed_fw = FirewallConfig::from_bytes(&fw_buf[..fw_len]).unwrap();
     let fw_roundtrip_ok = parsed_fw.rule_count == app.firewall_cfg.rule_count
@@ -2464,17 +3457,17 @@ pub fn run_selftest() -> i32 {
 
     // Case 13: Graphical surface rendering of Network & Firewall sub-tabs
     app.firewall_cfg.active_subtab = 0; // Rules
-    app.render(&mut surf, Rect::new(0, 0, 640, 240));
+    app.render(surf, Rect::new(0, 0, 640, 240));
     let rules_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
 
     app.firewall_cfg.active_subtab = 1; // Network & IP
     surf.buffer.fill(0);
-    app.render(&mut surf, Rect::new(0, 0, 640, 240));
+    app.render(surf, Rect::new(0, 0, 640, 240));
     let net_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
 
     app.firewall_cfg.active_subtab = 2; // Flows & Stats
     surf.buffer.fill(0);
-    app.render(&mut surf, Rect::new(0, 0, 640, 240));
+    app.render(surf, Rect::new(0, 0, 640, 240));
     let stats_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
 
     if rules_pixels > 5000 && net_pixels > 5000 && stats_pixels > 5000 {
@@ -2483,6 +3476,168 @@ pub fn run_selftest() -> i32 {
         unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Network & Firewall graphical presentation\n\0".as_ptr()) };
         code |= 4096;
     }
+
+    code
+}
+
+#[inline(never)]
+fn selftest_users_and_permissions(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
+
+    // Case 14: Graphical useradd and PBKDF2-HMAC-SHA256 account credentials
+    app.select_panel(PanelKind::Users);
+    let vp = Rect::new(0, 0, 640, 480);
+    // 1. Click "+ Add User" button (x: 282..376, y: 88..110)
+    app.on_left_click(300, 95, vp);
+    let form_opened = app.users_ui.view_mode == UsersViewMode::CreateAccount;
+
+    // 2. Click "Alice" preset button (x: 262..352, y: 138..158)
+    app.on_left_click(280, 145, vp);
+    let preset_applied = app.users_ui.form_username_str() == "alice"
+        && !app.users_ui.form_is_admin
+        && app.users_ui.form_password_str() == "alicepass";
+
+    // 3. Click "Create Account" submit button (x: 202..332, y: 318..344)
+    app.on_left_click(250, 325, vp);
+    let form_closed = app.users_ui.view_mode == UsersViewMode::List;
+
+    let alice_idx = app.users_cfg.find_user("alice");
+    let alice_ok = if let Some(idx) = alice_idx {
+        let u = &app.users_cfg.accounts[idx];
+        !u.is_admin()
+            && u.verify_password(b"alicepass")
+            && !u.verify_password(b"wrongpass")
+            && u.uid >= 1000
+    } else {
+        false
+    };
+
+    if form_opened && preset_applied && form_closed && alice_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: graphical useradd and PBKDF2-HMAC-SHA256 account credentials\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: graphical useradd and account credentials\n\0".as_ptr()) };
+        code |= 8192;
+    }
+
+    // Case 15: User role privilege toggle and last-administrator safeguard
+    let mut role_ok = false;
+    if let Some(a_idx) = app.users_cfg.find_user("alice") {
+        // Promote alice to Administrator (gid = 0)
+        let promote_res = app.users_cfg.toggle_admin(a_idx);
+        let promote_ok = promote_res == Ok(true) && app.users_cfg.accounts[a_idx].is_admin();
+
+        // Demote alice back to Standard User
+        let demote_res = app.users_cfg.toggle_admin(a_idx);
+        let demote_ok = demote_res == Ok(false) && !app.users_cfg.accounts[a_idx].is_admin();
+
+        // Last-administrator safeguard: attempt to demote the sole remaining administrator ("admin")
+        if let Some(admin_idx) = app.users_cfg.find_user("admin") {
+            let demote_last_admin_res = app.users_cfg.toggle_admin(admin_idx);
+            let safeguard_ok = demote_last_admin_res.is_err() && app.users_cfg.accounts[admin_idx].is_admin();
+            role_ok = promote_ok && demote_ok && safeguard_ok;
+        }
+    }
+
+    if role_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: user role privilege toggle and last-administrator safeguard\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: user role privilege toggle\n\0".as_ptr()) };
+        code |= 16384;
+    }
+
+    // Case 16: Account deletion and minimum account safeguards
+    let mut deletion_ok = false;
+    let add_bob_ok = app.users_cfg.add_user_with_credentials("bob", 1004, false, b"bobpass", 0x1234).is_ok();
+    if let (Some(b_idx), Some(_)) = (app.users_cfg.find_user("bob"), app.users_cfg.find_user("alice")) {
+        let del_bob_ok = app.users_cfg.delete_account(b_idx).is_ok() && app.users_cfg.find_user("bob").is_none();
+        // Recalculate alice index after bob deletion
+        if let Some(cur_a_idx) = app.users_cfg.find_user("alice") {
+            let del_alice_ok = app.users_cfg.delete_account(cur_a_idx).is_ok() && app.users_cfg.find_user("alice").is_none();
+
+            // Clean up testuser if present from earlier tests
+            if let Some(t_idx) = app.users_cfg.find_user("testuser") {
+                let _ = app.users_cfg.delete_account(t_idx);
+            }
+
+            // Now accounts remaining: "persisted" (standard) and "admin" (admin)
+            if let Some(admin_idx) = app.users_cfg.find_user("admin") {
+                // Safeguard: Cannot delete sole administrator
+                let del_admin_err = app.users_cfg.delete_account(admin_idx).is_err();
+
+                if let Some(p_idx) = app.users_cfg.find_user("persisted") {
+                    let del_p_ok = app.users_cfg.delete_account(p_idx).is_ok();
+                    let count_one = app.users_cfg.count == 1;
+
+                    // Minimum account safeguard: Cannot delete the only remaining account
+                    let del_sole_err = if let Some(adm2) = app.users_cfg.find_user("admin") {
+                        app.users_cfg.delete_account(adm2).is_err()
+                    } else {
+                        false
+                    };
+
+                    // Restore "persisted" account to keep mock store consistent
+                    let _ = app.users_cfg.add_user_with_credentials("persisted", 700, false, b"persisted-pw", 0x1234_5678);
+                    app.save_users_cfg();
+
+                    deletion_ok = add_bob_ok && del_bob_ok && del_alice_ok && del_admin_err && del_p_ok && count_one && del_sole_err;
+                }
+            }
+        }
+    }
+
+    if deletion_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: account deletion and minimum account safeguards\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: account deletion safeguards\n\0".as_ptr()) };
+        code |= 32768;
+    }
+
+    // Case 17: User & Permissions graphical presentation on BufferSurface32
+    app.select_panel(PanelKind::Users);
+    app.users_ui.view_mode = UsersViewMode::List;
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let list_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    app.users_ui.open_create_form(1005);
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let form_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    app.users_ui.open_change_password();
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let pw_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    if list_pixels > 5000 && form_pixels > 5000 && pw_pixels > 5000 {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: User & Permissions graphical presentation on BufferSurface32\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: User & Permissions graphical presentation\n\0".as_ptr()) };
+        code |= 65536;
+    }
+
+    code
+}
+
+#[inline(never)]
+pub fn run_selftest() -> i32 {
+    let mut code = 0;
+    unsafe { ffi::sys_write(b"[settings-selftest] starting\n\0".as_ptr()) };
+
+    let app = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_SETTINGS) };
+    app.init();
+
+    code |= selftest_system_and_config(app);
+
+    let render_slice = unsafe {
+        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_RENDER_BUF) as *mut u32, 640 * 240)
+    };
+    render_slice.fill(0);
+    let mut surf = BufferSurface32::new(render_slice, 640, 240);
+
+    code |= selftest_mouse_and_surface(app, &mut surf);
+    code |= selftest_firewall_and_network(app, &mut surf);
+    code |= selftest_users_and_permissions(app, &mut surf);
 
     if code == 0 {
         unsafe { ffi::sys_write(b"[settings-selftest] all cases passed\n\0".as_ptr()) };
@@ -2545,8 +3700,8 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
         return 1;
     }
 
-    let mut app = SettingsApp::new();
-    app.reload_all();
+    let app = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_SETTINGS) };
+    app.init();
 
     let render_slice = unsafe {
         core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(RENDER_BUFFER) as *mut u32, (screen_w * screen_h) as usize)
@@ -2641,8 +3796,8 @@ mod tests {
         unsafe { ffi::reset_mock_environment() };
         let mut cfg = UsersConfig::new();
         assert_eq!(cfg.count, 2);
-        assert_eq!(cfg.accounts[0].username_str(), "root");
-        assert_eq!(cfg.accounts[1].username_str(), "firoze");
+        assert_eq!(cfg.accounts[0].username_str(), "persisted");
+        assert_eq!(cfg.accounts[1].username_str(), "admin");
 
         assert!(cfg.add_user("operator", 1005, 1005));
         assert_eq!(cfg.count, 3);
@@ -2747,5 +3902,110 @@ mod tests {
         app.render(&mut surf, Rect::new(0, 0, 640, 480));
         let non_zero_fw = surf.buffer.iter().filter(|&&p| p != 0).count();
         assert!(non_zero_fw > 1000, "Should render firewall rules table and controls");
+
+        // Render Users panel in list and modal modes
+        app.select_panel(PanelKind::Users);
+        app.users_ui.view_mode = UsersViewMode::List;
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+        let non_zero_users = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_users > 1000, "Should render accounts list and inspector");
+
+        app.users_ui.open_create_form(1001);
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+        let non_zero_create = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_create > 1000, "Should render useradd modal form");
+    }
+
+    #[test]
+    fn test_user_record_password_hashing_and_verification() {
+        let mut rec = UserRecord::empty();
+        rec.in_use = 1;
+        rec.set_username("charlie");
+        assert_eq!(rec.username_str(), "charlie");
+        rec.uid = 1002;
+        rec.gid = 1002;
+
+        rec.set_password(b"secret-password", 0x1234_5678);
+        assert!(rec.verify_password(b"secret-password"));
+        assert!(!rec.verify_password(b"wrong-password"));
+        assert!(!rec.verify_password(b""));
+    }
+
+    #[test]
+    fn test_users_config_admin_role_toggle_and_last_admin_safeguard() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut cfg = UsersConfig::new();
+        assert_eq!(cfg.admin_count(), 1); // "admin" is gid 0
+
+        // Add a standard user
+        let user_idx = cfg.add_user_with_credentials("dan", 1003, false, b"danpass", 0x5555).unwrap();
+        assert!(!cfg.accounts[user_idx].is_admin());
+
+        // Promote dan to Admin (gid 0)
+        assert_eq!(cfg.toggle_admin(user_idx), Ok(true));
+        assert!(cfg.accounts[user_idx].is_admin());
+        assert_eq!(cfg.admin_count(), 2);
+
+        // Demote dan back to Standard user (gid 1003)
+        assert_eq!(cfg.toggle_admin(user_idx), Ok(false));
+        assert!(!cfg.accounts[user_idx].is_admin());
+        assert_eq!(cfg.admin_count(), 1);
+
+        // Attempt to demote the last remaining admin ("admin")
+        let admin_idx = cfg.find_user("admin").unwrap();
+        assert!(cfg.toggle_admin(admin_idx).is_err());
+        assert!(cfg.accounts[admin_idx].is_admin());
+        assert_eq!(cfg.admin_count(), 1);
+    }
+
+    #[test]
+    fn test_users_config_deletion_safeguards() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut cfg = UsersConfig::new();
+        let eve_idx = cfg.add_user_with_credentials("eve", 1004, false, b"evepass", 0x7777).unwrap();
+        assert_eq!(cfg.count, 3);
+
+        // Deleting eve should succeed
+        assert!(cfg.delete_account(eve_idx).is_ok());
+        assert_eq!(cfg.count, 2);
+        assert!(cfg.find_user("eve").is_none());
+
+        // Attempting to delete the last admin ("admin") must fail
+        let admin_idx = cfg.find_user("admin").unwrap();
+        assert!(cfg.delete_account(admin_idx).is_err());
+        assert_eq!(cfg.count, 2);
+
+        // Deleting standard account "persisted" succeeds
+        let p_idx = cfg.find_user("persisted").unwrap();
+        assert!(cfg.delete_account(p_idx).is_ok());
+        assert_eq!(cfg.count, 1);
+
+        // Attempting to delete the only remaining account in system must fail
+        let last_idx = cfg.find_user("admin").unwrap();
+        assert!(cfg.delete_account(last_idx).is_err());
+        assert_eq!(cfg.count, 1);
+    }
+
+    #[test]
+    fn test_users_ui_state_and_action_dispatch() {
+        let mut ui = UsersUiState::new();
+        assert_eq!(ui.view_mode, UsersViewMode::List);
+
+        // Open create form
+        ui.open_create_form(1005);
+        assert_eq!(ui.view_mode, UsersViewMode::CreateAccount);
+        assert_eq!(ui.form_uid, 1005);
+        assert_eq!(ui.form_username_str(), "");
+
+        // Set preset
+        ui.set_form_preset("alice", false, "alicepass");
+        assert_eq!(ui.form_username_str(), "alice");
+        assert_eq!(ui.form_password_str(), "alicepass");
+        assert!(!ui.form_is_admin);
+
+        // Open change password
+        ui.open_change_password();
+        assert_eq!(ui.view_mode, UsersViewMode::ChangePassword);
+        assert_eq!(ui.form_password_str(), "");
     }
 }

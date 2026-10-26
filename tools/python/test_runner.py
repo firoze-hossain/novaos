@@ -301,6 +301,14 @@ ASSERTIONS: list[Assertion] = [
               r"settings-selftest. PASS: SYS_FW_CTL rule table enumeration and criteria matching",
               "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
               "graphical network and firewall settings panel reading/writing kernel firewall rule table"),
+    Assertion("users_panel_selftest_passed",
+              r"settings-selftest. PASS: graphical useradd and PBKDF2-HMAC-SHA256 account credentials",
+              "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
+              "graphical user and permissions management panel with useradd and PBKDF2-HMAC-SHA256 credentials"),
+    Assertion("users_roles_safeguard_passed",
+              r"settings-selftest. PASS: user role privilege toggle and last-administrator safeguard",
+              "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
+              "user role privilege toggle and last-administrator safeguard in settings panel"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",
