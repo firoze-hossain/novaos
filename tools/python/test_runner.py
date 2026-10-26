@@ -293,10 +293,14 @@ ASSERTIONS: list[Assertion] = [
               "Month 3 Core desktop apps: userland/files-rs/files.rs - browse VFS files, "
               "open preview, move/rename, and delete via mouse operations"),
     Assertion("settings_selftest_passed",
-              r"sandbox. PASS: SETTINGS\.ELF --selftest - settings shell "
-              r"and plugin panels all behaved correctly",
-              "Month 3 Core desktop apps: userland/settings-rs/settings.rs - "
-              "modular plugin-panel shell reading/writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG"),
+              r"sandbox. PASS: SETTINGS\.ELF --selftest - settings shell, "
+              r"plugin panels, and live firewall rule table all behaved correctly",
+              "Month 3 & Month 4: userland/settings-rs/settings.rs - "
+              "modular plugin-panel shell reading/writing SYSTEM.CFG, USERS.CFG, SERVICES.CFG, and live kernel firewall rules"),
+    Assertion("firewall_panel_selftest_passed",
+              r"settings-selftest. PASS: SYS_FW_CTL rule table enumeration and criteria matching",
+              "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
+              "graphical network and firewall settings panel reading/writing kernel firewall rule table"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",
