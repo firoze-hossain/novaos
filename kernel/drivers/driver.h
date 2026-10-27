@@ -1,6 +1,8 @@
 #ifndef DRIVERS_DRIVER_H
 #define DRIVERS_DRIVER_H
 
+#include "../../include/types.h"
+
 /*
  * driver.h - Phase 39 (extended Phase 76): driver self-registration
  *
@@ -128,5 +130,9 @@ typedef struct {
  * convention every other subsystem in this kernel's boot log already
  * follows. */
 void driver_init_all(driver_phase_t phase);
+
+/* Month 5 / Phase 92: Driver registration inspection for Device Manager */
+uint32_t driver_get_count(void);
+const driver_t* driver_get_by_index(uint32_t index);
 
 #endif

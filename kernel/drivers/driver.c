@@ -23,3 +23,14 @@ void driver_init_all(driver_phase_t phase) {
         d->init();
     }
 }
+
+uint32_t driver_get_count(void) {
+    return (uint32_t)(__drivers_end - __drivers_start);
+}
+
+const driver_t* driver_get_by_index(uint32_t index) {
+    if (index >= (uint32_t)(__drivers_end - __drivers_start)) {
+        return NULL;
+    }
+    return &__drivers_start[index];
+}

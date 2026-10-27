@@ -317,6 +317,14 @@ ASSERTIONS: list[Assertion] = [
               r"settings-selftest. PASS: Service Manager graphical presentation on BufferSurface32",
               "Month 4 Server & admin UI: userland/settings-rs/settings.rs - "
               "Service Manager live dashboard presentation on 32-bit framebuffer surface"),
+    Assertion("device_manager_panel_passed",
+              r"settings-selftest. PASS: Device Manager hardware query and driver registration",
+              "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
+              "graphical device manager panel querying registered drivers and connected hardware via SYS_DEV_INFO"),
+    Assertion("device_manager_rendering_passed",
+              r"settings-selftest. PASS: Device Manager graphical presentation on BufferSurface32",
+              "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
+              "Device Manager hardware tree and registered drivers presentation on 32-bit framebuffer surface"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",
@@ -452,6 +460,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("driver_locks_selftest",
               r"Kernel-side Rust per-driver locking self-test.*result=0",
               "Month 5: fine-grained per-driver locking in Rust replaces coarse filesystem locks"),
+    Assertion("kernel_devman_selftest",
+              r"Kernel-side Rust Device Manager self-test.*result=0",
+              "Month 5 Power-user & system apps: kernel-side Rust device manager querying drivers and hardware telemetry"),
     Assertion("atomic_os_update_status",
               r"Atomic OS update: running on Slot [AB]",
               "Month 6: atomic OS update engine verified active boot slot state"),

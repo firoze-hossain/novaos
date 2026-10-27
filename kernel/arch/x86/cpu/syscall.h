@@ -674,6 +674,10 @@
  * and queries live service status and requests service control actions (restart/stop/start). */
 #define SYS_SERVICE_STATUS 82
 
+/* Month 5 / Phase 92: Device manager and hardware query (see nova_dev_abi.h).
+ * SYS_DEV_INFO queries registered kernel drivers and connected NVMe/USB/Wi-Fi/PCI hardware. */
+#define SYS_DEV_INFO       83
+
 /* Month 6 / Phase 98: Full kernel security audit helper prototypes */
 struct process;
 bool process_has_capability(const struct process* p, const char* filename);

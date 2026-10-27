@@ -57,6 +57,7 @@ mod driver_locks;
 mod atomic_update;
 mod disk_installer;
 mod services;
+mod devman;
 
 use core::panic::PanicInfo;
 

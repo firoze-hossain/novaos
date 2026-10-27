@@ -44,7 +44,7 @@ fn panic(_info: &PanicInfo) -> ! {
     }
 }
 
-pub const MAX_PANELS: usize = 5;
+pub const MAX_PANELS: usize = 6;
 pub const FILE_IO_BUF_LEN: usize = 4096;
 
 static mut FILE_IO_BUF: [u8; FILE_IO_BUF_LEN] = [0; FILE_IO_BUF_LEN];
@@ -129,6 +129,37 @@ pub fn format_ip_cidr(ip: u32, mask: u32, out: &mut [u8]) -> usize {
     let prefix = mask_to_prefix_len(mask);
     cur += format_u32(prefix, &mut out[cur..]);
     cur
+}
+
+pub fn format_hex16(val: u16, out: &mut [u8]) -> usize {
+    if out.len() < 4 {
+        return 0;
+    }
+    let hex_chars = b"0123456789ABCDEF";
+    out[0] = hex_chars[((val >> 12) & 0xF) as usize];
+    out[1] = hex_chars[((val >> 8) & 0xF) as usize];
+    out[2] = hex_chars[((val >> 4) & 0xF) as usize];
+    out[3] = hex_chars[(val & 0xF) as usize];
+    4
+}
+
+pub fn format_hex32(val: u32, out: &mut [u8]) -> usize {
+    if out.len() < 8 {
+        return 0;
+    }
+    let hex_chars = b"0123456789ABCDEF";
+    for i in 0..8 {
+        out[i] = hex_chars[((val >> ((7 - i) * 4)) & 0xF) as usize];
+    }
+    8
+}
+
+pub fn str_from_u8_nul(bytes: &[u8]) -> &str {
+    let mut len = 0;
+    while len < bytes.len() && bytes[len] != 0 {
+        len += 1;
+    }
+    core::str::from_utf8(&bytes[..len]).unwrap_or("")
 }
 
 // ===========================================================================
@@ -1802,6 +1833,214 @@ impl DisplayConfig {
 }
 
 // ===========================================================================
+// Device Manager Data Models & Helpers (Month 5 Power-user & System Apps)
+// ===========================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceViewMode {
+    HardwareTree = 0,
+    DriverTable = 1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceCategoryFilter {
+    All = 0,
+    Storage = 1,
+    Network = 2,
+    Usb = 3,
+    Display = 4,
+    Audio = 5,
+    Input = 6,
+    System = 7,
+}
+
+impl DeviceCategoryFilter {
+    pub fn all() -> [DeviceCategoryFilter; 8] {
+        [
+            DeviceCategoryFilter::All,
+            DeviceCategoryFilter::Storage,
+            DeviceCategoryFilter::Network,
+            DeviceCategoryFilter::Usb,
+            DeviceCategoryFilter::Display,
+            DeviceCategoryFilter::Audio,
+            DeviceCategoryFilter::Input,
+            DeviceCategoryFilter::System,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            DeviceCategoryFilter::All     => "All",
+            DeviceCategoryFilter::Storage => "Storage",
+            DeviceCategoryFilter::Network => "Network",
+            DeviceCategoryFilter::Usb     => "USB",
+            DeviceCategoryFilter::Display => "Display",
+            DeviceCategoryFilter::Audio   => "Audio",
+            DeviceCategoryFilter::Input   => "Input",
+            DeviceCategoryFilter::System  => "System",
+        }
+    }
+}
+
+pub static mut GLOBAL_DRV_TABLE: ffi::NovaDriverTable = ffi::NovaDriverTable::new();
+pub static mut GLOBAL_DEV_TABLE: ffi::NovaDeviceTable = ffi::NovaDeviceTable::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceManager {
+    pub view_mode: DeviceViewMode,
+    pub category_filter: DeviceCategoryFilter,
+    pub selected_device_idx: usize,
+    pub selected_driver_idx: usize,
+    pub loaded: bool,
+    pub summary: ffi::NovaDeviceSummary,
+}
+
+impl DeviceManager {
+    pub const fn empty() -> Self {
+        DeviceManager {
+            view_mode: DeviceViewMode::HardwareTree,
+            category_filter: DeviceCategoryFilter::All,
+            selected_device_idx: 0,
+            selected_driver_idx: 0,
+            loaded: false,
+            summary: ffi::NovaDeviceSummary::new(),
+        }
+    }
+
+    pub fn new() -> Self {
+        let mut mgr = Self::empty();
+        let _ = mgr.sync_from_kernel();
+        mgr
+    }
+
+    pub fn sync_from_kernel(&mut self) -> bool {
+        let rc_sum = unsafe { ffi::sys_dev_get_summary(&mut self.summary) };
+        let rc_drv = unsafe { ffi::sys_dev_get_drivers(core::ptr::addr_of_mut!(GLOBAL_DRV_TABLE)) };
+        let rc_dev = unsafe { ffi::sys_dev_get_devices(core::ptr::addr_of_mut!(GLOBAL_DEV_TABLE)) };
+        self.loaded = rc_sum == 0 && rc_drv == 0 && rc_dev == 0;
+        self.loaded
+    }
+
+    pub fn device_table(&self) -> &ffi::NovaDeviceTable {
+        unsafe { &*core::ptr::addr_of!(GLOBAL_DEV_TABLE) }
+    }
+
+    pub fn driver_table(&self) -> &ffi::NovaDriverTable {
+        unsafe { &*core::ptr::addr_of!(GLOBAL_DRV_TABLE) }
+    }
+
+    pub fn driver_count(&self) -> usize {
+        (self.driver_table().count as usize).min(ffi::NOVA_DEV_MAX_DRIVERS)
+    }
+
+    pub fn device_count(&self) -> usize {
+        (self.device_table().count as usize).min(ffi::NOVA_DEV_MAX_DEVICES)
+    }
+
+    pub fn matches_filter(&self, dev: &ffi::NovaDeviceInfo) -> bool {
+        match self.category_filter {
+            DeviceCategoryFilter::All => true,
+            DeviceCategoryFilter::Storage => dev.category == ffi::NOVA_DEV_CAT_STORAGE,
+            DeviceCategoryFilter::Network => dev.category == ffi::NOVA_DEV_CAT_NETWORK,
+            DeviceCategoryFilter::Usb => dev.category == ffi::NOVA_DEV_CAT_USB,
+            DeviceCategoryFilter::Display => dev.category == ffi::NOVA_DEV_CAT_DISPLAY,
+            DeviceCategoryFilter::Audio => dev.category == ffi::NOVA_DEV_CAT_AUDIO,
+            DeviceCategoryFilter::Input => dev.category == ffi::NOVA_DEV_CAT_INPUT,
+            DeviceCategoryFilter::System => dev.category == ffi::NOVA_DEV_CAT_SYSTEM,
+        }
+    }
+
+    pub fn filtered_device_count(&self) -> usize {
+        let mut count = 0;
+        let table = self.device_table();
+        let n = (table.count as usize).min(ffi::NOVA_DEV_MAX_DEVICES);
+        for i in 0..n {
+            if self.matches_filter(&table.devices[i]) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn filtered_device_at(&self, filtered_idx: usize) -> Option<(usize, &ffi::NovaDeviceInfo)> {
+        let mut curr = 0;
+        let table = self.device_table();
+        let n = (table.count as usize).min(ffi::NOVA_DEV_MAX_DEVICES);
+        for i in 0..n {
+            if self.matches_filter(&table.devices[i]) {
+                if curr == filtered_idx {
+                    return Some((i, &table.devices[i]));
+                }
+                curr += 1;
+            }
+        }
+        None
+    }
+
+    pub fn selected_device(&self) -> Option<&ffi::NovaDeviceInfo> {
+        let table = self.device_table();
+        let n = (table.count as usize).min(ffi::NOVA_DEV_MAX_DEVICES);
+        if self.selected_device_idx < n {
+            Some(&table.devices[self.selected_device_idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn selected_driver(&self) -> Option<&ffi::NovaDriverInfo> {
+        let table = self.driver_table();
+        let n = (table.count as usize).min(ffi::NOVA_DEV_MAX_DRIVERS);
+        if self.selected_driver_idx < n {
+            Some(&table.drivers[self.selected_driver_idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn category_name(cat: u32) -> &'static str {
+        match cat {
+            ffi::NOVA_DEV_CAT_STORAGE => "Storage",
+            ffi::NOVA_DEV_CAT_NETWORK => "Network",
+            ffi::NOVA_DEV_CAT_USB     => "USB",
+            ffi::NOVA_DEV_CAT_DISPLAY => "Display",
+            ffi::NOVA_DEV_CAT_AUDIO   => "Audio",
+            ffi::NOVA_DEV_CAT_INPUT   => "Input",
+            ffi::NOVA_DEV_CAT_SYSTEM  => "System",
+            _                         => "Other",
+        }
+    }
+
+    pub fn bus_name(bus: u32) -> &'static str {
+        match bus {
+            ffi::NOVA_BUS_PCI    => "PCI",
+            ffi::NOVA_BUS_ISA    => "ISA",
+            ffi::NOVA_BUS_USB    => "USB",
+            ffi::NOVA_BUS_VIRTIO => "VirtIO",
+            ffi::NOVA_BUS_SYSTEM => "System",
+            _                    => "Bus",
+        }
+    }
+
+    pub fn status_str(status: u32) -> &'static str {
+        match status {
+            ffi::NOVA_DEV_STATUS_ONLINE  => "ONLINE",
+            ffi::NOVA_DEV_STATUS_STANDBY => "STANDBY",
+            ffi::NOVA_DEV_STATUS_OFFLINE => "OFFLINE",
+            _                            => "UNKNOWN",
+        }
+    }
+
+    pub fn status_color(&self, status: u32, palette: &ThemePalette) -> Color {
+        match status {
+            ffi::NOVA_DEV_STATUS_ONLINE  => palette.status_success,
+            ffi::NOVA_DEV_STATUS_STANDBY => palette.status_warning,
+            ffi::NOVA_DEV_STATUS_OFFLINE => palette.status_danger,
+            _                            => palette.text_muted,
+        }
+    }
+}
+
+// ===========================================================================
 // Plugin Panel Enumeration
 // ===========================================================================
 
@@ -1812,16 +2051,18 @@ pub enum PanelKind {
     Services = 2,
     Firewall = 3,
     Display = 4,
+    Devices = 5,
 }
 
 impl PanelKind {
-    pub fn all() -> [PanelKind; 5] {
+    pub fn all() -> [PanelKind; 6] {
         [
             PanelKind::System,
             PanelKind::Users,
             PanelKind::Services,
             PanelKind::Firewall,
             PanelKind::Display,
+            PanelKind::Devices,
         ]
     }
 
@@ -1832,6 +2073,7 @@ impl PanelKind {
             PanelKind::Services => "Startup & Services",
             PanelKind::Firewall => "Network & Firewall",
             PanelKind::Display  => "Display & Appearance",
+            PanelKind::Devices  => "Device Manager",
         }
     }
 
@@ -1842,6 +2084,7 @@ impl PanelKind {
             PanelKind::Services => "Service supervisor daemons, restart policies, and dependency tree (SERVICES.CFG)",
             PanelKind::Firewall => "Stateful packet filter rules, policies (SYS_FW_*), and adapter addressing",
             PanelKind::Display  => "Theme palettes, compositor visual effects, and cursor bitmap styles",
+            PanelKind::Devices  => "Hardware tree, PCI/ISA buses, NVMe/USB/Wi-Fi devices and registered kernel drivers",
         }
     }
 
@@ -1852,6 +2095,7 @@ impl PanelKind {
             PanelKind::Services => "SVC",
             PanelKind::Firewall => "FW",
             PanelKind::Display  => "DISP",
+            PanelKind::Devices  => "DEV",
         }
     }
 }
@@ -1898,6 +2142,12 @@ pub enum SettingsAction {
     FirewallSyncKernel,
     DisplayCycleTheme,
     DisplayCycleCursor,
+    // Device Manager Actions
+    DevicesToggleViewMode(DeviceViewMode),
+    DevicesSelectCategory(DeviceCategoryFilter),
+    DevicesSelectDevice(usize),
+    DevicesSelectDriver(usize),
+    DevicesRescan,
 }
 
 // ===========================================================================
@@ -1911,6 +2161,7 @@ pub struct SettingsApp {
     pub users_ui: UsersUiState,
     pub services_cfg: ServicesConfig,
     pub service_mgr: ServiceManager,
+    pub device_mgr: DeviceManager,
     pub firewall_cfg: FirewallConfig,
     pub network_cfg: NetworkConfig,
     pub display_cfg: DisplayConfig,
@@ -1933,6 +2184,7 @@ impl SettingsApp {
             users_ui: UsersUiState::new(),
             services_cfg: ServicesConfig::empty(),
             service_mgr: ServiceManager::empty(),
+            device_mgr: DeviceManager::empty(),
             firewall_cfg: FirewallConfig::empty(),
             network_cfg: NetworkConfig::empty(),
             display_cfg: DisplayConfig::empty(),
@@ -1952,6 +2204,7 @@ impl SettingsApp {
         self.users_ui = UsersUiState::new();
         self.services_cfg = ServicesConfig::new();
         self.service_mgr = ServiceManager::new();
+        self.device_mgr = DeviceManager::new();
         self.firewall_cfg = FirewallConfig::new();
         self.network_cfg = NetworkConfig::new();
         self.display_cfg = DisplayConfig::new();
@@ -2156,6 +2409,12 @@ impl SettingsApp {
                 self.dirty = false;
                 true
             }
+            PanelKind::Devices => {
+                self.device_mgr.sync_from_kernel();
+                self.set_status("Device inventory synchronized");
+                self.dirty = false;
+                true
+            }
         }
     }
 
@@ -2165,6 +2424,7 @@ impl SettingsApp {
         self.load_services_cfg();
         self.load_firewall_cfg();
         self.service_mgr.sync_from_kernel();
+        self.device_mgr.sync_from_kernel();
         self.dirty = false;
     }
 
@@ -2241,6 +2501,73 @@ impl SettingsApp {
                 let cur_y = content_y + 112;
                 if point_in_rect(px, py, content_x, cur_y, 130, 26) {
                     return Some(SettingsAction::DisplayCycleCursor);
+                }
+            }
+            PanelKind::Devices => {
+                return self.button_at_devices(px, py, content_x, content_y);
+            }
+        }
+
+        None
+    }
+
+    fn button_at_devices(&self, px: i32, py: i32, content_x: i32, content_y: i32) -> Option<SettingsAction> {
+        let subtab0_w = 110;
+        let subtab1_w = 130;
+        let subtab_h = 24;
+        // Subtab 0: Hardware Tree
+        if point_in_rect(px, py, content_x, content_y, subtab0_w, subtab_h) {
+            if self.device_mgr.view_mode != DeviceViewMode::HardwareTree {
+                return Some(SettingsAction::DevicesToggleViewMode(DeviceViewMode::HardwareTree));
+            }
+        }
+        // Subtab 1: Registered Drivers
+        if point_in_rect(px, py, content_x + subtab0_w + 6, content_y, subtab1_w, subtab_h) {
+            if self.device_mgr.view_mode != DeviceViewMode::DriverTable {
+                return Some(SettingsAction::DevicesToggleViewMode(DeviceViewMode::DriverTable));
+            }
+        }
+
+        // Rescan button at content_x + 380, content_y, 70, 22
+        if point_in_rect(px, py, content_x + 380, content_y, 70, 22) {
+            return Some(SettingsAction::DevicesRescan);
+        }
+
+        match self.device_mgr.view_mode {
+            DeviceViewMode::HardwareTree => {
+                // Category Filter Chips at content_y + 64, height 20, 8 chips
+                let chip_y = content_y + 64;
+                let cats = DeviceCategoryFilter::all();
+                for (i, &cat) in cats.iter().enumerate() {
+                    let cx = content_x + (i as i32 * 56);
+                    if point_in_rect(px, py, cx, chip_y, 52, 20) {
+                        return Some(SettingsAction::DevicesSelectCategory(cat));
+                    }
+                }
+
+                // Table rows at content_y + 108, row_h 20
+                let row_h = 20;
+                let list_y = content_y + 108;
+                let vis_count = self.device_mgr.filtered_device_count().min(5);
+                for r in 0..vis_count {
+                    let ry = list_y + (r as i32 * row_h);
+                    if point_in_rect(px, py, content_x, ry, 455, row_h) {
+                        if let Some((orig_idx, _)) = self.device_mgr.filtered_device_at(r) {
+                            return Some(SettingsAction::DevicesSelectDevice(orig_idx));
+                        }
+                    }
+                }
+            }
+            DeviceViewMode::DriverTable => {
+                // Driver table rows at content_y + 108, row_h 20
+                let row_h = 20;
+                let list_y = content_y + 108;
+                let drv_count = self.device_mgr.driver_count().min(5);
+                for r in 0..drv_count {
+                    let ry = list_y + (r as i32 * row_h);
+                    if point_in_rect(px, py, content_x, ry, 455, row_h) {
+                        return Some(SettingsAction::DevicesSelectDriver(r));
+                    }
                 }
             }
         }
@@ -2791,6 +3118,47 @@ impl SettingsApp {
                     self.dirty = true;
                     self.set_status("Cursor theme changed");
                 }
+                SettingsAction::DevicesToggleViewMode(mode) => {
+                    self.device_mgr.view_mode = mode;
+                    self.dirty = true;
+                    self.set_status(if mode == DeviceViewMode::HardwareTree {
+                        "Hardware Tree view"
+                    } else {
+                        "Registered Drivers view"
+                    });
+                }
+                SettingsAction::DevicesSelectCategory(cat) => {
+                    self.device_mgr.category_filter = cat;
+                    if let Some((first_idx, _)) = self.device_mgr.filtered_device_at(0) {
+                        self.device_mgr.selected_device_idx = first_idx;
+                    }
+                    self.dirty = true;
+                    self.set_status("Filtered device category");
+                }
+                SettingsAction::DevicesSelectDevice(idx) => {
+                    let n = self.device_mgr.device_count();
+                    if idx < n {
+                        self.device_mgr.selected_device_idx = idx;
+                        self.dirty = true;
+                        self.set_status("Selected device");
+                    }
+                }
+                SettingsAction::DevicesSelectDriver(idx) => {
+                    let n = self.device_mgr.driver_count();
+                    if idx < n {
+                        self.device_mgr.selected_driver_idx = idx;
+                        self.dirty = true;
+                        self.set_status("Selected driver");
+                    }
+                }
+                SettingsAction::DevicesRescan => {
+                    if self.device_mgr.sync_from_kernel() {
+                        self.set_status("Hardware inventory re-scanned and synchronized");
+                    } else {
+                        self.set_status("Device rescan completed");
+                    }
+                    self.dirty = true;
+                }
             }
         }
     }
@@ -2942,6 +3310,10 @@ impl SettingsApp {
 
                 ui::font::draw_text_font(s, content_x, content_y + 154, "Resolution: 1024x768 @ 32bpp linear framebuffer", palette.text_muted, &f_small);
             }
+
+            PanelKind::Devices => {
+                self.render_devices_panel(s, content_x, content_y, viewport, &palette, &font, &f_small);
+            }
         }
 
         // 5. Bottom Status Bar (h = 24)
@@ -2951,6 +3323,349 @@ impl SettingsApp {
         s.fill_rect(Rect::new(hdr_x, stat_rect.y, hdr_w, 1), palette.border_subtle);
 
         ui::font::draw_text_font(s, stat_rect.x + 12, stat_rect.y + 5, self.status_str(), palette.text_secondary, &f_small);
+    }
+
+    fn render_devices_panel<S: Surface + ?Sized>(
+        &self,
+        s: &mut S,
+        content_x: i32,
+        content_y: i32,
+        _viewport: Rect,
+        palette: &ThemePalette,
+        font: &Font,
+        f_small: &Font,
+    ) {
+        // 1. Subtab Switcher: [Hardware Tree] vs [Registered Drivers] + [Rescan]
+        let subtab0_w = 110;
+        let subtab1_w = 130;
+        let subtab_h = 24;
+
+        // Subtab 0: Hardware Tree
+        let is_tree = self.device_mgr.view_mode == DeviceViewMode::HardwareTree;
+        let st0_rect = Rect::new(content_x, content_y, subtab0_w, subtab_h);
+        if is_tree {
+            ui::draw::draw_rounded_rect(s, st0_rect, RADIUS_XS, palette.accent_primary.darken(35));
+            ui::draw::draw_rect_outline(s, st0_rect, 1, palette.accent_primary);
+            let sz = f_small.measure_str("Hardware Tree");
+            ui::font::draw_text_font(s, st0_rect.x + (st0_rect.w - sz.w) / 2, st0_rect.y + 4, "Hardware Tree", Color::WHITE, f_small);
+        } else {
+            ui::draw::draw_rounded_rect(s, st0_rect, RADIUS_XS, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, st0_rect, 1, palette.border_subtle);
+            let sz = f_small.measure_str("Hardware Tree");
+            ui::font::draw_text_font(s, st0_rect.x + (st0_rect.w - sz.w) / 2, st0_rect.y + 4, "Hardware Tree", palette.text_secondary, f_small);
+        }
+
+        // Subtab 1: Registered Drivers
+        let is_drv = self.device_mgr.view_mode == DeviceViewMode::DriverTable;
+        let st1_rect = Rect::new(content_x + subtab0_w + 6, content_y, subtab1_w, subtab_h);
+        if is_drv {
+            ui::draw::draw_rounded_rect(s, st1_rect, RADIUS_XS, palette.accent_primary.darken(35));
+            ui::draw::draw_rect_outline(s, st1_rect, 1, palette.accent_primary);
+            let sz = f_small.measure_str("Registered Drivers");
+            ui::font::draw_text_font(s, st1_rect.x + (st1_rect.w - sz.w) / 2, st1_rect.y + 4, "Registered Drivers", Color::WHITE, f_small);
+        } else {
+            ui::draw::draw_rounded_rect(s, st1_rect, RADIUS_XS, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, st1_rect, 1, palette.border_subtle);
+            let sz = f_small.measure_str("Registered Drivers");
+            ui::font::draw_text_font(s, st1_rect.x + (st1_rect.w - sz.w) / 2, st1_rect.y + 4, "Registered Drivers", palette.text_secondary, f_small);
+        }
+
+        // [Rescan] button
+        let rescan_rect = Rect::new(content_x + 380, content_y, 70, 22);
+        ui::draw::draw_rounded_rect(s, rescan_rect, RADIUS_XS, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, rescan_rect, 1, palette.accent_primary);
+        ui::font::draw_text_font(s, rescan_rect.x + 14, rescan_rect.y + 4, "Rescan", palette.accent_primary, f_small);
+
+        // 2. Telemetry Summary Cards Banner (content_y + 28)
+        let card_y = content_y + 28;
+        let card_w = 108;
+        let card_h = 32;
+
+        // Card 0: NVMe Storage
+        let c0 = Rect::new(content_x, card_y, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, c0, RADIUS_XS, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, c0, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, c0.x + 6, c0.y + 3, "NVMe Storage", palette.text_secondary, f_small);
+        if self.device_mgr.summary.nvme_present != 0 {
+            ui::font::draw_text_font(s, c0.x + 6, c0.y + 16, "Active (PCI 0:9.0)", palette.status_success, f_small);
+        } else {
+            ui::font::draw_text_font(s, c0.x + 6, c0.y + 16, "Not Detected", palette.text_muted, f_small);
+        }
+
+        // Card 1: xHCI USB 3.0
+        let c1 = Rect::new(content_x + 114, card_y, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, c1, RADIUS_XS, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, c1.x + 6, c1.y + 3, "xHCI USB 3.0", palette.text_secondary, f_small);
+        if self.device_mgr.summary.xhci_present != 0 {
+            ui::font::draw_text_font(s, c1.x + 6, c1.y + 16, "Active (8 Ports)", palette.status_info, f_small);
+        } else {
+            ui::font::draw_text_font(s, c1.x + 6, c1.y + 16, "Not Detected", palette.text_muted, f_small);
+        }
+
+        // Card 2: Wi-Fi 802.11
+        let c2 = Rect::new(content_x + 228, card_y, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, c2, RADIUS_XS, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, c2.x + 6, c2.y + 3, "Wi-Fi 802.11", palette.text_secondary, f_small);
+        if self.device_mgr.summary.wifi_present != 0 {
+            ui::font::draw_text_font(s, c2.x + 6, c2.y + 16, "Active (802.11)", palette.status_success, f_small);
+        } else {
+            ui::font::draw_text_font(s, c2.x + 6, c2.y + 16, "Not Detected", palette.text_muted, f_small);
+        }
+
+        // Card 3: Kernel Drivers & Devices
+        let c3 = Rect::new(content_x + 342, card_y, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, c3, RADIUS_XS, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, c3.x + 6, c3.y + 3, "Drivers & HW", palette.text_secondary, f_small);
+        let mut d_buf = [0u8; 32];
+        let mut d_len = 0;
+        d_len += format_u32(self.device_mgr.summary.total_drivers, &mut d_buf[d_len..]);
+        d_len += copy_bytes(&mut d_buf[d_len..], b" Drv | ");
+        d_len += format_u32(self.device_mgr.summary.total_devices, &mut d_buf[d_len..]);
+        d_len += copy_bytes(&mut d_buf[d_len..], b" Dev");
+        if let Ok(d_str) = core::str::from_utf8(&d_buf[..d_len]) {
+            ui::font::draw_text_font(s, c3.x + 6, c3.y + 16, d_str, palette.accent_primary, f_small);
+        }
+
+        match self.device_mgr.view_mode {
+            DeviceViewMode::HardwareTree => {
+                // 3. Category Filter Chips (content_y + 64)
+                let chip_y = content_y + 64;
+                let cats = DeviceCategoryFilter::all();
+                for (i, &cat) in cats.iter().enumerate() {
+                    let cx = content_x + (i as i32 * 56);
+                    let chip_rect = Rect::new(cx, chip_y, 52, 20);
+                    let is_sel = self.device_mgr.category_filter == cat;
+                    if is_sel {
+                        ui::draw::draw_rounded_rect(s, chip_rect, RADIUS_XS, palette.accent_primary.darken(35));
+                        ui::draw::draw_rect_outline(s, chip_rect, 1, palette.accent_primary);
+                        let sz = f_small.measure_str(cat.label());
+                        ui::font::draw_text_font(s, chip_rect.x + (chip_rect.w - sz.w) / 2, chip_rect.y + 2, cat.label(), Color::WHITE, f_small);
+                    } else {
+                        ui::draw::draw_rounded_rect(s, chip_rect, RADIUS_XS, palette.surface_raised);
+                        ui::draw::draw_rect_outline(s, chip_rect, 1, palette.border_subtle);
+                        let sz = f_small.measure_str(cat.label());
+                        ui::font::draw_text_font(s, chip_rect.x + (chip_rect.w - sz.w) / 2, chip_rect.y + 2, cat.label(), palette.text_secondary, f_small);
+                    }
+                }
+
+                // 4. Hardware Table Header (content_y + 88)
+                let tbl_y = content_y + 88;
+                s.fill_rect(Rect::new(content_x, tbl_y, 450, 18), palette.surface_raised);
+                ui::font::draw_text_font(s, content_x + 6, tbl_y + 2, "Status", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 58, tbl_y + 2, "Device Name", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 220, tbl_y + 2, "Bus / Loc", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 300, tbl_y + 2, "Driver", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 375, tbl_y + 2, "ID (Ven:Dev)", palette.text_muted, f_small);
+
+                // 5. Hardware Rows (content_y + 108)
+                let row_h = 20;
+                let list_y = content_y + 108;
+                let vis_count = self.device_mgr.filtered_device_count().min(5);
+                for r in 0..vis_count {
+                    if let Some((orig_idx, dev)) = self.device_mgr.filtered_device_at(r) {
+                        let ry = list_y + (r as i32 * row_h);
+                        let r_rect = Rect::new(content_x, ry, 450, row_h);
+                        let is_sel = orig_idx == self.device_mgr.selected_device_idx;
+                        if is_sel {
+                            s.fill_rect(r_rect, palette.surface_raised.lighten(15));
+                            ui::draw::draw_rect_outline(s, r_rect, 1, palette.accent_primary);
+                        } else if r % 2 == 1 {
+                            s.fill_rect(r_rect, palette.surface_raised.darken(10));
+                        }
+
+                        // Status badge pill
+                        let pill_rect = Rect::new(content_x + 4, ry + 2, 48, 16);
+                        let s_col = self.device_mgr.status_color(dev.status, palette);
+                        ui::draw::draw_rounded_rect(s, pill_rect, RADIUS_XS, s_col.darken(35));
+                        ui::draw::draw_rect_outline(s, pill_rect, 1, s_col);
+                        let st_str = DeviceManager::status_str(dev.status);
+                        let st_sz = f_small.measure_str(st_str);
+                        ui::font::draw_text_font(s, pill_rect.x + (pill_rect.w - st_sz.w) / 2, pill_rect.y + 1, st_str, Color::WHITE, f_small);
+
+                        // Device Name
+                        let d_name = str_from_u8_nul(&dev.name);
+                        ui::font::draw_text_font(s, content_x + 58, ry + 2, d_name, palette.text_primary, f_small);
+
+                        // Bus / Location
+                        let mut bus_buf = [0u8; 32];
+                        let mut b_len = 0;
+                        if dev.bus_type == ffi::NOVA_BUS_PCI {
+                            b_len += copy_bytes(&mut bus_buf[b_len..], b"PCI ");
+                            b_len += format_u32(dev.pci_bus as u32, &mut bus_buf[b_len..]);
+                            if b_len < bus_buf.len() { bus_buf[b_len] = b':'; b_len += 1; }
+                            b_len += format_u32(dev.pci_dev as u32, &mut bus_buf[b_len..]);
+                            if b_len < bus_buf.len() { bus_buf[b_len] = b'.'; b_len += 1; }
+                            b_len += format_u32(dev.pci_func as u32, &mut bus_buf[b_len..]);
+                        } else if dev.bus_type == ffi::NOVA_BUS_ISA {
+                            b_len += copy_bytes(&mut bus_buf[b_len..], b"ISA IRQ");
+                            b_len += format_u32(dev.irq as u32, &mut bus_buf[b_len..]);
+                        } else {
+                            b_len += copy_bytes(&mut bus_buf[b_len..], DeviceManager::bus_name(dev.bus_type).as_bytes());
+                        }
+                        if let Ok(b_str) = core::str::from_utf8(&bus_buf[..b_len]) {
+                            ui::font::draw_text_font(s, content_x + 220, ry + 2, b_str, palette.text_secondary, f_small);
+                        }
+
+                        // Bound driver
+                        let drv_str = str_from_u8_nul(&dev.driver_name);
+                        ui::font::draw_text_font(s, content_x + 300, ry + 2, drv_str, palette.accent_primary, f_small);
+
+                        // Vendor:Device
+                        if dev.vendor_id != 0 {
+                            let mut id_buf = [0u8; 10];
+                            let mut id_len = format_hex16(dev.vendor_id, &mut id_buf);
+                            id_buf[id_len] = b':'; id_len += 1;
+                            id_len += format_hex16(dev.device_id, &mut id_buf[id_len..]);
+                            if let Ok(id_str) = core::str::from_utf8(&id_buf[..id_len]) {
+                                ui::font::draw_text_font(s, content_x + 375, ry + 2, id_str, palette.text_muted, f_small);
+                            }
+                        }
+                    }
+                }
+
+                // 6. Hardware Inspector Card (content_y + 214)
+                let insp_rect = Rect::new(content_x, content_y + 214, 450, 88);
+                ui::draw::draw_rounded_rect(s, insp_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, insp_rect, 1, palette.border_subtle);
+
+                if let Some(dev) = self.device_mgr.selected_device() {
+                    let d_name = str_from_u8_nul(&dev.name);
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 6, "Hardware Inspector - ", palette.text_secondary, f_small);
+                    let off_title = f_small.measure_str("Hardware Inspector - ").w;
+                    ui::font::draw_text_font(s, insp_rect.x + 12 + off_title, insp_rect.y + 6, d_name, palette.accent_primary, f_small);
+
+                    // Row 1: Specifications
+                    let det_str = str_from_u8_nul(&dev.details);
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 24, "Specs: ", palette.text_muted, f_small);
+                    ui::font::draw_text_font(s, insp_rect.x + 60, insp_rect.y + 24, det_str, palette.text_primary, f_small);
+
+                    // Row 2: Driver Binding & Category
+                    let drv_str = str_from_u8_nul(&dev.driver_name);
+                    let cat_str = DeviceManager::category_name(dev.category);
+                    let st_str = DeviceManager::status_str(dev.status);
+                    let mut b_buf = [0u8; 96];
+                    let mut b_off = 0;
+                    b_off += copy_bytes(&mut b_buf[b_off..], b"Driver: ");
+                    b_off += copy_bytes(&mut b_buf[b_off..], drv_str.as_bytes());
+                    b_off += copy_bytes(&mut b_buf[b_off..], b" | Category: ");
+                    b_off += copy_bytes(&mut b_buf[b_off..], cat_str.as_bytes());
+                    b_off += copy_bytes(&mut b_buf[b_off..], b" | Status: ");
+                    b_off += copy_bytes(&mut b_buf[b_off..], st_str.as_bytes());
+                    if let Ok(b_str) = core::str::from_utf8(&b_buf[..b_off]) {
+                        ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 44, b_str, palette.text_secondary, f_small);
+                    }
+
+                    // Row 3: Bus & Resources
+                    let mut r_buf = [0u8; 96];
+                    let mut r_off = 0;
+                    r_off += copy_bytes(&mut r_buf[r_off..], b"Bus: ");
+                    r_off += copy_bytes(&mut r_buf[r_off..], DeviceManager::bus_name(dev.bus_type).as_bytes());
+                    if dev.vendor_id != 0 {
+                        r_off += copy_bytes(&mut r_buf[r_off..], b" (0x");
+                        r_off += format_hex16(dev.vendor_id, &mut r_buf[r_off..]);
+                        r_off += copy_bytes(&mut r_buf[r_off..], b":0x");
+                        r_off += format_hex16(dev.device_id, &mut r_buf[r_off..]);
+                        r_off += copy_bytes(&mut r_buf[r_off..], b")");
+                    }
+                    if dev.mmio_or_io != 0 {
+                        r_off += copy_bytes(&mut r_buf[r_off..], b" | Base: 0x");
+                        r_off += format_hex32(dev.mmio_or_io, &mut r_buf[r_off..]);
+                    }
+                    if dev.irq != 0 {
+                        r_off += copy_bytes(&mut r_buf[r_off..], b" | IRQ: ");
+                        r_off += format_u32(dev.irq as u32, &mut r_buf[r_off..]);
+                    }
+                    if let Ok(r_str) = core::str::from_utf8(&r_buf[..r_off]) {
+                        ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 64, r_str, palette.text_muted, f_small);
+                    }
+                } else {
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 34, "Select a device to view hardware details", palette.text_muted, f_small);
+                }
+            }
+            DeviceViewMode::DriverTable => {
+                // 3. Driver Table Title (content_y + 64)
+                let chip_y = content_y + 64;
+                ui::font::draw_text_font(s, content_x, chip_y + 2, "Registered Kernel Drivers (.drivers linker table)", palette.accent_primary, font);
+
+                // 4. Driver Table Header (content_y + 88)
+                let tbl_y = content_y + 88;
+                s.fill_rect(Rect::new(content_x, tbl_y, 450, 18), palette.surface_raised);
+                ui::font::draw_text_font(s, content_x + 8, tbl_y + 2, "Driver Name", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 140, tbl_y + 2, "Init Phase", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 280, tbl_y + 2, "Status", palette.text_muted, f_small);
+                ui::font::draw_text_font(s, content_x + 380, tbl_y + 2, "Flags", palette.text_muted, f_small);
+
+                // 5. Driver Rows (content_y + 108)
+                let row_h = 20;
+                let list_y = content_y + 108;
+                let drv_count = self.device_mgr.driver_count().min(5);
+                for r in 0..drv_count {
+                    let drv = &self.device_mgr.driver_table().drivers[r];
+                    let ry = list_y + (r as i32 * row_h);
+                    let r_rect = Rect::new(content_x, ry, 450, row_h);
+                    let is_sel = r == self.device_mgr.selected_driver_idx;
+                    if is_sel {
+                        s.fill_rect(r_rect, palette.surface_raised.lighten(15));
+                        ui::draw::draw_rect_outline(s, r_rect, 1, palette.accent_primary);
+                    } else if r % 2 == 1 {
+                        s.fill_rect(r_rect, palette.surface_raised.darken(10));
+                    }
+
+                    // Driver Name
+                    let d_name = str_from_u8_nul(&drv.name);
+                    ui::font::draw_text_font(s, content_x + 8, ry + 2, d_name, palette.text_primary, f_small);
+
+                    // Phase
+                    let phase_str = match drv.phase {
+                        1 => "Phase 1 (Core Timer)",
+                        2 => "Phase 2 (Subsystem/VFS)",
+                        3 => "Phase 3 (Device/PCI)",
+                        _ => "Phase Unknown",
+                    };
+                    ui::font::draw_text_font(s, content_x + 140, ry + 2, phase_str, palette.text_secondary, f_small);
+
+                    // Status
+                    ui::font::draw_text_font(s, content_x + 280, ry + 2, "Registered / Active", palette.status_success, f_small);
+
+                    // Flags
+                    let mut fl_buf = [0u8; 8];
+                    let fl_len = format_hex16(drv.flags as u16, &mut fl_buf);
+                    if let Ok(fl_str) = core::str::from_utf8(&fl_buf[..fl_len]) {
+                        ui::font::draw_text_font(s, content_x + 380, ry + 2, fl_str, palette.text_muted, f_small);
+                    }
+                }
+
+                // 6. Driver Inspector Card (content_y + 214)
+                let insp_rect = Rect::new(content_x, content_y + 214, 450, 88);
+                ui::draw::draw_rounded_rect(s, insp_rect, RADIUS_XS, palette.surface_raised);
+                ui::draw::draw_rect_outline(s, insp_rect, 1, palette.border_subtle);
+
+                if let Some(drv) = self.device_mgr.selected_driver() {
+                    let d_name = str_from_u8_nul(&drv.name);
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 6, "Driver Inspector - ", palette.text_secondary, f_small);
+                    let off_title = f_small.measure_str("Driver Inspector - ").w;
+                    ui::font::draw_text_font(s, insp_rect.x + 12 + off_title, insp_rect.y + 6, d_name, palette.accent_primary, f_small);
+
+                    // Details
+                    let phase_desc = match drv.phase {
+                        1 => "Executed at Early Boot before multitasking (PIT, APIC, IRQ)",
+                        2 => "Executed at Subsystem Initialization (VFS, PS/2 Human Interface)",
+                        3 => "Executed during Bus & Hardware Discovery (PCI, NVMe, USB, Wi-Fi)",
+                        _ => "Kernel Linker Registered Entry Point",
+                    };
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 24, "Role: ", palette.text_muted, f_small);
+                    ui::font::draw_text_font(s, insp_rect.x + 60, insp_rect.y + 24, phase_desc, palette.text_primary, f_small);
+
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 44, "Linker Section: .drivers | Table: DRIVER_REGISTER descriptor", palette.text_secondary, f_small);
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 64, "Status: Active in kernel memory space | Ring 0 Privileged Driver", palette.status_success, f_small);
+                } else {
+                    ui::font::draw_text_font(s, insp_rect.x + 12, insp_rect.y + 34, "Select a driver to view descriptor details", palette.text_muted, f_small);
+                }
+            }
+        }
     }
 
     fn render_services_panel<S: Surface + ?Sized>(
@@ -3819,21 +4534,24 @@ fn selftest_system_and_config(app: &mut SettingsApp) -> i32 {
 
     // Case 1: Plugin panel registration & category switching
     let all_panels = PanelKind::all();
-    let panels_ok = all_panels.len() == 5
+    let panels_ok = all_panels.len() == 6
         && all_panels[0] == PanelKind::System
         && all_panels[1] == PanelKind::Users
         && all_panels[2] == PanelKind::Services
         && all_panels[3] == PanelKind::Firewall
-        && all_panels[4] == PanelKind::Display;
+        && all_panels[4] == PanelKind::Display
+        && all_panels[5] == PanelKind::Devices;
 
     app.select_panel(PanelKind::Users);
     let select_users_ok = app.active_panel == PanelKind::Users;
     app.select_panel(PanelKind::Services);
     let select_services_ok = app.active_panel == PanelKind::Services;
+    app.select_panel(PanelKind::Devices);
+    let select_dev_ok = app.active_panel == PanelKind::Devices;
     app.select_panel(PanelKind::System);
     let select_sys_ok = app.active_panel == PanelKind::System;
 
-    if panels_ok && select_users_ok && select_services_ok && select_sys_ok {
+    if panels_ok && select_users_ok && select_services_ok && select_dev_ok && select_sys_ok {
         unsafe { ffi::sys_write(b"[settings-selftest] PASS: plugin panel architecture and switching\n\0".as_ptr()) };
     } else {
         unsafe { ffi::sys_write(b"[settings-selftest] FAIL: plugin panel architecture\n\0".as_ptr()) };
@@ -4295,6 +5013,81 @@ fn selftest_service_manager(app: &mut SettingsApp, surf: &mut BufferSurface32) -
     code
 }
 
+fn selftest_device_manager(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
+
+    // Case 21: Device Manager hardware query and driver registration
+    app.select_panel(PanelKind::Devices);
+    app.device_mgr.view_mode = DeviceViewMode::HardwareTree;
+    let query_ok = app.device_mgr.sync_from_kernel();
+    let drv_count_ok = app.device_mgr.driver_count() >= 10;
+    let dev_count_ok = app.device_mgr.device_count() >= 10;
+    let nvme_ok = app.device_mgr.summary.nvme_present != 0;
+    let xhci_ok = app.device_mgr.summary.xhci_present != 0;
+    let hw_ok = nvme_ok && xhci_ok;
+
+    if query_ok && drv_count_ok && dev_count_ok && hw_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: Device Manager hardware query and driver registration\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Device Manager hardware query/drivers\n\0".as_ptr()) };
+        code |= 1048576;
+    }
+
+    // Case 22: Device Manager mouse hit-testing and category filter
+    let vp = Rect::new(0, 0, 640, 480);
+    // Switch to DriverTable view (Subtab 1 at x: 292..422, y: 64..88)
+    app.on_left_click(300, 70, vp);
+    let driver_mode_ok = app.device_mgr.view_mode == DeviceViewMode::DriverTable;
+
+    // Switch back to HardwareTree view (Subtab 0 at x: 176..286, y: 64..88)
+    app.on_left_click(180, 70, vp);
+    let tree_mode_ok = app.device_mgr.view_mode == DeviceViewMode::HardwareTree;
+
+    // Filter by Storage (Category chip 1 at x: 176 + 56 = 232, y: 128..148)
+    app.on_left_click(240, 135, vp);
+    let storage_filter_ok = app.device_mgr.category_filter == DeviceCategoryFilter::Storage;
+    let storage_count_ok = app.device_mgr.filtered_device_count() >= 1;
+
+    // Filter by All (Category chip 0 at x: 176, y: 128..148)
+    app.on_left_click(180, 135, vp);
+    let all_filter_ok = app.device_mgr.category_filter == DeviceCategoryFilter::All;
+
+    // Select row 1 (NVMe is row 0, xHCI is row 1 at y: 172 + 20 = 192..212)
+    app.on_left_click(200, 195, vp);
+    let dev_sel_ok = app.device_mgr.selected_device_idx == 1;
+
+    // Trigger rescan button (x: 556..626, y: 64..86)
+    app.on_left_click(560, 70, vp);
+    let rescan_ok = app.device_mgr.loaded;
+
+    if driver_mode_ok && tree_mode_ok && storage_filter_ok && storage_count_ok && all_filter_ok && dev_sel_ok && rescan_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: Device Manager mouse hit-testing and category filter\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Device Manager hit-testing/filter\n\0".as_ptr()) };
+        code |= 2097152;
+    }
+
+    // Case 23: Device Manager graphical presentation on BufferSurface32
+    app.device_mgr.view_mode = DeviceViewMode::HardwareTree;
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let tree_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    app.device_mgr.view_mode = DeviceViewMode::DriverTable;
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+    let driver_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    if tree_pixels > 5000 && driver_pixels > 5000 {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: Device Manager graphical presentation on BufferSurface32\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: Device Manager graphical presentation\n\0".as_ptr()) };
+        code |= 4194304;
+    }
+
+    code
+}
+
 #[inline(never)]
 pub fn run_selftest() -> i32 {
     let mut code = 0;
@@ -4315,6 +5108,7 @@ pub fn run_selftest() -> i32 {
     code |= selftest_firewall_and_network(app, &mut surf);
     code |= selftest_users_and_permissions(app, &mut surf);
     code |= selftest_service_manager(app, &mut surf);
+    code |= selftest_device_manager(app, &mut surf);
 
     if code == 0 {
         unsafe { ffi::sys_write(b"[settings-selftest] all cases passed\n\0".as_ptr()) };
@@ -4736,5 +5530,71 @@ mod tests {
         app.render(&mut surf, Rect::new(0, 0, 640, 480));
         let non_zero_cfg = surf.buffer.iter().filter(|&&p| p != 0).count();
         assert!(non_zero_cfg > 5000, "Should render SERVICES.CFG config editor");
+    }
+
+    #[test]
+    fn test_device_manager_sync_and_filter() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut mgr = DeviceManager::new();
+        assert!(mgr.sync_from_kernel());
+        assert_eq!(mgr.driver_count(), 12);
+        assert_eq!(mgr.device_count(), 13);
+        assert_eq!(mgr.summary.nvme_present, 1);
+        assert_eq!(mgr.summary.xhci_present, 1);
+        assert_eq!(mgr.summary.wifi_present, 1);
+
+        // Check filter
+        mgr.category_filter = DeviceCategoryFilter::Storage;
+        assert_eq!(mgr.filtered_device_count(), 2);
+        let (_, dev0) = mgr.filtered_device_at(0).unwrap();
+        assert_eq!(str_from_u8_nul(&dev0.name), "NVMe Solid-State Drive");
+        assert_eq!(str_from_u8_nul(&dev0.driver_name), "nvme");
+
+        mgr.category_filter = DeviceCategoryFilter::Network;
+        assert_eq!(mgr.filtered_device_count(), 2);
+
+        mgr.category_filter = DeviceCategoryFilter::All;
+        assert_eq!(mgr.filtered_device_count(), 13);
+    }
+
+    #[test]
+    fn test_device_manager_hit_testing() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut app = SettingsApp::new();
+        app.select_panel(PanelKind::Devices);
+        let vp = Rect::new(0, 0, 640, 480);
+
+        // Switch to DriverTable
+        app.on_left_click(300, 70, vp);
+        assert_eq!(app.device_mgr.view_mode, DeviceViewMode::DriverTable);
+
+        // Switch to HardwareTree
+        app.on_left_click(180, 70, vp);
+        assert_eq!(app.device_mgr.view_mode, DeviceViewMode::HardwareTree);
+
+        // Select Storage filter
+        app.on_left_click(240, 135, vp);
+        assert_eq!(app.device_mgr.category_filter, DeviceCategoryFilter::Storage);
+    }
+
+    #[test]
+    fn test_device_manager_surface_rendering() {
+        unsafe { ffi::reset_mock_environment() };
+        let mut app = SettingsApp::new();
+        app.select_panel(PanelKind::Devices);
+
+        let mut buf = vec![0u32; 640 * 480];
+        let mut surf = BufferSurface32::new(&mut buf, 640, 480);
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+
+        let non_zero_tree = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_tree > 5000, "Should render Hardware Tree with telemetry cards");
+
+        // Switch to DriverTable view
+        app.device_mgr.view_mode = DeviceViewMode::DriverTable;
+        surf.buffer.fill(0);
+        app.render(&mut surf, Rect::new(0, 0, 640, 480));
+        let non_zero_drv = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_drv > 5000, "Should render Registered Drivers table");
     }
 }

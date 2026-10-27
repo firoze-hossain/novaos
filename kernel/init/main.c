@@ -675,6 +675,15 @@ void kernel_late_init(void) {
                    lock_res == 0 ? "OK" : "FAIL", lock_res);
     }
 
+    /* Month 5: Device Manager & Hardware Query subsystem self-test */
+    {
+        extern int rust_devman_selftest(void);
+        int devman_res = rust_devman_selftest();
+        kernel_log("[ %s ] Kernel-side Rust Device Manager self-test (driver table, "
+                   "PCI enumeration, NVMe/USB/Wi-Fi telemetry): result=%d\n",
+                   devman_res == 0 ? "OK" : "FAIL", devman_res);
+    }
+
     /* Month 6: Atomic OS update mechanism (safe apply, A/B boot slots, package signing, journal hooks) */
     {
         rust_os_update_init();

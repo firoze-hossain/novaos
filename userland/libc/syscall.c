@@ -579,5 +579,27 @@ int sys_service_get_action(nova_service_action_t* out) {
     return sys_service_status(NOVA_SVC_OP_GET_ACTION, (void*)out, (void*)0);
 }
 
+/* Month 5: Device manager and hardware query (SYS_DEV_INFO). */
+int sys_dev_info(unsigned int op, void* buf, unsigned int len) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(NOVA_SYS_DEV_INFO), "b"(op), "c"((unsigned int)buf), "d"(len)
+                      : "memory");
+    return r;
+}
+
+int sys_dev_get_summary(nova_device_summary_t* out) {
+    return sys_dev_info(NOVA_DEV_OP_GET_SUMMARY, (void*)out, sizeof(nova_device_summary_t));
+}
+
+int sys_dev_get_drivers(nova_driver_table_t* out) {
+    return sys_dev_info(NOVA_DEV_OP_GET_DRIVERS, (void*)out, sizeof(nova_driver_table_t));
+}
+
+int sys_dev_get_devices(nova_device_table_t* out) {
+    return sys_dev_info(NOVA_DEV_OP_GET_DEVICES, (void*)out, sizeof(nova_device_table_t));
+}
+
 
 

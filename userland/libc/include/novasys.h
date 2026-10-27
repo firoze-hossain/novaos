@@ -12,6 +12,7 @@
 #include "nova_klog_abi.h"
 #include "nova_pkgrepo_abi.h"
 #include "nova_svc_abi.h"
+#include "nova_dev_abi.h"
 
 /* Raw syscall numbers and wrappers - NovaOS's own convention (int
  * 0x80, EAX = number, EBX/ECX/EDX = up to three arguments), NOT
@@ -72,6 +73,8 @@
 #define SYS_OS_UPDATE   79
 #define SYS_CRASHDUMP_CTL 80
 #define SYS_DISK_INSTALL  81
+#define SYS_SERVICE_STATUS 82
+#define SYS_DEV_INFO       83
 
 #define DISK_INSTALL_OP_QUERY     1
 #define DISK_INSTALL_OP_DRY_RUN   2
@@ -459,5 +462,11 @@ int sys_service_query(nova_service_status_t* out);
 int sys_service_publish(const nova_service_status_t* status);
 int sys_service_control(unsigned int action, const char* name);
 int sys_service_get_action(nova_service_action_t* out);
+
+/* Month 5: Device manager and hardware query (SYS_DEV_INFO). */
+int sys_dev_info(unsigned int op, void* buf, unsigned int len);
+int sys_dev_get_summary(nova_device_summary_t* out);
+int sys_dev_get_drivers(nova_driver_table_t* out);
+int sys_dev_get_devices(nova_device_table_t* out);
 
 #endif
