@@ -684,6 +684,7 @@ void kernel_late_init(void) {
                    devman_res == 0 ? "OK" : "FAIL", devman_res);
     }
 
+
     /* Month 6: Atomic OS update mechanism (safe apply, A/B boot slots, package signing, journal hooks) */
     {
         rust_os_update_init();
@@ -1842,6 +1843,15 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                "sandbox (ring 3, capabilities: HELLO.TXT + gateway "
                "network access + spawn), unprivileged (ring 3, no "
                "capabilities)\n");
+
+    /* Month 5: Activity & Performance Monitor subsystem self-test (scheduler stats, PMM memory, process table) */
+    {
+        extern int rust_procman_selftest(void);
+        int proc_res = rust_procman_selftest();
+        kernel_log("[ %s ] Kernel-side Rust Activity Monitor self-test (scheduler stats, "
+                   "PMM memory telemetry, process table query): result=%d\n",
+                   proc_res == 0 ? "OK" : "FAIL", proc_res);
+    }
 
     scheduler_start(); /* never returns */
 }

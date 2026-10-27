@@ -58,6 +58,7 @@ mod atomic_update;
 mod disk_installer;
 mod services;
 mod devman;
+mod procman;
 
 use core::panic::PanicInfo;
 

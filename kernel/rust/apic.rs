@@ -870,6 +870,12 @@ pub extern "C" fn rust_smp_current_cpu_index() -> u8 {
     0xFF
 }
 
+#[no_mangle]
+pub extern "C" fn rust_smp_online_cpu_count() -> u32 {
+    let count = rust_smp_scaling_validate();
+    if count > 0 { count as u32 } else { 1 }
+}
+
 /// Phase 95: SMP scaling validation self-test and telemetry.
 /// Confirms Local APIC discovery, unique CPU index mappings without collisions,
 /// and that all online CPU slots are properly bounded within SCHED_MAX_CPUS.

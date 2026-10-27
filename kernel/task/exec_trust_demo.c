@@ -482,6 +482,19 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: KLOG.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 5 - Power-user & system apps: ACTMON.ELF --selftest.
+     * Proves system activity metrics, physical memory telemetry, process
+     * table queries, column sorting (CPU/Memory/PID), filtering, and
+     * zero-syscall BufferSurface32 rasterization from ring 3. */
+    static const char* const actmon_all[] = {"ACTMON.ELF", "--selftest"};
+    int pid_actmon = sys_exec_trusted("ACTMON.ELF", (const char**)actmon_all, 2);
+    int code_actmon = (pid_actmon >= 0) ? sys_wait(pid_actmon) : -1;
+    sys_write(pid_actmon >= 0 && code_actmon == 0
+                  ? "[sandbox] PASS: ACTMON.ELF --selftest - system activity monitoring, "
+                    "CPU/memory telemetry, process table query, and UI presentation all behaved correctly.\n"
+                  : "[sandbox] FAIL: ACTMON.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

@@ -26,6 +26,7 @@
 #include "../lib/string.h"
 #include "../lib/spinlock.h"
 #include "../include/kernel.h"
+#include "../../userland/libc/include/nova_proc_abi.h"
 
 extern void enter_usermode(void);
 /* Phase 27: see syscall_stub.asm - the exact tail of ordinary syscall
@@ -1002,6 +1003,45 @@ process_t* process_table_entry(int index) {
 
 int process_table_capacity(void) {
     return (int)rust_growtable_capacity(process_table_handle);
+}
+
+/* Month 5 / Phase 93: Process info accessor for Activity Monitor (nova_proc_abi.h). */
+bool process_entry_get_info(int index, void* out_proc_entry) {
+    if (index < 0 || out_proc_entry == NULL) {
+        return false;
+    }
+    process_t* p = process_table_entry(index);
+    if (p == NULL || p->state == PROCESS_UNUSED || p->state == PROCESS_ALLOCATING) {
+        return false;
+    }
+
+    nova_proc_entry_t* entry = (nova_proc_entry_t*)out_proc_entry;
+    entry->pid = (uint32_t)p->pid;
+
+    for (int i = 0; i < 32; i++) {
+        entry->name[i] = p->name[i];
+    }
+    entry->name[31] = '\0';
+
+    entry->state = (uint32_t)p->state;
+    entry->is_user = p->is_user ? 1 : 0;
+    entry->uid = p->uid;
+    entry->gid = p->gid;
+    entry->cpu_ticks = p->rl.cpu_ticks;
+    entry->cpu_percent = p->rl.win_used;
+    entry->mem_pages = p->rl.vm_peak_pages;
+
+    uint32_t heap_bytes = 0;
+    if (p->heap_mapped_end > 0x10000000) {
+        heap_bytes = p->heap_mapped_end - 0x10000000;
+    } else {
+        heap_bytes = p->rl.vm_peak_pages * 4096;
+    }
+    entry->mem_bytes = heap_bytes;
+    entry->throttled = p->rl.throttled ? 1 : 0;
+    entry->off_cpu = p->off_cpu;
+
+    return true;
 }
 
 process_t* process_current(void) {

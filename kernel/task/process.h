@@ -505,6 +505,9 @@ process_t* process_table_entry(int index);
  * table currently is. */
 int process_table_capacity(void);
 
+/* Month 5 / Phase 93: Process info accessor for Activity Monitor (nova_proc_abi.h). */
+bool process_entry_get_info(int index, void* out_proc_entry);
+
 /* Phase 47: sets a process's uid/gid directly - kernel-side only
  * (there is no syscall wrapper for this, deliberately; see
  * process.h's own comment on process_t's uid/gid fields for why an

@@ -678,6 +678,10 @@
  * SYS_DEV_INFO queries registered kernel drivers and connected NVMe/USB/Wi-Fi/PCI hardware. */
 #define SYS_DEV_INFO       83
 
+/* Month 5 / Phase 93: Activity and performance monitor query (see nova_proc_abi.h).
+ * SYS_PROC_INFO queries live CPU/memory metrics and scheduler process table telemetry. */
+#define SYS_PROC_INFO      84
+
 /* Month 6 / Phase 98: Full kernel security audit helper prototypes */
 struct process;
 bool process_has_capability(const struct process* p, const char* filename);

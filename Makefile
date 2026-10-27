@@ -467,6 +467,12 @@ fw-test:
 klog-test:
 	@sh tools/tests/run_klog_tests.sh
 
+# Month 5: Activity & performance monitor subsystem & graphical monitor app.
+# `actmon-test` runs the host suite for both kernel/rust/procman.rs and userland/actmon-rs/actmon.rs:
+# system activity metrics, physical memory stats, process table query, column sorting, and BufferSurface32 rendering.
+actmon-test:
+	@sh tools/tests/run_actmon_tests.sh
+
 # Phase 90: package-repository network protocol support, server side.
 # `pkgrepo-test` runs the Rust engine on the host: HTTP request parsing,
 # package verification, response formatting, and manifest index generation.
@@ -627,4 +633,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test clean setup check-prereqs help install-image test-custom-boot

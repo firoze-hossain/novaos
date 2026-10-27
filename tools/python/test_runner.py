@@ -366,6 +366,27 @@ ASSERTIONS: list[Assertion] = [
               r"klog-selftest. PASS: real-time keyword search and substring highlighting engine",
               "Month 4 Server & admin UI: userland/klog-rs/klog.rs - "
               "real-time keyword search and substring highlighting engine"),
+    Assertion("actmon_selftest_passed",
+              r"sandbox. PASS: ACTMON\.ELF --selftest - system activity monitoring, "
+              r"CPU/memory telemetry, process table query, and UI presentation all behaved correctly",
+              "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
+              "graphical activity and performance monitor app with live CPU/RAM telemetry, process table query, and sorting"),
+    Assertion("actmon_telemetry_passed",
+              r"actmon-selftest. PASS: system activity telemetry and physical RAM metrics",
+              "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
+              "SYS_PROC_INFO system activity telemetry and physical RAM metrics"),
+    Assertion("actmon_table_passed",
+              r"actmon-selftest. PASS: scheduler process table query and selected inspector entry",
+              "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
+              "scheduler process table query and selected inspector entry"),
+    Assertion("actmon_sorting_passed",
+              r"actmon-selftest. PASS: column sorting \(PID, CPU, Memory\) and category filtering",
+              "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
+              "column sorting and category filtering across process inventory"),
+    Assertion("actmon_rendering_passed",
+              r"actmon-selftest. PASS: zero-syscall BufferSurface32 graphical rasterization",
+              "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
+              "zero-syscall BufferSurface32 graphical rasterization and performance graphs"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "
@@ -463,6 +484,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("kernel_devman_selftest",
               r"Kernel-side Rust Device Manager self-test.*result=0",
               "Month 5 Power-user & system apps: kernel-side Rust device manager querying drivers and hardware telemetry"),
+    Assertion("kernel_procman_selftest",
+              r"Kernel-side Rust Activity Monitor self-test.*result=0",
+              "Month 5 Power-user & system apps: kernel-side Rust activity monitor querying scheduler stats, PMM memory, and process table"),
     Assertion("atomic_os_update_status",
               r"Atomic OS update: running on Slot [AB]",
               "Month 6: atomic OS update engine verified active boot slot state"),

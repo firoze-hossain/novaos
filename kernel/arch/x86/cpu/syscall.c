@@ -47,6 +47,7 @@
 #include "../../../userland/libc/include/nova_pkgrepo_abi.h"
 #include "../../../userland/libc/include/nova_svc_abi.h"
 #include "../../../userland/libc/include/nova_dev_abi.h"
+#include "../../../userland/libc/include/nova_proc_abi.h"
 #include "../../include/atomic_update.h"
 #include "../../include/crashdump.h"
 #include "../../include/disk_installer.h"
@@ -1494,6 +1495,47 @@ static void handle_dev_info(registers_t* regs) {
     regs->eax = (uint32_t)-22; /* -EINVAL */
 }
 
+/* Month 5 / Phase 93: Activity & performance monitor query (SYS_PROC_INFO). */
+extern int rust_proc_get_sysinfo(nova_sys_activity_t* out);
+extern int rust_proc_get_table(nova_proc_table_t* out);
+extern int rust_proc_get_entry(uint32_t pid, nova_proc_entry_t* out);
+
+static void handle_proc_info(registers_t* regs) {
+    uint32_t op = regs->ebx;
+    uint32_t arg0 = regs->ecx;
+    uint32_t buf_ptr = regs->edx;
+    process_t* cur = process_current();
+
+    if (op == NOVA_PROC_OP_GET_SYSINFO) {
+        if (!is_user_ptr_valid(cur, buf_ptr, sizeof(nova_sys_activity_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        regs->eax = (uint32_t)rust_proc_get_sysinfo((nova_sys_activity_t*)buf_ptr);
+        return;
+    }
+
+    if (op == NOVA_PROC_OP_GET_TABLE) {
+        if (!is_user_ptr_valid(cur, buf_ptr, sizeof(nova_proc_table_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        regs->eax = (uint32_t)rust_proc_get_table((nova_proc_table_t*)buf_ptr);
+        return;
+    }
+
+    if (op == NOVA_PROC_OP_GET_ENTRY) {
+        if (!is_user_ptr_valid(cur, buf_ptr, sizeof(nova_proc_entry_t), true)) {
+            regs->eax = (uint32_t)-14; /* -EFAULT */
+            return;
+        }
+        regs->eax = (uint32_t)rust_proc_get_entry(arg0, (nova_proc_entry_t*)buf_ptr);
+        return;
+    }
+
+    regs->eax = (uint32_t)-22; /* -EINVAL */
+}
+
 /* Phase 88: the firewall. Privilege (uid 0, and the MAC administrator for
  * anything that changes it) is decided in fw_sys_info()/fw_sys_ctl() from the
  * kernel's own record of the caller. */
@@ -2534,6 +2576,10 @@ void syscall_handler(registers_t* regs) {
 
         case SYS_DEV_INFO:
             handle_dev_info(regs);
+            break;
+
+        case SYS_PROC_INFO:
+            handle_proc_info(regs);
             break;
 
         case SYS_FB_INFO:

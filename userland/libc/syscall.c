@@ -601,5 +601,28 @@ int sys_dev_get_devices(nova_device_table_t* out) {
     return sys_dev_info(NOVA_DEV_OP_GET_DEVICES, (void*)out, sizeof(nova_device_table_t));
 }
 
+/* Month 5: Activity & performance monitor query (SYS_PROC_INFO). */
+int sys_proc_info(unsigned int op, unsigned int arg0, void* buf, unsigned int len) {
+    int result = NOVA_SYS_PROC_INFO;
+    __asm__ volatile ("int $0x80"
+                      : "+a"(result)
+                      : "b"(op), "c"(arg0), "d"(buf), "S"(len)
+                      : "memory", "cc");
+    return result;
+}
+
+int sys_proc_get_sysinfo(nova_sys_activity_t* out) {
+    return sys_proc_info(NOVA_PROC_OP_GET_SYSINFO, 0, (void*)out, sizeof(nova_sys_activity_t));
+}
+
+int sys_proc_get_table(nova_proc_table_t* out) {
+    return sys_proc_info(NOVA_PROC_OP_GET_TABLE, 0, (void*)out, sizeof(nova_proc_table_t));
+}
+
+int sys_proc_get_entry(unsigned int pid, nova_proc_entry_t* out) {
+    return sys_proc_info(NOVA_PROC_OP_GET_ENTRY, pid, (void*)out, sizeof(nova_proc_entry_t));
+}
+
+
 
 
