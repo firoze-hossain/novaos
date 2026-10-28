@@ -509,6 +509,20 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: INSTALL.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 6 - First impressions: CRASHREP.ELF --selftest.
+     * Proves crash report detection, reading /CRASHDMP.TXT and /CRASHDMP.DAT,
+     * register context analysis, stack backtrace decoding, multi-tab state transitions
+     * (Overview, Registers, Call Stack, Raw Report), SYS_CRASHDUMP_CTL (80) query & clear,
+     * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
+    static const char* const crashrep_all[] = {"CRASHREP.ELF", "--selftest"};
+    int pid_crashrep = sys_exec_trusted("CRASHREP.ELF", (const char**)crashrep_all, 2);
+    int code_crashrep = (pid_crashrep >= 0) ? sys_wait(pid_crashrep) : -1;
+    sys_write(pid_crashrep >= 0 && code_crashrep == 0
+                  ? "[sandbox] PASS: CRASHREP.ELF --selftest - crash report detection, "
+                    "file parsing, register analysis, stack backtrace, and UI presentation all behaved correctly.\n"
+                  : "[sandbox] FAIL: CRASHREP.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

@@ -607,6 +607,31 @@ static void cmd_crashtest(void) {
            "halted the machine\n");
 }
 
+/* Month 6: Crash dump inspector and graphical crash reporter launcher. */
+static void cmd_crash(int argc, char** argv) {
+    if (argc >= 2 && (strcmp(argv[1], "gui") == 0 || strcmp(argv[1], "ui") == 0)) {
+        const char* args[] = {"CRASHREP.ELF", NULL};
+        int pid = sys_exec("CRASHREP.ELF", (char**)args, 1);
+        if (pid < 0) {
+            printf("crash: failed to execute CRASHREP.ELF\n");
+        }
+        return;
+    }
+    int fd = sys_open("CRASHDMP.TXT");
+    if (fd >= 0) {
+        char buf[2048];
+        int n = sys_read(fd, buf, sizeof(buf) - 1);
+        sys_close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            printf("%s\n", buf);
+            printf("Tip: Run 'crash gui' or 'CRASHREP.ELF' to open graphical problem reporter.\n");
+            return;
+        }
+    }
+    printf("No crash dump report found on disk (system healthy).\n");
+}
+
 /* Phase 55: a real ACPI shutdown, via SYS_SHUTDOWN ->
  * kernel/rust/acpi.rs's own rust_acpi_shutdown() - see that function's
  * own doc comment for the full FADT/DSDT/_S5 discovery and ACPI-
@@ -939,6 +964,11 @@ int main(int argc, char** argv, char** envp) {
         if (sys_login(username, password) == 0) {
             printf("\nLogin successful. Welcome, %s (uid %u).\n", username,
                    sys_getuid());
+            nova_crashdump_status_t st;
+            if (sys_crashdump_ctl(CRASHDUMP_OP_STATUS, &st) == 0 && st.has_crash != 0) {
+                printf("\n[!] NOTICE: A pending kernel panic crash dump was detected from previous session (%s).\n", st.filename);
+                printf("    Type 'crash' to view log or 'CRASHREP.ELF' to open the Graphical Crash Reporter.\n\n");
+            }
             break;
         }
         printf("\nLogin incorrect.\n");
@@ -984,6 +1014,8 @@ int main(int argc, char** argv, char** envp) {
             cmd_beep();
         } else if (strcmp(tokens[0], "crashtest") == 0) {
             cmd_crashtest();
+        } else if (strcmp(tokens[0], "crash") == 0 || strcmp(tokens[0], "crashrep") == 0) {
+            cmd_crash(argc2, tokens);
         } else if (strcmp(tokens[0], "shutdown") == 0) {
             cmd_shutdown();
         } else if (strcmp(tokens[0], "pkg") == 0) {

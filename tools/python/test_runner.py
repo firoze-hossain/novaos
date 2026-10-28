@@ -418,6 +418,27 @@ ASSERTIONS: list[Assertion] = [
               r"installer-selftest. PASS: UI BufferSurface32 rasterization for all installer wizard screens",
               "Month 6 First impressions: userland/installer-rs/installer.rs - "
               "zero-syscall BufferSurface32 graphical rasterization across all wizard steps"),
+    Assertion("crashrep_selftest_passed",
+              r"sandbox. PASS: CRASHREP\.ELF --selftest - crash report detection, "
+              r"file parsing, register analysis, stack backtrace, and UI presentation all behaved correctly",
+              "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
+              "graphical crash reporter wizard and diagnostic inspection"),
+    Assertion("crashrep_file_parsing_passed",
+              r"crashrep-selftest. PASS: crash report detection and file parsing \(CRASHDMP\.TXT / CRASHDMP\.DAT\)",
+              "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
+              "crash report detection and file parsing for CRASHDMP.TXT and CRASHDMP.DAT"),
+    Assertion("crashrep_registers_passed",
+              r"crashrep-selftest. PASS: register snapshot and stack backtrace validation",
+              "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
+              "register snapshot analysis and stack backtrace frame decoding"),
+    Assertion("crashrep_tabs_passed",
+              r"crashrep-selftest. PASS: multi-tab state transitions \(Overview, Registers, Stack, Raw\)",
+              "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
+              "multi-tab state machine transitions across Overview, Registers, Call Stack, and Raw Report"),
+    Assertion("crashrep_rendering_passed",
+              r"crashrep-selftest. PASS: zero-syscall BufferSurface32 graphical presentation",
+              "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
+              "zero-syscall BufferSurface32 graphical rasterization of problem reporter views"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "

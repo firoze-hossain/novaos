@@ -724,12 +724,29 @@ static void cmd_reboot(void) {
     }
 }
 
-static void cmd_crash(void) {
+static void cmd_crash(const char* arg) {
+    if (arg && (strcmp(arg, "gui") == 0 || strcmp(arg, "ui") == 0 || strcmp(arg, "rep") == 0)) {
+        const char* argv[] = {"CRASHREP.ELF"};
+        int pid = process_exec("CRASHREP.ELF", argv, 1);
+        if (pid < 0) {
+            vga_puts("crash: failed to load CRASHREP.ELF\n");
+        }
+        return;
+    }
+    if (arg && (strcmp(arg, "test") == 0 || strcmp(arg, "--selftest") == 0)) {
+        const char* argv[] = {"CRASHREP.ELF", "--selftest"};
+        int pid = process_exec("CRASHREP.ELF", argv, 2);
+        if (pid >= 0) {
+            process_wait(pid);
+        }
+        return;
+    }
     static char buf[2048];
     int n = vfs_read_file("CRASHDMP.TXT", buf, sizeof(buf) - 1);
     if (n > 0) {
         buf[n] = '\0';
         vga_puts(buf);
+        vga_puts("\nTip: Type 'crash gui' or run 'CRASHREP.ELF' to open graphical crash reporter.\n");
     } else {
         vga_puts("No crash dump report found on disk (system healthy).\n");
     }
@@ -823,8 +840,10 @@ static void dispatch(char* line) {
         cmd_lspci();
     } else if (strcmp(line, "beep") == 0) {
         cmd_beep();
-    } else if (strcmp(line, "crash") == 0 || strcmp(line, "crashreport") == 0) {
-        cmd_crash();
+    } else if (strcmp(line, "crash") == 0 || strcmp(line, "crashrep") == 0 || strcmp(line, "crashreport") == 0) {
+        cmd_crash("");
+    } else if (strncmp(line, "crash ", 6) == 0) {
+        cmd_crash(line + 6);
     } else if (strcmp(line, "fdisk") == 0 || strcmp(line, "install") == 0) {
         cmd_fdisk("");
     } else if (strncmp(line, "fdisk ", 6) == 0) {

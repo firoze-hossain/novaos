@@ -553,6 +553,16 @@ int sys_disk_install(int op, void* arg1, void* arg2) {
     return r;
 }
 
+/* Month 6: Crash dump auto-export control (SYS_CRASHDUMP_CTL). */
+int sys_crashdump_ctl(int op, void* arg) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(SYS_CRASHDUMP_CTL), "b"(op), "c"((uint32_t)arg)
+                      : "memory");
+    return r;
+}
+
 /* Month 4: Service supervisor status and control (SYS_SERVICE_STATUS). */
 int sys_service_status(unsigned int op, void* arg1, void* arg2) {
     int r;
