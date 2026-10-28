@@ -495,6 +495,20 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: ACTMON.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 6 - First impressions: INSTALL.ELF --selftest.
+     * Proves wizard step machine, target disk selection, partition layout
+     * dry-run calculation (SYS_DISK_INSTALL), user account credential synthesis
+     * (PBKDF2-HMAC-SHA256), config generation, and zero-syscall BufferSurface32
+     * graphical rasterization from ring 3. */
+    static const char* const installer_all[] = {"INSTALL.ELF", "--selftest"};
+    int pid_installer = sys_exec_trusted("INSTALL.ELF", (const char**)installer_all, 2);
+    int code_installer = (pid_installer >= 0) ? sys_wait(pid_installer) : -1;
+    sys_write(pid_installer >= 0 && code_installer == 0
+                  ? "[sandbox] PASS: INSTALL.ELF --selftest - graphical installer wizard, "
+                    "disk partitioning engine, account generation, and UI presentation all behaved correctly.\n"
+                  : "[sandbox] FAIL: INSTALL.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

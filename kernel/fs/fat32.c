@@ -148,19 +148,45 @@ static bool fat_set_next_cluster(uint32_t cluster, uint32_t value) {
     return true;
 }
 
-/* Scans the FAT for a free (== 0) cluster entry, starting from
- * cluster 2 (the lowest valid data cluster number in FAT32). No
- * free-space cache or FSInfo-sector shortcut - a fine linear-scan
- * tradeoff for a filesystem this small, but would want one on a much
- * larger volume. */
+/* Cached allocation hint for finding free clusters. */
+static uint32_t next_free_cluster_hint = 2;
+
+/* Scans the FAT for a free (== 0) cluster entry, using next_free_cluster_hint
+ * and caching the loaded FAT sector to avoid redundant ATA reads. */
 static uint32_t find_free_cluster(void) {
     uint32_t total_fat_bytes = fat_size_32 * bytes_per_sector;
     uint32_t total_entries = total_fat_bytes / 4;
+    uint32_t start = next_free_cluster_hint;
+    if (start < 2 || start >= total_entries) {
+        start = 2;
+    }
 
-    for (uint32_t cluster = 2; cluster < total_entries; cluster++) {
-        if (fat_next_cluster(cluster) == 0) {
-            return cluster;
+    uint32_t cluster = start;
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        uint32_t cur_sector = 0xFFFFFFFF;
+        while (cluster < total_entries) {
+            uint32_t fat_offset = cluster * 4;
+            uint32_t fat_sector = fat_start_lba + (fat_offset / bytes_per_sector);
+            uint32_t ent_offset = fat_offset % bytes_per_sector;
+
+            if (fat_sector != cur_sector) {
+                if (!rust_journal_read_sectors(fat_sector, 1, fat_sector_buf)) {
+                    return 0;
+                }
+                cur_sector = fat_sector;
+            }
+
+            uint32_t val;
+            memcpy(&val, &fat_sector_buf[ent_offset], sizeof(val));
+            if ((val & 0x0FFFFFFFu) == 0) {
+                next_free_cluster_hint = cluster + 1;
+                return cluster;
+            }
+            cluster++;
         }
+        // Wrap around to cluster 2 if not found in first pass
+        cluster = 2;
+        total_entries = start;
     }
     return 0; /* out of space */
 }
@@ -201,6 +227,9 @@ static uint32_t alloc_cluster_chain(uint32_t count) {
 }
 
 static void free_cluster_chain(uint32_t cluster) {
+    if (cluster >= 2 && cluster < next_free_cluster_hint) {
+        next_free_cluster_hint = cluster;
+    }
     while (cluster >= 2 && cluster < FAT32_END_OF_CHAIN) {
         uint32_t next = fat_next_cluster(cluster);
         fat_set_next_cluster(cluster, 0);
@@ -299,6 +328,7 @@ bool fat32_init(void) {
     num_fats = bpb.num_fats;
     fat_size_32 = bpb.fat_size_32;
 
+    next_free_cluster_hint = 2;
     mounted = true;
     kernel_log("[ OK ] FAT32 mounted (cluster=%dB, root_cluster=%d)\n",
                (int)(sectors_per_cluster * bytes_per_sector),

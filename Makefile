@@ -533,6 +533,12 @@ store-test:
 login-test:
 	@sh tools/tests/run_login_tests.sh
 
+# Interface Track / Month 6 - First impressions: NovaOS Graphical Installer Wizard (installer-rs)
+# suite on the host: wizard state machine, disk selection, partition layout calculations,
+# user account credential synthesis (USERS.CFG/SYSTEM.CFG), installation pipeline, and BufferSurface32 rendering.
+installer-test:
+	@sh tools/tests/run_installer_tests.sh
+
 # The 3D run gets its OWN, larger time budget than `make test`. Its guest runs
 # on a loaded single host core next to Mesa's software rasterizer, and a full
 # run takes ~145-170 s of guest time against `make test`'s ~135 s; sharing the
@@ -633,4 +639,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test clean setup check-prereqs help install-image test-custom-boot

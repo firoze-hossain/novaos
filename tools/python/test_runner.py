@@ -401,6 +401,23 @@ ASSERTIONS: list[Assertion] = [
               r"actmon-selftest. PASS: zero-syscall BufferSurface32 graphical rasterization",
               "Month 5 Power-user & system apps: userland/actmon-rs/actmon.rs - "
               "zero-syscall BufferSurface32 graphical rasterization and performance graphs"),
+    Assertion("installer_selftest_passed",
+              r"sandbox. PASS: INSTALL\.ELF --selftest - graphical installer wizard, "
+              r"disk partitioning engine, account generation, and UI presentation all behaved correctly",
+              "Month 6 First impressions: userland/installer-rs/installer.rs - "
+              "graphical installer wizard application and end-to-end installation flow"),
+    Assertion("installer_disk_layout_passed",
+              r"installer-selftest. PASS: disk detection, partition layout calculation, and dry-run validation",
+              "Month 6 First impressions: userland/installer-rs/installer.rs - "
+              "SYS_DISK_INSTALL disk detection, partition layout calculation, and dry-run validation"),
+    Assertion("installer_account_hash_passed",
+              r"installer-selftest. PASS: user account credential hashing \(PBKDF2-HMAC-SHA256\) and config generation",
+              "Month 6 First impressions: userland/installer-rs/installer.rs - "
+              "user account credential synthesis (PBKDF2-HMAC-SHA256) and USERS.CFG/SYSTEM.CFG config generation"),
+    Assertion("installer_rendering_passed",
+              r"installer-selftest. PASS: UI BufferSurface32 rasterization for all installer wizard screens",
+              "Month 6 First impressions: userland/installer-rs/installer.rs - "
+              "zero-syscall BufferSurface32 graphical rasterization across all wizard steps"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "
