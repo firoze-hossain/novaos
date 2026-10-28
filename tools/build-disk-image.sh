@@ -34,7 +34,32 @@
 set -e
 cd "$(dirname "$0")/.."   # repo root
 
-DISK_IMG="${1:-disk.img}"
+DISK_IMG=""
+PROFILE="${PROFILE:-desktop}"
+
+for arg in "$@"; do
+    case "$arg" in
+        --profile=*)
+            PROFILE="${arg#*=}"
+            ;;
+        desktop|server)
+            PROFILE="$arg"
+            ;;
+        *)
+            if [ -z "$DISK_IMG" ]; then
+                DISK_IMG="$arg"
+            fi
+            ;;
+    esac
+done
+
+if [ -z "$DISK_IMG" ]; then
+    if [ "$PROFILE" = "server" ]; then
+        DISK_IMG="disk-server.img"
+    else
+        DISK_IMG="disk.img"
+    fi
+fi
 FIXTURES=tools/fixtures
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -59,24 +84,85 @@ TOTAL_MB=$((1 + PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))  # +1MiB
                                                         # +1MiB trailing
                                                         # slack
 
-# --- Partition 1: FAT32, exactly the same fixtures as before ---
+# --- Partition 1: FAT32 ---
 dd if=/dev/zero of="$TMP/part1.img" bs=1M count=$PART1_MB status=none
 mformat -i "$TMP/part1.img" -F ::
-for f in HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG ACCESS.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF FILES.ELF SETTINGS.ELF TERM.ELF EDIT.ELF STORE.ELF LOGIN.ELF KLOG.ELF ACTMON.ELF INSTALL.ELF CRASHREP.ELF CRASH.ELF FIRSTRUN.ELF SETUP.ELF SYSINFO.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT FIREWALL.CFG FWTEST.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF UPDATE.ELF KLOGTEST.ELF PKGRTEST.ELF; do
-    # Phase 59: LS.ELF/ECHO.ELF/CP.ELF/RM.ELF come from userland/
-    # coreutils-rs/build.sh, built against the project's own bare-metal
-    # Rust sysroot (tools/rust-sysroot/) - not every environment that
-    # runs this script will have built that sysroot (a plain host rustc
-    # can't produce these; see that build.sh's own header comment), so
-    # a missing one here is a real but expected gap, not a build
-    # failure - warn and skip rather than aborting the whole disk image
-    # over four optional coreutils.
-    if [ ! -f "$FIXTURES/$f" ]; then
-        echo "warning: $f not found in $FIXTURES - skipping (run userland/coreutils-rs/build.sh, or userland/ping-rs/build.sh's C fixtures, to produce it)" >&2
-        continue
+
+if [ "$PROFILE" = "server" ]; then
+    echo "Building NovaOS Server Edition disk image ($DISK_IMG)..."
+
+    # 1. Server Edition & MOTD banners
+    echo "NovaOS Server Edition (x86_32 headless)" > "$TMP/EDITION.TXT"
+    mcopy -i "$TMP/part1.img" "$TMP/EDITION.TXT" "::EDITION.TXT"
+
+    cat << 'EOF' > "$TMP/MOTD.TXT"
+========================================================================
+ NovaOS Server Edition (x86_32 headless)
+ High-performance, memory-safe SMP microkernel & headless server system
+========================================================================
+Welcome root/admin to NovaOS Server Edition.
+Available utilities: shell, novainit, cat, ls, echo, cp, rm, sysinfo,
+                     ping, klog, actmon, update, tprobe.
+EOF
+    mcopy -i "$TMP/part1.img" "$TMP/MOTD.TXT" "::MOTD.TXT"
+
+    # 2. Server-tailored SYSTEM.CFG (81 bytes: NVCF, hostname 32, username 32, init 13)
+    python3 -c "
+with open('$TMP/SYSTEM.CFG', 'wb') as f:
+    f.write(b'NVCF' + b'novaos-server'.ljust(32, b'\0') + b'admin'.ljust(32, b'\0') + b'NOVAINIT.ELF'.ljust(13, b'\0'))
+"
+    mcopy -i "$TMP/part1.img" "$TMP/SYSTEM.CFG" "::SYSTEM.CFG"
+
+    # 3. Server-tailored SERVICES.CFG & FIREWALL.CFG
+    if [ -f "$FIXTURES/SERVICES.CFG" ]; then
+        mcopy -i "$TMP/part1.img" "$FIXTURES/SERVICES.CFG" "::SERVICES.CFG"
     fi
-    mcopy -i "$TMP/part1.img" "$FIXTURES/$f" "::$f"
-done
+
+    cat << 'EOF' > "$TMP/FIREWALL.CFG"
+# FIREWALL.CFG - NovaOS Server Edition Stateful Packet Filter
+policy in drop
+policy out accept
+
+# replies to what we started, and what that caused
+rule accept in state established,related
+
+# the local network may ping us (an echo request is a NEW inbound flow)
+rule accept in proto icmp icmp-type 8 from 10.0.2.0/24 state new
+
+# Server administration:
+#   rule accept in proto tcp dport 22 state new log
+#   rule accept in proto tcp dport 80 state new log
+EOF
+    mcopy -i "$TMP/part1.img" "$TMP/FIREWALL.CFG" "::FIREWALL.CFG"
+
+    # 4. Core utilities and server binaries (omitting compositor/GUI apps and desktop packages)
+    SERVER_FILES="HELLO.TXT USERS.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF SYSINFO.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT FWTEST.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF UPDATE.ELF KLOGTEST.ELF PKGRTEST.ELF KLOG.ELF ACTMON.ELF"
+
+    for f in $SERVER_FILES; do
+        if [ ! -f "$FIXTURES/$f" ]; then
+            echo "warning: $f not found in $FIXTURES - skipping" >&2
+            continue
+        fi
+        mcopy -i "$TMP/part1.img" "$FIXTURES/$f" "::$f"
+    done
+else
+    echo "Building NovaOS Desktop Edition disk image ($DISK_IMG)..."
+
+    # 1. Desktop Edition banner
+    echo "NovaOS Desktop Edition (x86_32)" > "$TMP/EDITION.TXT"
+    mcopy -i "$TMP/part1.img" "$TMP/EDITION.TXT" "::EDITION.TXT"
+
+    # 2. Full desktop app and fixture suite
+    DESKTOP_FILES="HELLO.TXT EDITOR.PKG GAME.PKG SYSTEM.CFG USERS.CFG SERVICES.CFG ACCESS.CFG HELLO.ELF HELLOC.ELF CAT.ELF SHELL.ELF GUI.ELF WM.ELF FILES.ELF SETTINGS.ELF TERM.ELF EDIT.ELF STORE.ELF LOGIN.ELF KLOG.ELF ACTMON.ELF INSTALL.ELF CRASHREP.ELF CRASH.ELF FIRSTRUN.ELF SETUP.ELF SYSINFO.ELF NOVAINIT.ELF PING.ELF TPROBE.ELF LIBCTEST.ELF DYNLIB.SO DYNTEST.ELF DYNTEST2.ELF UDPTEST.ELF GFXTEST.ELF SHMTEST.ELF MSGTEST.ELF AUDTEST.ELF RLIMTEST.ELF MACTEST.ELF JAIL.TXT SECRET.TXT FIREWALL.CFG FWTEST.ELF LS.ELF ECHO.ELF CP.ELF RM.ELF UPDATE.ELF KLOGTEST.ELF PKGRTEST.ELF"
+
+    for f in $DESKTOP_FILES; do
+        if [ ! -f "$FIXTURES/$f" ]; then
+            echo "warning: $f not found in $FIXTURES - skipping (run userland/coreutils-rs/build.sh, or userland/ping-rs/build.sh's C fixtures, to produce it)" >&2
+            continue
+        fi
+        mcopy -i "$TMP/part1.img" "$FIXTURES/$f" "::$f"
+    done
+fi
 
 # Phase 87: mandatory access control. A profile is bound to the program NAME
 # (NAME.MAC beside NAME.ELF), and the conformance test needs several programs

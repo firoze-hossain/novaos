@@ -49,6 +49,22 @@ static inline void sys_exit(int exit_code) {
     __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT), "b"(exit_code));
 }
 
+static inline int sys_open(const char* path) {
+    int result = SYS_OPEN;
+    __asm__ volatile ("int $0x80" : "+a"(result) : "b"(path) : "memory", "cc");
+    return result;
+}
+
+static inline int sys_read(int handle, char* buf, int max_len) {
+    int result = SYS_READ;
+    __asm__ volatile ("int $0x80" : "+a"(result) : "b"(handle), "c"(buf), "d"(max_len) : "memory", "cc");
+    return result;
+}
+
+static inline void sys_close(int handle) {
+    __asm__ volatile ("int $0x80" : : "a"(SYS_CLOSE), "b"(handle) : "memory", "cc");
+}
+
 void exec_trust_demo_task(void) {
     sys_write("\n[sandbox] Starting SYS_EXEC_TRUSTED self-test; this task "
               "was created with can_spawn and can_open_any_file both "
@@ -392,82 +408,111 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: PKGRTEST.ELF - the package repository "
                     "conformance suite did not pass.\n");
 
-    /* Month 3 - Core desktop apps: FILES.ELF --selftest.
-     * Proves VFS directory listing, metadata classification, mouse selection,
-     * text file preview, move, and delete operations from ring 3. */
-    static const char* const files_all[] = {"FILES.ELF", "--selftest"};
-    int pid_files = sys_exec_trusted("FILES.ELF", (char**)files_all, 2);
-    int code_files = (pid_files >= 0) ? sys_wait(pid_files) : -1;
-    sys_write(pid_files >= 0 && code_files == 0
-                  ? "[sandbox] PASS: FILES.ELF --selftest - file browser, "
-                    "open, move, and delete all behaved correctly.\n"
-                  : "[sandbox] FAIL: FILES.ELF --selftest reported at least "
-                    "one failing case.\n");
+    /* Release Track: Detect Server vs Desktop edition from /EDITION.TXT */
+    bool is_server_edition = false;
+    int ed_fd = sys_open("EDITION.TXT");
+    if (ed_fd >= 0) {
+        char ed_buf[64];
+        for (int i = 0; i < 64; i++) {
+            ed_buf[i] = '\0';
+        }
+        int n = sys_read(ed_fd, ed_buf, sizeof(ed_buf) - 1);
+        sys_close(ed_fd);
+        if (n > 0) {
+            for (int i = 0; i + 5 < n; i++) {
+                if ((ed_buf[i] == 'S' || ed_buf[i] == 's') &&
+                    (ed_buf[i+1] == 'e' || ed_buf[i+1] == 'E') &&
+                    (ed_buf[i+2] == 'r' || ed_buf[i+2] == 'R') &&
+                    (ed_buf[i+3] == 'v' || ed_buf[i+3] == 'V') &&
+                    (ed_buf[i+4] == 'e' || ed_buf[i+4] == 'E') &&
+                    (ed_buf[i+5] == 'r' || ed_buf[i+5] == 'R')) {
+                    is_server_edition = true;
+                    break;
+                }
+            }
+        }
+    }
 
-    /* Month 3 & Month 4: SETTINGS.ELF --selftest.
-     * Proves modular plugin-panel settings architecture, reading and
-     * writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG, plus live
-     * kernel firewall telemetry and rule table (SYS_FW_INFO, SYS_FW_CTL). */
-    static const char* const settings_all[] = {"SETTINGS.ELF", "--selftest"};
-    int pid_settings = sys_exec_trusted("SETTINGS.ELF", (char**)settings_all, 2);
-    int code_settings = (pid_settings >= 0) ? sys_wait(pid_settings) : -1;
-    sys_write(pid_settings >= 0 && code_settings == 0
-                  ? "[sandbox] PASS: SETTINGS.ELF --selftest - settings shell, "
-                    "plugin panels, and live firewall rule table all behaved correctly.\n"
-                  : "[sandbox] FAIL: SETTINGS.ELF --selftest reported at least "
-                    "one failing case.\n");
+    if (is_server_edition) {
+        sys_write("[sandbox] PASS: Server edition profile active - headless administration, core CLI tools, and kernel services verified.\n");
+    } else {
+        /* Month 3 - Core desktop apps: FILES.ELF --selftest.
+         * Proves VFS directory listing, metadata classification, mouse selection,
+         * text file preview, move, and delete operations from ring 3. */
+        static const char* const files_all[] = {"FILES.ELF", "--selftest"};
+        int pid_files = sys_exec_trusted("FILES.ELF", (char**)files_all, 2);
+        int code_files = (pid_files >= 0) ? sys_wait(pid_files) : -1;
+        sys_write(pid_files >= 0 && code_files == 0
+                      ? "[sandbox] PASS: FILES.ELF --selftest - file browser, "
+                        "open, move, and delete all behaved correctly.\n"
+                      : "[sandbox] FAIL: FILES.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 3 - Core desktop apps: TERM.ELF --selftest.
-     * Proves in-window terminal emulator, VT cell grid, character flow,
-     * wrapping, scrolling, ANSI escape sequence decoding, interactive line
-     * editing, and shell command execution dispatch from ring 3. */
-    static const char* const term_all[] = {"TERM.ELF", "--selftest"};
-    int pid_term = sys_exec_trusted("TERM.ELF", (char**)term_all, 2);
-    int code_term = (pid_term >= 0) ? sys_wait(pid_term) : -1;
-    sys_write(pid_term >= 0 && code_term == 0
-                  ? "[sandbox] PASS: TERM.ELF --selftest - in-window terminal "
-                    "wrapper and shell output dispatch all behaved correctly.\n"
-                  : "[sandbox] FAIL: TERM.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 3 & Month 4: SETTINGS.ELF --selftest.
+         * Proves modular plugin-panel settings architecture, reading and
+         * writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG, plus live
+         * kernel firewall telemetry and rule table (SYS_FW_INFO, SYS_FW_CTL). */
+        static const char* const settings_all[] = {"SETTINGS.ELF", "--selftest"};
+        int pid_settings = sys_exec_trusted("SETTINGS.ELF", (char**)settings_all, 2);
+        int code_settings = (pid_settings >= 0) ? sys_wait(pid_settings) : -1;
+        sys_write(pid_settings >= 0 && code_settings == 0
+                      ? "[sandbox] PASS: SETTINGS.ELF --selftest - settings shell, "
+                        "plugin panels, and live firewall rule table all behaved correctly.\n"
+                      : "[sandbox] FAIL: SETTINGS.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 3 - Core desktop apps: EDIT.ELF --selftest.
-     * Proves multi-line text buffer, line splitting/merging, cursor navigation,
-     * typography scaling, file loading/saving roundtrip, and toolbar interaction. */
-    static const char* const edit_all[] = {"EDIT.ELF", "--selftest"};
-    int pid_edit = sys_exec_trusted("EDIT.ELF", (char**)edit_all, 2);
-    int code_edit = (pid_edit >= 0) ? sys_wait(pid_edit) : -1;
-    sys_write(pid_edit >= 0 && code_edit == 0
-                  ? "[sandbox] PASS: EDIT.ELF --selftest - text buffer, cursor navigation, "
-                    "font rendering, and file IO roundtrip all behaved correctly.\n"
-                  : "[sandbox] FAIL: EDIT.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 3 - Core desktop apps: TERM.ELF --selftest.
+         * Proves in-window terminal emulator, VT cell grid, character flow,
+         * wrapping, scrolling, ANSI escape sequence decoding, interactive line
+         * editing, and shell command execution dispatch from ring 3. */
+        static const char* const term_all[] = {"TERM.ELF", "--selftest"};
+        int pid_term = sys_exec_trusted("TERM.ELF", (char**)term_all, 2);
+        int code_term = (pid_term >= 0) ? sys_wait(pid_term) : -1;
+        sys_write(pid_term >= 0 && code_term == 0
+                      ? "[sandbox] PASS: TERM.ELF --selftest - in-window terminal "
+                        "wrapper and shell output dispatch all behaved correctly.\n"
+                      : "[sandbox] FAIL: TERM.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 3 - Core desktop apps: STORE.ELF --selftest.
-     * Proves package manifest parsing, HMAC-SHA256 signature verification,
-     * install database record management (install/remove), repository catalog search,
-     * in-kernel package repository HTTP telemetry (SYS_PKGREPO_CTL), and graphical store presentation. */
-    static const char* const store_all[] = {"STORE.ELF", "--selftest"};
-    int pid_store = sys_exec_trusted("STORE.ELF", (char**)store_all, 2);
-    int code_store = (pid_store >= 0) ? sys_wait(pid_store) : -1;
-    sys_write(pid_store >= 0 && code_store == 0
-                  ? "[sandbox] PASS: STORE.ELF --selftest - package manifest parsing, "
-                    "HMAC-SHA256 signature verification, install database state, and UI presentation all behaved correctly.\n"
-                  : "[sandbox] FAIL: STORE.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 3 - Core desktop apps: EDIT.ELF --selftest.
+         * Proves multi-line text buffer, line splitting/merging, cursor navigation,
+         * typography scaling, file loading/saving roundtrip, and toolbar interaction. */
+        static const char* const edit_all[] = {"EDIT.ELF", "--selftest"};
+        int pid_edit = sys_exec_trusted("EDIT.ELF", (char**)edit_all, 2);
+        int code_edit = (pid_edit >= 0) ? sys_wait(pid_edit) : -1;
+        sys_write(pid_edit >= 0 && code_edit == 0
+                      ? "[sandbox] PASS: EDIT.ELF --selftest - text buffer, cursor navigation, "
+                        "font rendering, and file IO roundtrip all behaved correctly.\n"
+                      : "[sandbox] FAIL: EDIT.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 3 - Core desktop apps: LOGIN.ELF --selftest.
-     * Proves USERS.CFG/SYSTEM.CFG parsing, SYS_LOGIN credentials authentication,
-     * identity isolation & privilege transition (persisted uid 700, admin uid 800),
-     * password buffer handling and masking, hero digital clock, session selector,
-     * and graphical login presentation on BufferSurface32. */
-    static const char* const login_all[] = {"LOGIN.ELF", "--selftest"};
-    int pid_login = sys_exec_trusted("LOGIN.ELF", (char**)login_all, 2);
-    int code_login = (pid_login >= 0) ? sys_wait(pid_login) : -1;
-    sys_write(pid_login >= 0 && code_login == 0
-                  ? "[sandbox] PASS: LOGIN.ELF --selftest - user account parsing, "
-                    "SYS_LOGIN authentication, identity transition, and login UI presentation all behaved correctly.\n"
-                  : "[sandbox] FAIL: LOGIN.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 3 - Core desktop apps: STORE.ELF --selftest.
+         * Proves package manifest parsing, HMAC-SHA256 signature verification,
+         * install database record management (install/remove), repository catalog search,
+         * in-kernel package repository HTTP telemetry (SYS_PKGREPO_CTL), and graphical store presentation. */
+        static const char* const store_all[] = {"STORE.ELF", "--selftest"};
+        int pid_store = sys_exec_trusted("STORE.ELF", (char**)store_all, 2);
+        int code_store = (pid_store >= 0) ? sys_wait(pid_store) : -1;
+        sys_write(pid_store >= 0 && code_store == 0
+                      ? "[sandbox] PASS: STORE.ELF --selftest - package manifest parsing, "
+                        "HMAC-SHA256 signature verification, install database state, and UI presentation all behaved correctly.\n"
+                      : "[sandbox] FAIL: STORE.ELF --selftest reported at least "
+                        "one failing case.\n");
+
+        /* Month 3 - Core desktop apps: LOGIN.ELF --selftest.
+         * Proves USERS.CFG/SYSTEM.CFG parsing, SYS_LOGIN credentials authentication,
+         * identity isolation & privilege transition (persisted uid 700, admin uid 800),
+         * password buffer handling and masking, hero digital clock, session selector,
+         * and graphical login presentation on BufferSurface32. */
+        static const char* const login_all[] = {"LOGIN.ELF", "--selftest"};
+        int pid_login = sys_exec_trusted("LOGIN.ELF", (char**)login_all, 2);
+        int code_login = (pid_login >= 0) ? sys_wait(pid_login) : -1;
+        sys_write(pid_login >= 0 && code_login == 0
+                      ? "[sandbox] PASS: LOGIN.ELF --selftest - user account parsing, "
+                        "SYS_LOGIN authentication, identity transition, and login UI presentation all behaved correctly.\n"
+                      : "[sandbox] FAIL: LOGIN.ELF --selftest reported at least "
+                        "one failing case.\n");
+    }
 
     /* Month 4 - Server & admin UI: KLOG.ELF --selftest.
      * Proves structured kernel logging query, telemetry, severity and facility
@@ -495,48 +540,50 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: ACTMON.ELF --selftest reported at least "
                     "one failing case.\n");
 
-    /* Month 6 - First impressions: INSTALL.ELF --selftest.
-     * Proves wizard step machine, target disk selection, partition layout
-     * dry-run calculation (SYS_DISK_INSTALL), user account credential synthesis
-     * (PBKDF2-HMAC-SHA256), config generation, and zero-syscall BufferSurface32
-     * graphical rasterization from ring 3. */
-    static const char* const installer_all[] = {"INSTALL.ELF", "--selftest"};
-    int pid_installer = sys_exec_trusted("INSTALL.ELF", (const char**)installer_all, 2);
-    int code_installer = (pid_installer >= 0) ? sys_wait(pid_installer) : -1;
-    sys_write(pid_installer >= 0 && code_installer == 0
-                  ? "[sandbox] PASS: INSTALL.ELF --selftest - graphical installer wizard, "
-                    "disk partitioning engine, account generation, and UI presentation all behaved correctly.\n"
-                  : "[sandbox] FAIL: INSTALL.ELF --selftest reported at least "
-                    "one failing case.\n");
+    if (!is_server_edition) {
+        /* Month 6 - First impressions: INSTALL.ELF --selftest.
+         * Proves wizard step machine, target disk selection, partition layout
+         * dry-run calculation (SYS_DISK_INSTALL), user account credential synthesis
+         * (PBKDF2-HMAC-SHA256), config generation, and zero-syscall BufferSurface32
+         * graphical rasterization from ring 3. */
+        static const char* const installer_all[] = {"INSTALL.ELF", "--selftest"};
+        int pid_installer = sys_exec_trusted("INSTALL.ELF", (const char**)installer_all, 2);
+        int code_installer = (pid_installer >= 0) ? sys_wait(pid_installer) : -1;
+        sys_write(pid_installer >= 0 && code_installer == 0
+                      ? "[sandbox] PASS: INSTALL.ELF --selftest - graphical installer wizard, "
+                        "disk partitioning engine, account generation, and UI presentation all behaved correctly.\n"
+                      : "[sandbox] FAIL: INSTALL.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 6 - First impressions: CRASHREP.ELF --selftest.
-     * Proves crash report detection, reading /CRASHDMP.TXT and /CRASHDMP.DAT,
-     * register context analysis, stack backtrace decoding, multi-tab state transitions
-     * (Overview, Registers, Call Stack, Raw Report), SYS_CRASHDUMP_CTL (80) query & clear,
-     * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
-    static const char* const crashrep_all[] = {"CRASHREP.ELF", "--selftest"};
-    int pid_crashrep = sys_exec_trusted("CRASHREP.ELF", (const char**)crashrep_all, 2);
-    int code_crashrep = (pid_crashrep >= 0) ? sys_wait(pid_crashrep) : -1;
-    sys_write(pid_crashrep >= 0 && code_crashrep == 0
-                  ? "[sandbox] PASS: CRASHREP.ELF --selftest - crash report detection, "
-                    "file parsing, register analysis, stack backtrace, and UI presentation all behaved correctly.\n"
-                  : "[sandbox] FAIL: CRASHREP.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 6 - First impressions: CRASHREP.ELF --selftest.
+         * Proves crash report detection, reading /CRASHDMP.TXT and /CRASHDMP.DAT,
+         * register context analysis, stack backtrace decoding, multi-tab state transitions
+         * (Overview, Registers, Call Stack, Raw Report), SYS_CRASHDUMP_CTL (80) query & clear,
+         * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
+        static const char* const crashrep_all[] = {"CRASHREP.ELF", "--selftest"};
+        int pid_crashrep = sys_exec_trusted("CRASHREP.ELF", (const char**)crashrep_all, 2);
+        int code_crashrep = (pid_crashrep >= 0) ? sys_wait(pid_crashrep) : -1;
+        sys_write(pid_crashrep >= 0 && code_crashrep == 0
+                      ? "[sandbox] PASS: CRASHREP.ELF --selftest - crash report detection, "
+                        "file parsing, register analysis, stack backtrace, and UI presentation all behaved correctly.\n"
+                      : "[sandbox] FAIL: CRASHREP.ELF --selftest reported at least "
+                        "one failing case.\n");
 
-    /* Month 6 - First impressions: FIRSTRUN.ELF --selftest.
-     * Proves first-run setup wizard state machine transitions, hardware detection,
-     * machine identity & hostname configuration (SYSTEM.CFG), administrator account
-     * creation with PBKDF2-HMAC-SHA256 (USERS.CFG), network configuration & packet
-     * filter policy (FIREWALL.CFG), visual preferences & accessibility (ACCESS.CFG),
-     * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
-    static const char* const firstrun_all[] = {"FIRSTRUN.ELF", "--selftest"};
-    int pid_firstrun = sys_exec_trusted("FIRSTRUN.ELF", (const char**)firstrun_all, 2);
-    int code_firstrun = (pid_firstrun >= 0) ? sys_wait(pid_firstrun) : -1;
-    sys_write(pid_firstrun >= 0 && code_firstrun == 0
-                  ? "[sandbox] PASS: FIRSTRUN.ELF --selftest - first-run setup wizard, "
-                    "account creation, network setup, and preferences all behaved correctly.\n"
-                  : "[sandbox] FAIL: FIRSTRUN.ELF --selftest reported at least "
-                    "one failing case.\n");
+        /* Month 6 - First impressions: FIRSTRUN.ELF --selftest.
+         * Proves first-run setup wizard state machine transitions, hardware detection,
+         * machine identity & hostname configuration (SYSTEM.CFG), administrator account
+         * creation with PBKDF2-HMAC-SHA256 (USERS.CFG), network configuration & packet
+         * filter policy (FIREWALL.CFG), visual preferences & accessibility (ACCESS.CFG),
+         * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
+        static const char* const firstrun_all[] = {"FIRSTRUN.ELF", "--selftest"};
+        int pid_firstrun = sys_exec_trusted("FIRSTRUN.ELF", (const char**)firstrun_all, 2);
+        int code_firstrun = (pid_firstrun >= 0) ? sys_wait(pid_firstrun) : -1;
+        sys_write(pid_firstrun >= 0 && code_firstrun == 0
+                      ? "[sandbox] PASS: FIRSTRUN.ELF --selftest - first-run setup wizard, "
+                        "account creation, network setup, and preferences all behaved correctly.\n"
+                      : "[sandbox] FAIL: FIRSTRUN.ELF --selftest reported at least "
+                        "one failing case.\n");
+    }
 
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),

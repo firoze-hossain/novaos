@@ -74,10 +74,13 @@ QEMU_FLAGS = -M pc,smm=off -m 512M -smp $(SMP) -no-reboot
 # since it isn't bootable) to boot from the data disk instead of the
 # NovaOS ISO - see TESTING.md if you ever see a boot that seems to hang
 # after adding your own extra -drive.
+PROFILE ?= desktop
 DISK_IMG = disk.img
+DISK_SERVER_IMG = disk-server.img
 DISK_SIZE_MB = 64
 DISK_FIXTURES_DIR = tools/fixtures
 DISK_FLAGS = -boot order=d -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk
+DISK_SERVER_FLAGS = -boot order=d -drive file=$(DISK_SERVER_IMG),format=raw,if=ide,index=0,media=disk
 
 # Phase 6+: QEMU user-mode ("SLIRP") networking. SLIRP always answers
 # pings to its own gateway address (10.0.2.2) even with no real
@@ -352,12 +355,26 @@ $(ISO_FILE): $(KERNEL_BIN)
 # mcopy), and `e2fsprogs` (mkfs.ext2, debugfs) - installed by `make
 # setup` on every supported OS.
 $(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF $(DISK_FIXTURES_DIR)/ext2root/EXT2TEST.TXT tools/build-disk-image.sh
-	./tools/build-disk-image.sh $(DISK_IMG)
-	@echo "✅ Partitioned test disk image created: $(DISK_IMG)"
+	./tools/build-disk-image.sh $(DISK_IMG) desktop
+	@echo "✅ Partitioned Desktop test disk image created: $(DISK_IMG)"
+
+$(DISK_SERVER_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF $(DISK_FIXTURES_DIR)/ext2root/EXT2TEST.TXT tools/build-disk-image.sh
+	./tools/build-disk-image.sh $(DISK_SERVER_IMG) server
+	@echo "✅ Partitioned Server test disk image created: $(DISK_SERVER_IMG)"
+
+disk-desktop: $(DISK_IMG)
+
+disk-server: $(DISK_SERVER_IMG)
+
+server-image: $(DISK_SERVER_IMG)
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
 	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -vga std
+
+# Run Server Edition in QEMU (interactive)
+run-server: $(ISO_FILE) $(DISK_SERVER_IMG)
+	$(QEMU) -cdrom $(ISO_FILE) $(DISK_SERVER_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
@@ -382,6 +399,15 @@ TEST_LOG = build/test-serial.log
 test: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
 	    --iso $(ISO_FILE) --disk $(DISK_IMG) --smp $(SMP)
+
+# Server Edition headless boot smoke test
+test-server: $(ISO_FILE) $(DISK_SERVER_IMG)
+	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
+	    --iso $(ISO_FILE) --disk $(DISK_SERVER_IMG) --profile server --smp $(SMP)
+
+# Editions build & partition validation test suite
+test-editions:
+	@sh tools/tests/run_editions_test.sh
 
 # Phase 95: Dedicated 4-core SMP scaling validation test target.
 test-smp4: $(ISO_FILE) $(DISK_IMG)
@@ -574,7 +600,7 @@ test-3d: $(ISO_FILE) $(DISK_IMG)
 
 # Clean
 clean:
-	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG)
+	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG)
 
 # A real, direct fix for a problem that kept recurring despite several
 # increasingly complex attempts at detecting a stale sysroot

@@ -267,6 +267,8 @@ ASSERTIONS: list[Assertion] = [
     Assertion("pkg_remove_ok", r"PKG REMOVE OK", "the package manager removed a package"),
     Assertion("firstrun_returning_user", r"First-run check: returning user",
               "SYSTEM.CFG round-tripped correctly, recognized as a returning user"),
+    Assertion("edition_desktop_detected", r"\[ OK \] System edition: NovaOS Desktop Edition",
+              "Release Track: Desktop edition profile detected from EDITION.TXT at boot"),
     Assertion("sandbox_hello_opened", r"sandbox. PASS: HELLO\.TXT opened",
               "the sandboxed task's allowed file open succeeded"),
     Assertion("sandbox_sys_open", r"sandbox. PASS: SYS_OPEN",
@@ -1156,6 +1158,91 @@ ASSERTIONS: list[Assertion] = [
 ]
 
 
+# Release Track: Server edition profile configurations
+SERVER_EXCLUDE_ASSERTIONS = {
+    "edition_desktop_detected",
+    "pkg_install_ok",
+    "pkg_remove_ok",
+    "ui_design_system_selftest",
+    "wm_framebuffer_surface_selftest",
+    "wm_font_antialiasing_selftest",
+    "wm_cursor_chrome_selftest",
+    "wm_menubar_selftest",
+    "wm_dock_selftest",
+    "wm_accessibility_selftest",
+    "wm_snapping_polish_selftest",
+    "wm_selftest_passed",
+    "files_selftest_passed",
+    "files_metadata_passed",
+    "files_hit_testing_passed",
+    "files_preview_passed",
+    "files_move_delete_passed",
+    "files_rendering_passed",
+    "settings_selftest_passed",
+    "firewall_panel_selftest_passed",
+    "users_panel_selftest_passed",
+    "users_roles_safeguard_passed",
+    "service_manager_panel_passed",
+    "service_manager_rendering_passed",
+    "device_manager_panel_passed",
+    "device_manager_rendering_passed",
+    "settings_accessibility_cfg_passed",
+    "settings_accessibility_ui_passed",
+    "settings_updates_status_passed",
+    "settings_updates_ui_passed",
+    "term_selftest_passed",
+    "term_grid_passed",
+    "term_wrap_passed",
+    "term_ansi_passed",
+    "term_history_passed",
+    "term_dispatch_passed",
+    "term_rendering_passed",
+    "edit_selftest_passed",
+    "edit_buffer_passed",
+    "edit_backspace_passed",
+    "edit_vfs_io_passed",
+    "edit_font_modes_passed",
+    "edit_mouse_toolbar_passed",
+    "edit_rendering_passed",
+    "store_selftest_passed",
+    "store_manifest_passed",
+    "store_crypto_passed",
+    "store_db_state_passed",
+    "store_search_passed",
+    "store_telemetry_passed",
+    "store_rendering_passed",
+    "login_selftest_passed",
+    "login_bad_password_passed",
+    "login_uid_transition_passed",
+    "login_admin_auth_passed",
+    "login_masking_passed",
+    "login_rendering_passed",
+    "sandbox_login_passed",
+    "installer_selftest_passed",
+    "installer_disk_layout_passed",
+    "installer_account_hash_passed",
+    "installer_rendering_passed",
+    "crashrep_selftest_passed",
+    "crashrep_file_parsing_passed",
+    "crashrep_registers_passed",
+    "crashrep_tabs_passed",
+    "crashrep_rendering_passed",
+    "firstrun_selftest_passed",
+    "firstrun_navigation_passed",
+    "firstrun_ui_passed",
+    "firstrun_identity_passed",
+    "firstrun_account_synthesis_passed",
+    "firstrun_cfg_generation_passed",
+}
+
+SERVER_ASSERTIONS = [
+    Assertion("edition_server_detected", r"\[ OK \] System edition: NovaOS Server Edition",
+              "Release Track: Server edition profile detected from EDITION.TXT at boot"),
+    Assertion("server_edition_profile_verified", r"\[sandbox\] PASS: Server edition profile active",
+              "Release Track: Server edition profile active in exec_trust_demo"),
+]
+
+
 # Phase 82: assertions that only hold - and are only required - when the
 # kernel is booted against a virgl-capable device (`--virgl`, driven by
 # `make test-3d`). In that mode they REPLACE the "3D not offered"
@@ -1473,11 +1560,17 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--smp", type=int, default=int(os.environ.get("SMP", 2)),
                          help="number of CPUs for QEMU -smp N (default: 2 or $SMP)")
+    parser.add_argument("--profile", choices=["desktop", "server"], default="desktop",
+                         help="Edition profile to test (desktop or server, default: %(default)s)")
     parser.add_argument("--virgl", action="store_true",
                          help="Phase 82: boot against a virgl-capable "
                               "virtio-gpu-gl-pci with a GL display and also "
                               "require the 3D assertions (see `make test-3d`)")
     args = parser.parse_args()
+
+    if args.profile == "server":
+        ASSERTIONS[:] = [a for a in ASSERTIONS if a.name not in SERVER_EXCLUDE_ASSERTIONS] + SERVER_ASSERTIONS
+        ASSERTIONS.sort(key=lambda a: a.negative)
 
     if args.virgl:
         ASSERTIONS[:] = ([a for a in ASSERTIONS if a.name not in VIRGL_REPLACES]

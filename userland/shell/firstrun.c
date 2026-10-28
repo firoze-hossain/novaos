@@ -100,6 +100,22 @@ static void read_line_noecho(char* out, int max_len) {
 }
 
 void firstrun_check_and_run(void) {
+    char ed_buf[64];
+    memset(ed_buf, 0, sizeof(ed_buf));
+    int ed_len = vfs_read_file("EDITION.TXT", ed_buf, sizeof(ed_buf) - 1);
+    if (ed_len > 0) {
+        ed_buf[ed_len] = '\0';
+        for (int i = 0; i < ed_len; i++) {
+            if (ed_buf[i] == '\r' || ed_buf[i] == '\n') {
+                ed_buf[i] = '\0';
+                break;
+            }
+        }
+        kernel_log("[ OK ] System edition: %s\n", ed_buf);
+    } else {
+        kernel_log("[ OK ] System edition: NovaOS Desktop Edition (default)\n");
+    }
+
     sysconfig_t cfg;
     if (sysconfig_load(&cfg)) {
         bounded_copy(g_hostname, cfg.hostname, sizeof(g_hostname));

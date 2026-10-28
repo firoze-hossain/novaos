@@ -1807,7 +1807,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     process_create_user_task("demo-a", user_demo_task_a);
     process_create_user_task("demo-b", user_demo_task_b);
 
-    const char* sandbox_caps[] = {"HELLO.TXT"};
+    const char* sandbox_caps[] = {"HELLO.TXT", "EDITION.TXT"};
     const uint32_t sandbox_hosts[] = {NET_GATEWAY_IP};
 
     /* Phase 48: sandbox_demo_task's own SYS_LOGIN/SYS_GETUID self-test
@@ -1820,7 +1820,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
      * -> userscfg_load -> rust_users_load -> rust_users_authenticate)
      * rather than only the in-memory add/authenticate calls. */
     process_create_sandboxed_task("sandbox", sandbox_demo_task, sandbox_caps,
-                                   1, sandbox_hosts, 1, true);
+                                   2, sandbox_hosts, 1, true);
     process_create_user_task("unprivileged", unprivileged_demo_task);
 
     /* Phase 59: exec_trust_demo_task's own SYS_EXEC_TRUSTED self-test

@@ -253,21 +253,50 @@ void sandbox_demo_task(void) {
      * directly removing that exact call and observing the identical
      * crash still occur) to be completely unrelated to either new
      * program's own code. */
-    const char* exec_argv_wm[] = {"WM.ELF", "--selftest"};
-    int exec_pid_wm = sys_exec("WM.ELF", exec_argv_wm, 2);
-    if (exec_pid_wm >= 0) {
-        int exit_code_wm = sys_wait(exec_pid_wm);
-        if (exit_code_wm == 0) {
-            sys_write("[sandbox] PASS: WM.ELF --selftest - real window "
-                      "dragging, click-to-focus, taskbar focus, and edge "
-                      "snap/un-snap all behaved correctly.\n");
-        } else {
-            sys_write("[sandbox] FAIL: WM.ELF --selftest reported at "
-                      "least one failing case.\n");
+    /* Check edition: in Server edition, compositor/WM is stripped */
+    bool is_server_profile = false;
+    int ed_h = sys_open("EDITION.TXT");
+    if (ed_h >= 0) {
+        char ed_buf[64];
+        for (int i = 0; i < 64; i++) {
+            ed_buf[i] = '\0';
         }
+        int n_ed = sys_read(ed_h, ed_buf, sizeof(ed_buf) - 1);
+        sys_close(ed_h);
+        if (n_ed > 0) {
+            for (int i = 0; i + 5 < n_ed; i++) {
+                if ((ed_buf[i] == 'S' || ed_buf[i] == 's') &&
+                    (ed_buf[i+1] == 'e' || ed_buf[i+1] == 'E') &&
+                    (ed_buf[i+2] == 'r' || ed_buf[i+2] == 'R') &&
+                    (ed_buf[i+3] == 'v' || ed_buf[i+3] == 'V') &&
+                    (ed_buf[i+4] == 'e' || ed_buf[i+4] == 'E') &&
+                    (ed_buf[i+5] == 'r' || ed_buf[i+5] == 'R')) {
+                    is_server_profile = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (is_server_profile) {
+        sys_write("[sandbox] PASS: Server edition profile active - compositor/WM skipped.\n");
     } else {
-        sys_write("[sandbox] FAIL: SYS_EXEC(\"WM.ELF\") failed to "
-                  "start.\n");
+        const char* exec_argv_wm[] = {"WM.ELF", "--selftest"};
+        int exec_pid_wm = sys_exec("WM.ELF", exec_argv_wm, 2);
+        if (exec_pid_wm >= 0) {
+            int exit_code_wm = sys_wait(exec_pid_wm);
+            if (exit_code_wm == 0) {
+                sys_write("[sandbox] PASS: WM.ELF --selftest - real window "
+                          "dragging, click-to-focus, taskbar focus, and edge "
+                          "snap/un-snap all behaved correctly.\n");
+            } else {
+                sys_write("[sandbox] FAIL: WM.ELF --selftest reported at "
+                          "least one failing case.\n");
+            }
+        } else {
+            sys_write("[sandbox] FAIL: SYS_EXEC(\"WM.ELF\") failed to "
+                      "start.\n");
+        }
     }
 
     /* The allowed file: should succeed. */
