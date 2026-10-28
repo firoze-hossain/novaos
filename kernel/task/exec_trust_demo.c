@@ -523,6 +523,21 @@ void exec_trust_demo_task(void) {
                   : "[sandbox] FAIL: CRASHREP.ELF --selftest reported at least "
                     "one failing case.\n");
 
+    /* Month 6 - First impressions: FIRSTRUN.ELF --selftest.
+     * Proves first-run setup wizard state machine transitions, hardware detection,
+     * machine identity & hostname configuration (SYSTEM.CFG), administrator account
+     * creation with PBKDF2-HMAC-SHA256 (USERS.CFG), network configuration & packet
+     * filter policy (FIREWALL.CFG), visual preferences & accessibility (ACCESS.CFG),
+     * and zero-syscall BufferSurface32 graphical rasterization from ring 3. */
+    static const char* const firstrun_all[] = {"FIRSTRUN.ELF", "--selftest"};
+    int pid_firstrun = sys_exec_trusted("FIRSTRUN.ELF", (const char**)firstrun_all, 2);
+    int code_firstrun = (pid_firstrun >= 0) ? sys_wait(pid_firstrun) : -1;
+    sys_write(pid_firstrun >= 0 && code_firstrun == 0
+                  ? "[sandbox] PASS: FIRSTRUN.ELF --selftest - first-run setup wizard, "
+                    "account creation, network setup, and preferences all behaved correctly.\n"
+                  : "[sandbox] FAIL: FIRSTRUN.ELF --selftest reported at least "
+                    "one failing case.\n");
+
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root
      * and policy administrator; it starts MACJAIL.ELF (and its other names),
      * each confined by its own NAME.MAC profile, and checks what the kernel

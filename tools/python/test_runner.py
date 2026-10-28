@@ -447,6 +447,19 @@ ASSERTIONS: list[Assertion] = [
               r"crashrep-selftest. PASS: zero-syscall BufferSurface32 graphical presentation",
               "Month 6 First impressions: userland/crashrep-rs/crashrep.rs - "
               "zero-syscall BufferSurface32 graphical rasterization of problem reporter views"),
+    Assertion("firstrun_selftest_passed",
+              r"sandbox. PASS: FIRSTRUN\.ELF --selftest - first-run setup wizard, "
+              r"account creation, network setup, and preferences all behaved correctly",
+              "Month 6 First impressions: userland/firstrun-rs/firstrun.rs - "
+              "first-run setup wizard application and initial configuration flow"),
+    Assertion("firstrun_navigation_passed",
+              r"firstrun-selftest. PASS: first-run wizard state machine and step navigation",
+              "Month 6 First impressions: userland/firstrun-rs/firstrun.rs - "
+              "multi-step wizard navigation, identity validation, and credential synthesis"),
+    Assertion("firstrun_ui_passed",
+              r"firstrun-selftest. PASS: graphical first-run wizard presentation on BufferSurface32",
+              "Month 6 First impressions: userland/firstrun-rs/firstrun.rs - "
+              "zero-syscall BufferSurface32 graphical presentation and interactive controls"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "
