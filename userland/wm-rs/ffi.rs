@@ -115,6 +115,11 @@ extern "C" {
     pub fn sys_gfx_exit();
     pub fn sys_gfx_put_pixel(x: i32, y: i32, color: u8);
     pub fn sys_gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: u8);
+
+    // --- VFS File Syscalls ---
+    pub fn sys_open(filename: *const u8) -> i32;
+    pub fn sys_read(handle: i32, buf: *mut u8, max_len: i32) -> i32;
+    pub fn sys_close(handle: i32);
 }
 
 #[cfg(test)]
@@ -147,3 +152,9 @@ pub unsafe fn sys_gfx_exit() {}
 pub unsafe fn sys_gfx_put_pixel(_x: i32, _y: i32, _color: u8) {}
 #[cfg(test)]
 pub unsafe fn sys_gfx_fill_rect(_x: i32, _y: i32, _w: i32, _h: i32, _color: u8) {}
+#[cfg(test)]
+pub unsafe fn sys_open(_filename: *const u8) -> i32 { -1 }
+#[cfg(test)]
+pub unsafe fn sys_read(_handle: i32, _buf: *mut u8, _max_len: i32) -> i32 { 0 }
+#[cfg(test)]
+pub unsafe fn sys_close(_handle: i32) {}

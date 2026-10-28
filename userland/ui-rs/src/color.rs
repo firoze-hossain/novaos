@@ -195,6 +195,10 @@ pub enum Theme {
 }
 
 impl Theme {
+    pub const fn is_high_contrast(&self) -> bool {
+        matches!(self, Theme::HighContrast)
+    }
+
     pub const fn palette(&self) -> ThemePalette {
         match self {
             Theme::Dark => ThemePalette {
@@ -280,4 +284,17 @@ impl Theme {
             },
         }
     }
+}
+
+/// Computes WCAG 2.1 relative luminance (0..=255) using integer arithmetic.
+pub const fn relative_luminance(c: Color) -> u32 {
+    (2126 * c.r as u32 + 7152 * c.g as u32 + 722 * c.b as u32 + 5000) / 10000
+}
+
+/// Computes WCAG 2.1 contrast ratio multiplied by 10 (e.g. 210 = 21.0:1, 70 = 7.0:1 AAA, 45 = 4.5:1 AA).
+pub const fn contrast_ratio(c1: Color, c2: Color) -> u32 {
+    let l1 = relative_luminance(c1);
+    let l2 = relative_luminance(c2);
+    let (bright, dark) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    ((bright + 13) * 10) / (dark + 13)
 }

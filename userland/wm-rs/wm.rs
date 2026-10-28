@@ -130,6 +130,7 @@ pub struct Wm {
     pub dock_count: usize,
     pub hovered_dock_item: Option<usize>,
     pub last_dock_event: Option<DockEvent>,
+    pub access_cfg: AccessibilityConfig,
 }
 
 impl Wm {
@@ -175,6 +176,7 @@ impl Wm {
             dock_count: 4,
             hovered_dock_item: None,
             last_dock_event: None,
+            access_cfg: AccessibilityConfig::new(),
         }
     }
 
@@ -230,7 +232,46 @@ impl Wm {
             dock_count,
             hovered_dock_item: None,
             last_dock_event: None,
+            access_cfg: AccessibilityConfig::new(),
         }
+    }
+
+    /// Sets the desktop theme and updates cursor and window chrome accordingly.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.access_cfg.theme = theme;
+        self.cursor_theme = self.access_cfg.effective_cursor_theme();
+        if theme.is_high_contrast() {
+            for w in self.windows.iter_mut() {
+                w.body_color = Color::BLACK;
+                w.titlebar_color = Color::WHITE;
+            }
+        } else {
+            let pal = theme.palette();
+            for (idx, w) in self.windows.iter_mut().enumerate() {
+                w.body_color = pal.surface_raised;
+                w.titlebar_color = if idx == 0 { pal.titlebar_active } else { pal.titlebar_inactive };
+            }
+        }
+    }
+
+    /// Updates the global font scale multiplier and recalibrates chrome geometry.
+    pub fn set_font_scale(&mut self, scale: FontScale) {
+        self.access_cfg.font_scale = scale;
+        let base_tb = if self.screen_h >= 600 { FB_TITLEBAR_H } else { DEFAULT_TITLEBAR_H };
+        let base_mb = if self.screen_h >= 600 { FB_MENUBAR_H } else { 0 };
+        let base_task = if self.screen_h >= 600 { FB_TASKBAR_H } else { DEFAULT_TASKBAR_H };
+        self.titlebar_h = self.access_cfg.titlebar_height(base_tb);
+        self.menubar_h = self.access_cfg.menubar_height(base_mb);
+        self.taskbar_h = self.access_cfg.taskbar_height(base_task);
+        self.desktop_h = self.screen_h - self.taskbar_h;
+    }
+
+    /// Applies an entire accessibility configuration to the window manager.
+    pub fn apply_accessibility_config(&mut self, cfg: AccessibilityConfig) {
+        self.access_cfg = cfg;
+        self.cursor_theme = cfg.effective_cursor_theme();
+        self.set_theme(cfg.theme);
+        self.set_font_scale(cfg.font_scale);
     }
 
     /// Raises `win_index` to topmost in z-order.
@@ -797,7 +838,8 @@ impl Wm {
     /// Renders desktop background, windows in z-order, taskbar, and cursor
     /// directly into a 32-bit (or generic) drawing surface with zero per-pixel syscalls.
     pub fn render<S: Surface + ?Sized>(&self, surface: &mut S) {
-        let palette = Theme::Dark.palette();
+        let palette = self.access_cfg.effective_palette();
+        let is_high_contrast = self.access_cfg.theme.is_high_contrast();
 
         // 1. Desktop background
         surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
@@ -812,14 +854,20 @@ impl Wm {
             }
             let is_active = Some(win_idx) == active_win;
 
-            let (tb_color, border_col) = if is_active {
+            let (tb_color, border_col) = if is_high_contrast {
+                if is_active {
+                    (Color::WHITE, palette.border_focused) // White active titlebar, pure yellow border
+                } else {
+                    (Color::BLACK, palette.border_normal)  // Black inactive titlebar, pure white border
+                }
+            } else if is_active {
                 (w.titlebar_color, palette.border_focused)
             } else {
                 (w.titlebar_color.darken(40), palette.border_normal)
             };
 
-            // Window outer drop shadow for active window on high-res
-            if is_active && self.titlebar_h >= 20 && w.snap == SnapState::Normal {
+            // Window outer drop shadow for active window on high-res (disabled in high contrast)
+            if is_active && self.titlebar_h >= 20 && w.snap == SnapState::Normal && !is_high_contrast {
                 surface.fill_rect(Rect::new(w.x + 3, w.y + w.h, w.w - 1, 2), Color::rgba(0, 0, 0, 45));
                 surface.fill_rect(Rect::new(w.x + w.w, w.y + 3, 2, w.h), Color::rgba(0, 0, 0, 45));
             }
@@ -827,8 +875,9 @@ impl Wm {
             // Window client body
             let body_y = w.y + self.titlebar_h;
             let body_h = w.h - self.titlebar_h;
+            let body_color = if is_high_contrast { Color::BLACK } else { w.body_color };
             if body_h > 0 {
-                surface.fill_rect(Rect::new(w.x, body_y, w.w, body_h), w.body_color);
+                surface.fill_rect(Rect::new(w.x, body_y, w.w, body_h), body_color);
 
                 // Render client application view on high-res
                 if w.label == 1 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
@@ -845,7 +894,9 @@ impl Wm {
             }
 
             // Window titlebar
-            if self.titlebar_h >= 20 {
+            if is_high_contrast {
+                surface.fill_rect(Rect::new(w.x, w.y, w.w, self.titlebar_h), tb_color);
+            } else if self.titlebar_h >= 20 {
                 let half_h = self.titlebar_h / 2;
                 surface.fill_rect(Rect::new(w.x, w.y, w.w, half_h), tb_color.lighten(12));
                 surface.fill_rect(Rect::new(w.x, w.y + half_h, w.w, self.titlebar_h - half_h), tb_color);
@@ -854,27 +905,40 @@ impl Wm {
             }
 
             // Titlebar top highlight sheen & bottom separator
-            if self.titlebar_h > 1 {
+            if self.titlebar_h > 1 && !is_high_contrast {
                 let sheen_col = if is_active { tb_color.lighten(35) } else { tb_color.lighten(15) };
                 surface.fill_rect(Rect::new(w.x + 1, w.y, w.w - 2, 1), sheen_col);
                 surface.fill_rect(Rect::new(w.x, w.y + self.titlebar_h - 1, w.w, 1), palette.border_subtle);
+            } else if is_high_contrast {
+                surface.fill_rect(Rect::new(w.x, w.y + self.titlebar_h - 1, w.w, 1), palette.border_normal);
             }
 
             // Window border outline
-            ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 1, border_col);
-            if is_active && self.titlebar_h >= 20 {
-                ui::draw::draw_rect_outline(surface, Rect::new(w.x + 1, w.y + 1, w.w - 2, w.h - 2), 1, Color::rgba(255, 255, 255, 20));
+            if is_high_contrast && is_active {
+                ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 2, palette.border_focused);
+            } else {
+                ui::draw::draw_rect_outline(surface, Rect::new(w.x, w.y, w.w, w.h), 1, border_col);
+                if is_active && self.titlebar_h >= 20 && !is_high_contrast {
+                    ui::draw::draw_rect_outline(surface, Rect::new(w.x + 1, w.y + 1, w.w - 2, w.h - 2), 1, Color::rgba(255, 255, 255, 20));
+                }
             }
 
             // Application Icon & Title Text
-            let text_col = if is_active { palette.text_primary } else { palette.text_muted };
+            let text_col = if is_high_contrast {
+                if is_active { palette.titlebar_text_active } else { palette.titlebar_text_inactive }
+            } else if is_active {
+                palette.text_primary
+            } else {
+                palette.text_muted
+            };
+
             if self.titlebar_h >= 20 {
-                let icon_size = 12;
+                let icon_size = if self.titlebar_h >= 32 { 16 } else { 12 };
                 let icon_x = w.x + 8;
                 let icon_y = w.y + (self.titlebar_h - icon_size) / 2;
                 draw_app_icon(surface, icon_x, icon_y, w.label, &palette);
 
-                let font = Font::regular();
+                let font = Font::regular().scaled(self.access_cfg.font_scale);
                 let text_x = icon_x + icon_size + 6;
                 let text_y = w.y + (self.titlebar_h - font.line_height()) / 2;
                 let title_str = match w.label {
@@ -887,22 +951,25 @@ impl Wm {
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
             } else {
-                let font = Font::small();
+                let font = Font::small().scaled(self.access_cfg.font_scale);
                 let text_y = w.y + (self.titlebar_h - 8).max(0) / 2;
                 ui::font::draw_char_font(surface, w.x + 4, text_y, b'0' + w.label, text_col, &font);
             }
 
             // Redesigned Window Control Buttons (Close, Maximize, Minimize)
             if self.titlebar_h >= 14 && w.w >= 80 {
-                let btn_size = if self.titlebar_h >= 20 { 12 } else { 8 };
+                let btn_size = if self.titlebar_h >= 32 { 16 } else if self.titlebar_h >= 20 { 12 } else { 8 };
                 let btn_y = w.y + (self.titlebar_h - btn_size) / 2;
                 let close_x = w.x + w.w - btn_size - 8;
                 let max_x = close_x - btn_size - 6;
                 let min_x = max_x - btn_size - 6;
 
                 // Close Button ('X')
-                let close_col = if is_active { palette.status_danger } else { palette.status_danger.darken(35) };
+                let close_col = if is_active || is_high_contrast { palette.status_danger } else { palette.status_danger.darken(35) };
                 ui::draw::draw_rounded_rect(surface, Rect::new(close_x, btn_y, btn_size, btn_size), 2, close_col);
+                if is_high_contrast {
+                    ui::draw::draw_rect_outline(surface, Rect::new(close_x, btn_y, btn_size, btn_size), 1, Color::WHITE);
+                }
                 let x_span = ((btn_size - 4) / 2).max(1);
                 let cx = close_x + btn_size / 2;
                 let cy = btn_y + btn_size / 2;
@@ -910,19 +977,26 @@ impl Wm {
                 ui::draw::draw_line(surface, cx + x_span, cy - x_span, cx - x_span, cy + x_span, Color::WHITE);
 
                 // Maximize Button ('[]')
-                let max_col = if is_active { palette.status_success } else { palette.status_success.darken(35) };
+                let max_col = if is_active || is_high_contrast { palette.status_success } else { palette.status_success.darken(35) };
                 ui::draw::draw_rounded_rect(surface, Rect::new(max_x, btn_y, btn_size, btn_size), 2, max_col);
+                if is_high_contrast {
+                    ui::draw::draw_rect_outline(surface, Rect::new(max_x, btn_y, btn_size, btn_size), 1, Color::WHITE);
+                }
                 let sq_size = (btn_size - 6).max(3);
                 let sq_x = max_x + (btn_size - sq_size) / 2;
                 let sq_y = btn_y + (btn_size - sq_size) / 2;
                 ui::draw::draw_rect_outline(surface, Rect::new(sq_x, sq_y, sq_size, sq_size), 1, Color::WHITE);
 
                 // Minimize Button ('-')
-                let min_col = if is_active { palette.status_warning } else { palette.status_warning.darken(35) };
+                let min_col = if is_active || is_high_contrast { palette.status_warning } else { palette.status_warning.darken(35) };
                 ui::draw::draw_rounded_rect(surface, Rect::new(min_x, btn_y, btn_size, btn_size), 2, min_col);
+                if is_high_contrast {
+                    ui::draw::draw_rect_outline(surface, Rect::new(min_x, btn_y, btn_size, btn_size), 1, Color::WHITE);
+                }
                 let bar_w = (btn_size - 4).max(3);
                 let bar_x = min_x + (btn_size - bar_w) / 2;
-                surface.fill_rect(Rect::new(bar_x, cy, bar_w, 1), Color::WHITE);
+                let bar_color = if is_high_contrast { Color::BLACK } else { Color::WHITE };
+                surface.fill_rect(Rect::new(bar_x, cy, bar_w, 1), bar_color);
             }
         }
 
@@ -1016,7 +1090,8 @@ impl Wm {
 
         // 6. Mouse cursor
         let shape = self.cursor_shape_at(self.cursor_x, self.cursor_y);
-        ui::cursor::draw_cursor_sprite(surface, self.cursor_x, self.cursor_y, shape, self.cursor_theme);
+        let cur_theme = self.access_cfg.effective_cursor_theme();
+        ui::cursor::draw_cursor_sprite(surface, self.cursor_x, self.cursor_y, shape, cur_theme);
     }
 }
 
@@ -1649,9 +1724,9 @@ pub fn run_selftest() -> i32 {
     // Case 6 (Month 2 Compositor): Verify framebuffer surface rendering via BufferSurface32
     wm.cursor_x = wm.screen_w / 2;
     wm.cursor_y = wm.desktop_h / 2;
-    static mut TEST_BUF: [u32; 320 * 200] = [0u32; 320 * 200];
+    static mut TEST_BUF: [u32; 1024 * 100] = [0u32; 1024 * 100];
     let test_buf: &mut [u32] = unsafe {
-        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_BUF) as *mut u32, 320 * 200)
+        core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(TEST_BUF) as *mut u32, 1024 * 100)
     };
     let mut surface = ui::draw::BufferSurface32::new(test_buf, 320, 200);
     wm.render(&mut surface);
@@ -1899,10 +1974,87 @@ pub fn run_selftest() -> i32 {
         code |= 1024;
     }
 
+    // Case 11 (Month 5 Power-user & system apps): Accessibility basics - font scaling and high-contrast mode
+    let mut wm_acc = Wm::new_for_display(1024, 768);
+
+    // 1. Verify accessibility configuration application
+    let mut acc_cfg = AccessibilityConfig::high_contrast();
+    acc_cfg.font_scale = FontScale::Large; // 150%
+    wm_acc.apply_accessibility_config(acc_cfg);
+
+    // 2. Geometry invariants with scaled font
+    let titlebar_scaled_ok = wm_acc.titlebar_h >= 32;
+    let taskbar_scaled_ok = wm_acc.taskbar_h >= 48;
+    let menubar_scaled_ok = wm_acc.menubar_h >= 30;
+
+    // 3. High-contrast palette invariants (WCAG AAA >= 7.0:1)
+    let pal_hc = wm_acc.access_cfg.effective_palette();
+    let is_hc_theme = wm_acc.access_cfg.theme.is_high_contrast();
+    let text_cr = ui::color::contrast_ratio(pal_hc.text_primary, pal_hc.window_bg);
+    let accent_cr = ui::color::contrast_ratio(pal_hc.accent_primary, pal_hc.desktop_bg);
+    let contrast_ok = is_hc_theme && text_cr >= 70 && accent_cr >= 70 && pal_hc.desktop_bg == Color::BLACK;
+
+    // 4. Compositor rendering with high-contrast theme and font scaling
+    wm_acc.raise(0); // Window 0 active
+    test_buf[..1024 * 90].fill(0);
+    let mut acc_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 90], 1024, 90);
+    wm_acc.render(&mut acc_surf);
+
+    let desktop_pixel = acc_surf.buffer[37 * 1024 + 5];
+    let is_black_desktop = desktop_pixel == pal_hc.desktop_bg.to_xrgb();
+
+    // Active window 0 is at x=40, y=40, w=360, titlebar_h >= 32
+    let mut found_white_titlebar = false;
+    let mut found_yellow_border = false;
+    for y in 40..wm_acc.titlebar_h + 40 {
+        for x in 40..400 {
+            let p = acc_surf.buffer[(y * 1024 + x) as usize];
+            if p == 0x00FFFFFF {
+                found_white_titlebar = true;
+            } else if p == 0x00FFFF00 {
+                found_yellow_border = true;
+            }
+        }
+    }
+
+    // 5. High-contrast cursor theme
+    let cur_theme = wm_acc.access_cfg.effective_cursor_theme();
+    let cur_hc_ok = cur_theme == CursorTheme::HighContrast;
+
+    // 6. Serialization roundtrip for ACCESS.CFG
+    let mut cfg_bytes = [0u8; ACCESS_CFG_SIZE];
+    acc_cfg.serialize(&mut cfg_bytes);
+    let deserialized_cfg = AccessibilityConfig::deserialize(&cfg_bytes);
+    let serialization_ok = deserialized_cfg == Some(acc_cfg);
+
+    if titlebar_scaled_ok && taskbar_scaled_ok && menubar_scaled_ok && contrast_ok
+        && is_black_desktop && found_white_titlebar && found_yellow_border && cur_hc_ok && serialization_ok
+    {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: accessibility high-contrast mode and font scaling\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: accessibility high-contrast mode and font scaling\n\0".as_ptr()) };
+        code |= 2048;
+    }
+
     if code == 0 {
         unsafe { ffi::sys_write(b"[wm-selftest] all cases passed\n\0".as_ptr()) };
     }
     code
+}
+
+fn load_access_cfg() -> Option<AccessibilityConfig> {
+    let mut buf = [0u8; ACCESS_CFG_SIZE];
+    let fd = unsafe { ffi::sys_open(b"/ACCESS.CFG\0".as_ptr()) };
+    if fd < 0 {
+        return None;
+    }
+    let n = unsafe { ffi::sys_read(fd, buf.as_mut_ptr(), ACCESS_CFG_SIZE as i32) };
+    unsafe { ffi::sys_close(fd) };
+    if n as usize >= ACCESS_CFG_SIZE {
+        AccessibilityConfig::deserialize(&buf)
+    } else {
+        None
+    }
 }
 
 fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
@@ -1981,6 +2133,9 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     let total_pixels = (screen_w * screen_h) as usize;
 
     let mut wm = Wm::new_for_display(screen_w, screen_h);
+    if let Some(cfg) = load_access_cfg() {
+        wm.apply_accessibility_config(cfg);
+    }
 
     loop {
         let key = unsafe { ffi::sys_read_key() };
@@ -2256,5 +2411,47 @@ mod tests {
         wm.on_dock_item_click(1);
         assert!(wm.windows[1].is_open);
         assert_eq!(wm.active_window(), Some(1));
+    }
+
+    #[test]
+    fn test_wm_accessibility_high_contrast_and_scaling() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        assert_eq!(wm.titlebar_h, 28);
+        assert_eq!(wm.taskbar_h, 36);
+
+        // Apply high contrast & 150% font scale
+        let mut cfg = AccessibilityConfig::high_contrast();
+        cfg.font_scale = FontScale::Large; // 150%
+        wm.apply_accessibility_config(cfg);
+
+        assert!(wm.titlebar_h >= 32);
+        assert!(wm.taskbar_h >= 48);
+        assert!(wm.menubar_h >= 30);
+        assert_eq!(wm.cursor_theme, CursorTheme::HighContrast);
+        assert_eq!(wm.access_cfg.theme, Theme::HighContrast);
+
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surface = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surface);
+
+        // Desktop background outside menubar is pure black
+        let desk_pixel = surface.buffer[((wm.menubar_h + 2) * 1024 + 2) as usize];
+        assert_eq!(desk_pixel, 0);
+
+        // Active window titlebar has white background and yellow border
+        let mut found_white = false;
+        let mut found_yellow = false;
+        for y in 40..wm.titlebar_h + 40 {
+            for x in 40..400 {
+                let p = surface.buffer[(y * 1024 + x) as usize];
+                if p == 0x00FFFFFF {
+                    found_white = true;
+                } else if p == 0x00FFFF00 {
+                    found_yellow = true;
+                }
+            }
+        }
+        assert!(found_white, "Active window should have high-contrast white titlebar");
+        assert!(found_yellow, "Active window should have high-contrast yellow border");
     }
 }

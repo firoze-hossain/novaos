@@ -6,6 +6,7 @@
 
 #![no_std]
 
+pub mod access;
 pub mod color;
 pub mod cursor;
 pub mod dock;
@@ -19,7 +20,12 @@ pub mod typography;
 pub mod widget;
 
 pub mod prelude {
-    pub use crate::color::{Color, Theme, ThemePalette, BLACK, TRANSPARENT, WHITE};
+    pub use crate::access::{
+        AccessibilityConfig, FontScale, ACCESS_CFG_MAGIC, ACCESS_CFG_SIZE, ACCESS_CFG_VERSION,
+    };
+    pub use crate::color::{
+        contrast_ratio, relative_luminance, Color, Theme, ThemePalette, BLACK, TRANSPARENT, WHITE,
+    };
     pub use crate::cursor::{
         draw_cursor_sprite, CursorColors, CursorShape, CursorSprite, CursorTheme,
     };
@@ -34,8 +40,8 @@ pub mod prelude {
         BufferSurface8, Surface,
     };
     pub use crate::font::{
-        draw_char_font, draw_text_font, draw_text_font_aligned, font_for_scale, AntialiasMode,
-        Font, FontSize, FontStyle, GlyphMetrics,
+        draw_char_font, draw_text_font, draw_text_font_aligned, font_for_scale,
+        font_for_scale_with_factor, AntialiasMode, Font, FontSize, FontStyle, GlyphMetrics,
     };
     pub use crate::geom::{Insets, Point, Rect, Size};
     pub use crate::menu::{
@@ -199,6 +205,38 @@ pub fn run_design_system_selftest() -> i32 {
     }
     if app_for_id(APP_ID_SETTINGS).is_none() {
         failures |= 65536;
+    }
+
+    // 11. Accessibility Invariants (Month 5 Power-user & system apps)
+    let hc_palette = Theme::HighContrast.palette();
+    let text_contrast = contrast_ratio(hc_palette.text_primary, hc_palette.window_bg);
+    let accent_contrast = contrast_ratio(hc_palette.accent_primary, hc_palette.desktop_bg);
+    if text_contrast < 70 || accent_contrast < 70 {
+        failures |= 131072;
+    }
+
+    let s100 = FontScale::Normal;
+    let s125 = s100.cycle_next();
+    let s150 = s125.cycle_next();
+    let s200 = s150.cycle_next();
+    if s125 != FontScale::Medium || s150 != FontScale::Large || s200 != FontScale::ExtraLarge || s200.cycle_next() != FontScale::Normal {
+        failures |= 262144;
+    }
+    if s150.scale_px(16) != 24 || s200.scale_px(16) != 32 {
+        failures |= 262144;
+    }
+
+    let f_scaled = f_reg.scaled(FontScale::Large);
+    if f_scaled.line_height() <= f_reg.line_height() {
+        failures |= 524288;
+    }
+
+    let acc_cfg = AccessibilityConfig::high_contrast();
+    let mut acc_buf = [0u8; ACCESS_CFG_SIZE];
+    acc_cfg.serialize(&mut acc_buf);
+    let deserialized = AccessibilityConfig::deserialize(&acc_buf);
+    if deserialized != Some(acc_cfg) {
+        failures |= 1048576;
     }
 
     failures
@@ -594,5 +632,95 @@ mod tests {
         let item0_rect = measure_dock_item(0, 4, Rect::new(0, 0, 1024, 36), 48, 120).unwrap();
         let bar_pixel = surface.buffer[(item0_rect.bottom() - 1) as usize * 1024 + (item0_rect.x + 15) as usize];
         assert_eq!(bar_pixel, palette.accent_primary.to_xrgb());
+    }
+
+    #[test]
+    fn test_accessibility_palette_and_contrast() {
+        let hc = Theme::HighContrast.palette();
+        assert_eq!(hc.desktop_bg, BLACK);
+        assert_eq!(hc.window_bg, BLACK);
+        assert_eq!(hc.titlebar_active, WHITE);
+        assert_eq!(hc.titlebar_text_active, BLACK);
+        assert_eq!(hc.text_primary, WHITE);
+        assert_eq!(hc.accent_primary, Color::from_hex(0xFFFF00));
+
+        // WCAG AAA requires >= 7.0:1 (contrast_ratio >= 70)
+        let cr_text = contrast_ratio(hc.text_primary, hc.window_bg);
+        assert!(cr_text >= 70, "Text contrast ratio {} should meet WCAG AAA (>= 70)", cr_text);
+
+        let cr_title = contrast_ratio(hc.titlebar_text_active, hc.titlebar_active);
+        assert!(cr_title >= 70, "Active titlebar text contrast {} should meet WCAG AAA", cr_title);
+
+        let cr_accent = contrast_ratio(hc.accent_primary, hc.desktop_bg);
+        assert!(cr_accent >= 70, "Accent contrast ratio {} should meet WCAG AAA", cr_accent);
+    }
+
+    #[test]
+    fn test_font_scale_and_scaled_metrics() {
+        let f_reg = Font::regular();
+        assert_eq!(f_reg.line_height(), 16);
+
+        let f_100 = f_reg.scaled(FontScale::Normal);
+        assert_eq!(f_100.line_height(), 16);
+
+        let f_125 = f_reg.scaled(FontScale::Medium);
+        assert!(f_125.line_height() >= 20);
+
+        let f_150 = f_reg.scaled(FontScale::Large);
+        assert_eq!(f_150.line_height(), 24);
+
+        let f_200 = f_reg.scaled(FontScale::ExtraLarge);
+        assert!(f_200.line_height() >= 32);
+
+        let sz_reg = f_reg.measure_str("NovaOS");
+        let sz_large = f_150.measure_str("NovaOS");
+        assert!(sz_large.w > sz_reg.w);
+        assert!(sz_large.h > sz_reg.h);
+    }
+
+    #[test]
+    fn test_access_cfg_serialization_and_validation() {
+        let cfg = AccessibilityConfig {
+            theme: Theme::HighContrast,
+            font_scale: FontScale::Large,
+            high_contrast_cursor: true,
+            cursor_theme: CursorTheme::HighContrast,
+            show_focus_rects: true,
+            large_titlebars: true,
+        };
+
+        let mut buf = [0u8; ACCESS_CFG_SIZE];
+        cfg.serialize(&mut buf);
+
+        assert_eq!(&buf[0..4], b"NVAC");
+        assert_eq!(buf[4], 1);
+        assert_eq!(buf[5], 2); // Theme::HighContrast
+        assert_eq!(buf[6], 150); // FontScale::Large
+
+        let parsed = AccessibilityConfig::deserialize(&buf).expect("must parse valid config");
+        assert_eq!(parsed, cfg);
+
+        // Corrupt checksum check
+        buf[62] ^= 0xFF;
+        assert!(AccessibilityConfig::deserialize(&buf).is_none(), "corrupt checksum must fail");
+    }
+
+    #[test]
+    fn test_high_contrast_cursor_colors() {
+        let colors = CursorTheme::HighContrast.colors();
+        assert_eq!(colors.outline, Color::rgb(0, 0, 0));
+        assert_eq!(colors.fill, Color::rgb(255, 255, 0)); // Yellow
+    }
+
+    #[test]
+    fn test_scaled_text_surface_rendering() {
+        let font_scaled = Font::regular().scaled(FontScale::Large);
+        let mut buf = [0u32; 200 * 40];
+        let mut surface = BufferSurface32::new(&mut buf, 200, 40);
+
+        draw_text_font(&mut surface, 10, 5, "Accessibility", Color::WHITE, &font_scaled);
+
+        let lit_count = surface.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(lit_count > 100, "Scaled text must draw pixels into surface");
     }
 }

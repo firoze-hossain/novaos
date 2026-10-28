@@ -279,6 +279,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wm_dock_selftest",
               r"\[wm-selftest\] PASS: dock with app pinning and window switching",
               "Month 3 Core desktop apps: dock with app pinning and window switching"),
+    Assertion("wm_accessibility_selftest",
+              r"\[wm-selftest\] PASS: accessibility high-contrast mode and font scaling",
+              "Month 5 Power-user & system apps: WM accessibility basics with font scaling and WCAG AAA high-contrast mode"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "
@@ -325,6 +328,14 @@ ASSERTIONS: list[Assertion] = [
               r"settings-selftest. PASS: Device Manager graphical presentation on BufferSurface32",
               "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
               "Device Manager hardware tree and registered drivers presentation on 32-bit framebuffer surface"),
+    Assertion("settings_accessibility_cfg_passed",
+              r"settings-selftest. PASS: accessibility configuration and ACCESS\.CFG persistence",
+              "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
+              "accessibility preferences, font scaling, high-contrast mode, and ACCESS.CFG serialization"),
+    Assertion("settings_accessibility_ui_passed",
+              r"settings-selftest. PASS: accessibility preferences graphical presentation on BufferSurface32",
+              "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
+              "accessibility panel rendering font scaling and high contrast toggles"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",

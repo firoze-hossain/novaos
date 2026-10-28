@@ -1808,8 +1808,12 @@ impl NetworkConfig {
 pub struct DisplayConfig {
     pub theme: Theme,
     pub cursor_theme: CursorTheme,
+    pub font_scale: FontScale,
+    pub high_contrast_cursor: bool,
     pub titlebar_sheen: bool,
     pub window_shadows: bool,
+    pub show_focus_rects: bool,
+    pub large_titlebars: bool,
 }
 
 impl DisplayConfig {
@@ -1817,17 +1821,40 @@ impl DisplayConfig {
         DisplayConfig {
             theme: Theme::Dark,
             cursor_theme: CursorTheme::ModernDark,
+            font_scale: FontScale::Normal,
+            high_contrast_cursor: false,
             titlebar_sheen: true,
             window_shadows: true,
+            show_focus_rects: false,
+            large_titlebars: false,
         }
     }
 
     pub fn new() -> Self {
+        DisplayConfig::empty()
+    }
+
+    pub const fn to_accessibility_config(&self) -> AccessibilityConfig {
+        AccessibilityConfig {
+            theme: self.theme,
+            font_scale: self.font_scale,
+            high_contrast_cursor: self.high_contrast_cursor,
+            cursor_theme: self.cursor_theme,
+            show_focus_rects: self.show_focus_rects,
+            large_titlebars: self.large_titlebars,
+        }
+    }
+
+    pub const fn from_accessibility_config(cfg: &AccessibilityConfig) -> Self {
         DisplayConfig {
-            theme: Theme::Dark,
-            cursor_theme: CursorTheme::ModernDark,
-            titlebar_sheen: true,
-            window_shadows: true,
+            theme: cfg.theme,
+            cursor_theme: cfg.cursor_theme,
+            font_scale: cfg.font_scale,
+            high_contrast_cursor: cfg.high_contrast_cursor,
+            titlebar_sheen: !cfg.theme.is_high_contrast(),
+            window_shadows: !cfg.theme.is_high_contrast(),
+            show_focus_rects: cfg.show_focus_rects,
+            large_titlebars: cfg.large_titlebars,
         }
     }
 }
@@ -2072,7 +2099,7 @@ impl PanelKind {
             PanelKind::Users    => "User Accounts",
             PanelKind::Services => "Startup & Services",
             PanelKind::Firewall => "Network & Firewall",
-            PanelKind::Display  => "Display & Appearance",
+            PanelKind::Display  => "Display & Accessibility",
             PanelKind::Devices  => "Device Manager",
         }
     }
@@ -2083,7 +2110,7 @@ impl PanelKind {
             PanelKind::Users    => "Local accounts, UID/GID mapping, PBKDF2 salt and hash records (USERS.CFG)",
             PanelKind::Services => "Service supervisor daemons, restart policies, and dependency tree (SERVICES.CFG)",
             PanelKind::Firewall => "Stateful packet filter rules, policies (SYS_FW_*), and adapter addressing",
-            PanelKind::Display  => "Theme palettes, compositor visual effects, and cursor bitmap styles",
+            PanelKind::Display  => "Font scaling, high-contrast mode, theme palettes, and pointer styles (ACCESS.CFG)",
             PanelKind::Devices  => "Hardware tree, PCI/ISA buses, NVMe/USB/Wi-Fi devices and registered kernel drivers",
         }
     }
@@ -2094,7 +2121,7 @@ impl PanelKind {
             PanelKind::Users    => "USR",
             PanelKind::Services => "SVC",
             PanelKind::Firewall => "FW",
-            PanelKind::Display  => "DISP",
+            PanelKind::Display  => "A11Y",
             PanelKind::Devices  => "DEV",
         }
     }
@@ -2141,6 +2168,9 @@ pub enum SettingsAction {
     FirewallFlushConns,
     FirewallSyncKernel,
     DisplayCycleTheme,
+    DisplayToggleHighContrast,
+    DisplaySetFontScale(FontScale),
+    DisplayCycleFontScale,
     DisplayCycleCursor,
     // Device Manager Actions
     DevicesToggleViewMode(DeviceViewMode),
@@ -2398,17 +2428,49 @@ impl SettingsApp {
         false
     }
 
+    pub fn save_access_cfg(&mut self) -> bool {
+        let buf_ptr = core::ptr::addr_of_mut!(FILE_IO_BUF) as *mut u8;
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf_ptr, ACCESS_CFG_SIZE) };
+        let cfg = self.display_cfg.to_accessibility_config();
+        let mut fixed_buf = [0u8; ACCESS_CFG_SIZE];
+        cfg.serialize(&mut fixed_buf);
+        slice.copy_from_slice(&fixed_buf);
+        let rc = unsafe { ffi::sys_write_file(b"ACCESS.CFG\0".as_ptr(), buf_ptr, ACCESS_CFG_SIZE as u32) };
+        if rc >= 0 {
+            self.set_status("ACCESS.CFG saved & applied to system");
+            self.dirty = false;
+            true
+        } else {
+            self.set_status("Failed to write ACCESS.CFG");
+            false
+        }
+    }
+
+    pub fn load_access_cfg(&mut self) -> bool {
+        let fd = unsafe { ffi::sys_open(b"ACCESS.CFG\0".as_ptr()) };
+        if fd < 0 {
+            return false;
+        }
+        let buf_ptr = core::ptr::addr_of_mut!(FILE_IO_BUF) as *mut u8;
+        let n = unsafe { ffi::sys_read(fd, buf_ptr, ACCESS_CFG_SIZE as i32) };
+        unsafe { ffi::sys_close(fd) };
+        if n as usize >= ACCESS_CFG_SIZE {
+            let slice = unsafe { core::slice::from_raw_parts(buf_ptr, ACCESS_CFG_SIZE) };
+            if let Some(cfg) = AccessibilityConfig::deserialize(slice) {
+                self.display_cfg = DisplayConfig::from_accessibility_config(&cfg);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn save_current_panel(&mut self) -> bool {
         match self.active_panel {
             PanelKind::System   => self.save_system_cfg(),
             PanelKind::Users    => self.save_users_cfg(),
             PanelKind::Services => self.save_services_cfg(),
             PanelKind::Firewall => self.save_firewall_cfg(),
-            PanelKind::Display  => {
-                self.set_status("Display preferences applied");
-                self.dirty = false;
-                true
-            }
+            PanelKind::Display  => self.save_access_cfg(),
             PanelKind::Devices => {
                 self.device_mgr.sync_from_kernel();
                 self.set_status("Device inventory synchronized");
@@ -2423,6 +2485,7 @@ impl SettingsApp {
         self.load_users_cfg();
         self.load_services_cfg();
         self.load_firewall_cfg();
+        self.load_access_cfg();
         self.service_mgr.sync_from_kernel();
         self.device_mgr.sync_from_kernel();
         self.dirty = false;
@@ -2494,13 +2557,35 @@ impl SettingsApp {
                 return self.button_at_firewall(px, py, content_x, content_y);
             }
             PanelKind::Display => {
-                let th_y = content_y + 40;
-                if point_in_rect(px, py, content_x, th_y, 130, 26) {
+                let sec1_y = content_y + 44;
+                let th_y = sec1_y + 18;
+                if point_in_rect(px, py, content_x, th_y, 140, 26) {
                     return Some(SettingsAction::DisplayCycleTheme);
                 }
-                let cur_y = content_y + 112;
-                if point_in_rect(px, py, content_x, cur_y, 130, 26) {
+                let hc_x = content_x + 150;
+                if point_in_rect(px, py, hc_x, th_y, 190, 26) {
+                    return Some(SettingsAction::DisplayToggleHighContrast);
+                }
+                let sec2_y = sec1_y + 56;
+                let fs_y = sec2_y + 18;
+                let btn_w = 90;
+                let scales = [FontScale::Normal, FontScale::Medium, FontScale::Large, FontScale::ExtraLarge];
+                for (i, &sc) in scales.iter().enumerate() {
+                    let bx = content_x + (i as i32 * (btn_w + 6));
+                    if point_in_rect(px, py, bx, fs_y, btn_w, 24) {
+                        return Some(SettingsAction::DisplaySetFontScale(sc));
+                    }
+                }
+                let prev_y = sec2_y + 50;
+                let sec3_y = prev_y + 64;
+                let cur_y = sec3_y + 18;
+                if point_in_rect(px, py, content_x, cur_y, 180, 26) {
                     return Some(SettingsAction::DisplayCycleCursor);
+                }
+                let sec4_y = sec3_y + 56;
+                let save_y = sec4_y + 16;
+                if point_in_rect(px, py, content_x, save_y, 200, 26) {
+                    return Some(SettingsAction::SaveCurrent);
                 }
             }
             PanelKind::Devices => {
@@ -2820,7 +2905,12 @@ impl SettingsApp {
 
     pub fn on_left_click(&mut self, px: i32, py: i32, viewport: Rect) {
         if let Some(action) = self.button_at(px, py, viewport) {
-            match action {
+            self.apply_action(action);
+        }
+    }
+
+    pub fn apply_action(&mut self, action: SettingsAction) {
+        match action {
                 SettingsAction::SelectPanel(panel) => {
                     self.select_panel(panel);
                 }
@@ -3105,18 +3195,59 @@ impl SettingsApp {
                         Theme::Light => Theme::HighContrast,
                         Theme::HighContrast => Theme::Dark,
                     };
+                    if self.display_cfg.theme == Theme::HighContrast {
+                        self.display_cfg.cursor_theme = CursorTheme::HighContrast;
+                        self.display_cfg.high_contrast_cursor = true;
+                        self.display_cfg.show_focus_rects = true;
+                    } else {
+                        self.display_cfg.cursor_theme = CursorTheme::ModernDark;
+                        self.display_cfg.high_contrast_cursor = false;
+                        self.display_cfg.show_focus_rects = false;
+                    }
                     self.dirty = true;
                     self.set_status("Theme changed");
+                }
+                SettingsAction::DisplayToggleHighContrast => {
+                    if self.display_cfg.theme.is_high_contrast() {
+                        self.display_cfg.theme = Theme::Dark;
+                        self.display_cfg.cursor_theme = CursorTheme::ModernDark;
+                        self.display_cfg.high_contrast_cursor = false;
+                        self.display_cfg.show_focus_rects = false;
+                        self.set_status("High contrast disabled (Standard Dark theme)");
+                    } else {
+                        self.display_cfg.theme = Theme::HighContrast;
+                        self.display_cfg.cursor_theme = CursorTheme::HighContrast;
+                        self.display_cfg.high_contrast_cursor = true;
+                        self.display_cfg.show_focus_rects = true;
+                        self.set_status("High contrast enabled (WCAG AAA yellow/black)");
+                    }
+                    self.dirty = true;
+                }
+                SettingsAction::DisplaySetFontScale(scale) => {
+                    self.display_cfg.font_scale = scale;
+                    self.dirty = true;
+                    match scale {
+                        FontScale::Normal => self.set_status("Font scale: Normal 100%"),
+                        FontScale::Medium => self.set_status("Font scale: Medium 125%"),
+                        FontScale::Large => self.set_status("Font scale: Large 150%"),
+                        FontScale::ExtraLarge => self.set_status("Font scale: Extra Large 200%"),
+                    }
+                }
+                SettingsAction::DisplayCycleFontScale => {
+                    self.display_cfg.font_scale = self.display_cfg.font_scale.cycle_next();
+                    self.dirty = true;
+                    self.set_status("Font scale cycled");
                 }
                 SettingsAction::DisplayCycleCursor => {
                     self.display_cfg.cursor_theme = match self.display_cfg.cursor_theme {
                         CursorTheme::ModernDark => CursorTheme::Classic,
                         CursorTheme::Classic => CursorTheme::Amber,
-                        CursorTheme::Amber => CursorTheme::ModernLight,
+                        CursorTheme::Amber => CursorTheme::HighContrast,
+                        CursorTheme::HighContrast => CursorTheme::ModernLight,
                         CursorTheme::ModernLight => CursorTheme::ModernDark,
                     };
                     self.dirty = true;
-                    self.set_status("Cursor theme changed");
+                    self.set_status("Cursor style updated");
                 }
                 SettingsAction::DevicesToggleViewMode(mode) => {
                     self.device_mgr.view_mode = mode;
@@ -3160,7 +3291,6 @@ impl SettingsApp {
                     self.dirty = true;
                 }
             }
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -3283,32 +3413,7 @@ impl SettingsApp {
             }
 
             PanelKind::Display => {
-                ui::font::draw_text_font(s, content_x, content_y, "Visual Themes & Compositor", palette.accent_primary, &font);
-
-                ui::font::draw_text_font(s, content_x, content_y + 24, "Design System Theme Palette:", palette.text_secondary, &f_small);
-                let th_btn = Rect::new(content_x, content_y + 44, 130, 26);
-                ui::draw::draw_rounded_rect(s, th_btn, RADIUS_XS, palette.surface_raised.lighten(30));
-                ui::draw::draw_rect_outline(s, th_btn, 1, palette.accent_primary);
-                let th_name = match self.display_cfg.theme {
-                    Theme::Dark => "Dark Palette",
-                    Theme::Light => "Light Palette",
-                    Theme::HighContrast => "High Contrast",
-                };
-                ui::font::draw_text_font(s, th_btn.x + 14, th_btn.y + 5, th_name, palette.text_primary, &f_small);
-
-                ui::font::draw_text_font(s, content_x, content_y + 88, "Compositor Cursor Bitmaps:", palette.text_secondary, &f_small);
-                let cur_btn = Rect::new(content_x, content_y + 108, 130, 26);
-                ui::draw::draw_rounded_rect(s, cur_btn, RADIUS_XS, palette.surface_raised.lighten(30));
-                ui::draw::draw_rect_outline(s, cur_btn, 1, palette.accent_primary);
-                let cur_name = match self.display_cfg.cursor_theme {
-                    CursorTheme::Classic => "Classic 8x12",
-                    CursorTheme::ModernDark => "Modern Dark",
-                    CursorTheme::ModernLight => "Modern Light",
-                    CursorTheme::Amber => "Amber CRT",
-                };
-                ui::font::draw_text_font(s, cur_btn.x + 14, cur_btn.y + 5, cur_name, palette.text_primary, &f_small);
-
-                ui::font::draw_text_font(s, content_x, content_y + 154, "Resolution: 1024x768 @ 32bpp linear framebuffer", palette.text_muted, &f_small);
+                self.render_display_panel(s, content_x, content_y, viewport, &palette, &font, &f_small);
             }
 
             PanelKind::Devices => {
@@ -3323,6 +3428,102 @@ impl SettingsApp {
         s.fill_rect(Rect::new(hdr_x, stat_rect.y, hdr_w, 1), palette.border_subtle);
 
         ui::font::draw_text_font(s, stat_rect.x + 12, stat_rect.y + 5, self.status_str(), palette.text_secondary, &f_small);
+    }
+
+    fn render_display_panel<S: Surface + ?Sized>(
+        &self,
+        s: &mut S,
+        content_x: i32,
+        content_y: i32,
+        _viewport: Rect,
+        palette: &ThemePalette,
+        font: &Font,
+        f_small: &Font,
+    ) {
+        // 1. Header & Subtitle
+        ui::font::draw_text_font(s, content_x, content_y, "Display & Accessibility Preferences", palette.accent_primary, font);
+        ui::font::draw_text_font(s, content_x, content_y + 20, "Theme palettes, dynamic font scaling, high-contrast mode, and pointer styles", palette.text_secondary, f_small);
+
+        // 2. Section 1: Theme & High-Contrast Mode
+        let sec1_y = content_y + 44;
+        ui::font::draw_text_font(s, content_x, sec1_y, "Theme Palette & High Contrast (WCAG AAA):", palette.text_primary, f_small);
+
+        let th_btn = Rect::new(content_x, sec1_y + 18, 140, 26);
+        ui::draw::draw_rounded_rect(s, th_btn, RADIUS_XS, palette.surface_raised.lighten(20));
+        ui::draw::draw_rect_outline(s, th_btn, 1, palette.accent_primary);
+        let th_name = match self.display_cfg.theme {
+            Theme::Dark => "Dark Palette",
+            Theme::Light => "Light Palette",
+            Theme::HighContrast => "High Contrast",
+        };
+        ui::font::draw_text_font(s, th_btn.x + 10, th_btn.y + 5, th_name, palette.text_primary, f_small);
+
+        let is_hc = self.display_cfg.theme.is_high_contrast();
+        let hc_btn = Rect::new(content_x + 150, sec1_y + 18, 190, 26);
+        let hc_bg = if is_hc { palette.accent_primary.darken(35) } else { palette.surface_raised.lighten(20) };
+        let hc_border = if is_hc { palette.accent_primary } else { palette.border_subtle };
+        ui::draw::draw_rounded_rect(s, hc_btn, RADIUS_XS, hc_bg);
+        ui::draw::draw_rect_outline(s, hc_btn, 1, hc_border);
+        let hc_text = if is_hc { "High Contrast: [ON]" } else { "High Contrast: [OFF]" };
+        let hc_col = if is_hc { palette.accent_primary } else { palette.text_secondary };
+        ui::font::draw_text_font(s, hc_btn.x + 12, hc_btn.y + 5, hc_text, hc_col, f_small);
+
+        // 3. Section 2: Font Scaling
+        let sec2_y = sec1_y + 56;
+        ui::font::draw_text_font(s, content_x, sec2_y, "System Typography Scale Multiplier:", palette.text_primary, f_small);
+
+        let scales = [FontScale::Normal, FontScale::Medium, FontScale::Large, FontScale::ExtraLarge];
+        let btn_w = 90;
+        let btn_h = 24;
+        for (i, &sc) in scales.iter().enumerate() {
+            let bx = content_x + (i as i32 * (btn_w + 6));
+            let by = sec2_y + 18;
+            let b_rect = Rect::new(bx, by, btn_w, btn_h);
+            let is_sel = self.display_cfg.font_scale == sc;
+            let bg_col = if is_sel { palette.accent_primary.darken(35) } else { palette.surface_raised.lighten(20) };
+            let border_col = if is_sel { palette.accent_primary } else { palette.border_subtle };
+            let txt_col = if is_sel { palette.accent_primary } else { palette.text_secondary };
+
+            ui::draw::draw_rounded_rect(s, b_rect, RADIUS_XS, bg_col);
+            ui::draw::draw_rect_outline(s, b_rect, 1, border_col);
+            let sz = f_small.measure_str(sc.label());
+            ui::font::draw_text_font(s, b_rect.x + (b_rect.w - sz.w) / 2, b_rect.y + 4, sc.label(), txt_col, f_small);
+        }
+
+        // Live preview container box
+        let prev_y = sec2_y + 50;
+        let prev_rect = Rect::new(content_x, prev_y, 440, 52);
+        ui::draw::draw_rounded_rect(s, prev_rect, RADIUS_SM, palette.surface_sunken);
+        ui::draw::draw_rect_outline(s, prev_rect, 1, palette.border_subtle);
+
+        let f_scaled = Font::regular().scaled(self.display_cfg.font_scale);
+        ui::font::draw_text_font(s, prev_rect.x + 10, prev_rect.y + 4, "Live Typography Preview (scaled text):", palette.text_muted, f_small);
+        ui::font::draw_text_font(s, prev_rect.x + 10, prev_rect.y + 20, "NovaOS 2.0 Accessibility Preview 123", palette.text_primary, &f_scaled);
+
+        // 4. Section 3: Cursor theme
+        let sec3_y = prev_y + 64;
+        ui::font::draw_text_font(s, content_x, sec3_y, "Compositor Cursor Bitmaps & High-Visibility Pointer:", palette.text_primary, f_small);
+
+        let cur_btn = Rect::new(content_x, sec3_y + 18, 180, 26);
+        ui::draw::draw_rounded_rect(s, cur_btn, RADIUS_XS, palette.surface_raised.lighten(20));
+        ui::draw::draw_rect_outline(s, cur_btn, 1, palette.accent_primary);
+        let cur_name = match self.display_cfg.cursor_theme {
+            CursorTheme::Classic => "Cursor: Classic 8x12",
+            CursorTheme::ModernDark => "Cursor: Modern Dark",
+            CursorTheme::ModernLight => "Cursor: Modern Light",
+            CursorTheme::Amber => "Cursor: Amber CRT",
+            CursorTheme::HighContrast => "Cursor: High Contrast",
+        };
+        ui::font::draw_text_font(s, cur_btn.x + 10, cur_btn.y + 5, cur_name, palette.text_primary, f_small);
+
+        // 5. Section 4: Persistence hint & save button
+        let sec4_y = sec3_y + 56;
+        ui::font::draw_text_font(s, content_x, sec4_y, "Config file: /ACCESS.CFG (64-byte binary record, magic 'NVAC')", palette.text_muted, f_small);
+        let save_btn = Rect::new(content_x, sec4_y + 16, 200, 26);
+        ui::draw::draw_rounded_rect(s, save_btn, RADIUS_XS, palette.accent_primary.darken(35));
+        ui::draw::draw_rect_outline(s, save_btn, 1, palette.accent_primary);
+        let save_sz = f_small.measure_str("Save & Apply to Disk");
+        ui::font::draw_text_font(s, save_btn.x + (save_btn.w - save_sz.w) / 2, save_btn.y + 5, "Save & Apply to Disk", Color::WHITE, f_small);
     }
 
     fn render_devices_panel<S: Surface + ?Sized>(
@@ -5089,6 +5290,87 @@ fn selftest_device_manager(app: &mut SettingsApp, surf: &mut BufferSurface32) ->
 }
 
 #[inline(never)]
+fn selftest_accessibility_panel(app: &mut SettingsApp, surf: &mut BufferSurface32) -> i32 {
+    let mut code = 0;
+
+    // Case 24: Accessibility configuration and ACCESS.CFG persistence
+    app.select_panel(PanelKind::Display);
+
+    // 1. Theme cycling and High Contrast toggle
+    app.apply_action(SettingsAction::DisplayToggleHighContrast);
+    let hc_enabled = app.display_cfg.theme.is_high_contrast()
+        && app.display_cfg.cursor_theme == CursorTheme::HighContrast
+        && app.display_cfg.high_contrast_cursor;
+
+    // 2. Font scale configuration
+    app.apply_action(SettingsAction::DisplaySetFontScale(FontScale::Large)); // 150%
+    let scale_large_ok = app.display_cfg.font_scale == FontScale::Large;
+
+    app.apply_action(SettingsAction::DisplayCycleFontScale); // 150% -> 200%
+    let scale_cycle_ok = app.display_cfg.font_scale == FontScale::ExtraLarge;
+
+    // 3. Cursor theme cycling
+    app.apply_action(SettingsAction::DisplayCycleCursor);
+    let cursor_cycled_ok = app.display_cfg.cursor_theme != CursorTheme::HighContrast;
+
+    // Restore high-contrast cursor
+    app.display_cfg.cursor_theme = CursorTheme::HighContrast;
+
+    // 4. Binary serialization roundtrip (ACCESS.CFG format)
+    let cfg = app.display_cfg.to_accessibility_config();
+    let mut cfg_buf = [0u8; ACCESS_CFG_SIZE];
+    cfg.serialize(&mut cfg_buf);
+    let magic_ok = &cfg_buf[0..4] == &ACCESS_CFG_MAGIC;
+    let ver_ok = cfg_buf[4] == 1;
+    let theme_byte_ok = cfg_buf[5] == 2; // HighContrast
+    let scale_byte_ok = cfg_buf[6] == 200; // ExtraLarge
+
+    let deserialized = AccessibilityConfig::deserialize(&cfg_buf);
+    let roundtrip_ok = deserialized == Some(cfg);
+
+    if hc_enabled && scale_large_ok && scale_cycle_ok && cursor_cycled_ok && magic_ok && ver_ok && theme_byte_ok && scale_byte_ok && roundtrip_ok {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: accessibility configuration and ACCESS.CFG persistence\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: accessibility configuration/persistence\n\0".as_ptr()) };
+        code |= 8388608;
+    }
+
+    // Case 25: Accessibility preferences graphical presentation on BufferSurface32
+    surf.buffer.fill(0);
+    app.render(surf, Rect::new(0, 0, 640, 240));
+
+    // High-contrast palette: background is pure black
+    let pal = app.display_cfg.theme.palette();
+    let is_black_bg = pal.desktop_bg == Color::BLACK;
+
+    // Check that UI elements were rendered into surface
+    let non_zero_pixels = surf.buffer.iter().filter(|&&p| p != 0).count();
+
+    // Verify live preview rendered scaled text pixels (around y = 140..170, x = 180..400)
+    let mut found_preview_pixels = false;
+    for y in 140..170 {
+        for x in 180..400 {
+            if surf.buffer[y * 640 + x] != 0 {
+                found_preview_pixels = true;
+                break;
+            }
+        }
+        if found_preview_pixels {
+            break;
+        }
+    }
+
+    if is_black_bg && non_zero_pixels > 4000 && found_preview_pixels {
+        unsafe { ffi::sys_write(b"[settings-selftest] PASS: accessibility preferences graphical presentation on BufferSurface32\n\0".as_ptr()) };
+    } else {
+        unsafe { ffi::sys_write(b"[settings-selftest] FAIL: accessibility preferences presentation\n\0".as_ptr()) };
+        code |= 16777216;
+    }
+
+    code
+}
+
+#[inline(never)]
 pub fn run_selftest() -> i32 {
     let mut code = 0;
     unsafe { ffi::sys_write(b"[settings-selftest] starting\n\0".as_ptr()) };
@@ -5109,6 +5391,7 @@ pub fn run_selftest() -> i32 {
     code |= selftest_users_and_permissions(app, &mut surf);
     code |= selftest_service_manager(app, &mut surf);
     code |= selftest_device_manager(app, &mut surf);
+    code |= selftest_accessibility_panel(app, &mut surf);
 
     if code == 0 {
         unsafe { ffi::sys_write(b"[settings-selftest] all cases passed\n\0".as_ptr()) };
@@ -5596,5 +5879,44 @@ mod tests {
         app.render(&mut surf, Rect::new(0, 0, 640, 480));
         let non_zero_drv = surf.buffer.iter().filter(|&&p| p != 0).count();
         assert!(non_zero_drv > 5000, "Should render Registered Drivers table");
+    }
+
+    #[test]
+    fn test_display_accessibility_config_and_actions() {
+        let mut app = SettingsApp::new();
+        app.select_panel(PanelKind::Display);
+
+        assert_eq!(app.display_cfg.theme, Theme::Dark);
+        assert_eq!(app.display_cfg.font_scale, FontScale::Normal);
+
+        app.apply_action(SettingsAction::DisplayToggleHighContrast);
+        assert_eq!(app.display_cfg.theme, Theme::HighContrast);
+        assert_eq!(app.display_cfg.cursor_theme, CursorTheme::HighContrast);
+        assert!(app.display_cfg.high_contrast_cursor);
+
+        app.apply_action(SettingsAction::DisplaySetFontScale(FontScale::Large));
+        assert_eq!(app.display_cfg.font_scale, FontScale::Large);
+
+        let cfg = app.display_cfg.to_accessibility_config();
+        let mut buf = [0u8; ACCESS_CFG_SIZE];
+        cfg.serialize(&mut buf);
+        let restored = AccessibilityConfig::deserialize(&buf).unwrap();
+        assert_eq!(restored.theme, Theme::HighContrast);
+        assert_eq!(restored.font_scale, FontScale::Large);
+    }
+
+    #[test]
+    fn test_display_accessibility_surface_rendering() {
+        let mut app = SettingsApp::new();
+        app.select_panel(PanelKind::Display);
+        app.display_cfg.theme = Theme::HighContrast;
+        app.display_cfg.font_scale = FontScale::Large;
+
+        let mut buf = vec![0u32; 640 * 240];
+        let mut surf = BufferSurface32::new(&mut buf, 640, 240);
+        app.render(&mut surf, Rect::new(0, 0, 640, 240));
+
+        let non_zero = surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero > 3000);
     }
 }

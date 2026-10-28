@@ -8,6 +8,7 @@
 //!   - Scalable analytical vector stroke rasterizer for dynamic font sizes with zero heap allocations.
 //!   - Word wrapping, alignment, string dimension measurement, and Surface compositing.
 
+use crate::access::FontScale;
 use crate::color::Color;
 use crate::draw::Surface;
 use crate::font_data::*;
@@ -121,6 +122,43 @@ impl Font {
     pub const fn with_style(mut self, style: FontStyle) -> Self {
         self.style = style;
         self
+    }
+
+    /// Returns a new `Font` scaled by the given `FontScale`.
+    pub fn scaled(&self, scale: FontScale) -> Font {
+        if scale == FontScale::Normal {
+            return *self;
+        }
+        match self.size {
+            FontSize::Micro => match scale {
+                FontScale::Normal => *self,
+                FontScale::Medium => Font::new(FontSize::Small, self.style, self.antialias),
+                FontScale::Large => Font::new(FontSize::Small, self.style, self.antialias),
+                FontScale::ExtraLarge => Font::new(FontSize::Regular, self.style, self.antialias),
+            },
+            FontSize::Small => match scale {
+                FontScale::Normal => *self,
+                FontScale::Medium => Font::new(FontSize::Vector(10), self.style, self.antialias),
+                FontScale::Large => Font::new(FontSize::Vector(12), self.style, self.antialias),
+                FontScale::ExtraLarge => Font::new(FontSize::Regular, self.style, self.antialias),
+            },
+            FontSize::Regular => match scale {
+                FontScale::Normal => *self,
+                FontScale::Medium => Font::new(FontSize::Vector(20), self.style, self.antialias),
+                FontScale::Large => Font::new(FontSize::Large, self.style, self.antialias),
+                FontScale::ExtraLarge => Font::new(FontSize::Vector(32), self.style, self.antialias),
+            },
+            FontSize::Large => match scale {
+                FontScale::Normal => *self,
+                FontScale::Medium => Font::new(FontSize::Vector(30), self.style, self.antialias),
+                FontScale::Large => Font::new(FontSize::Vector(32), self.style, self.antialias),
+                FontScale::ExtraLarge => Font::new(FontSize::Vector(32), self.style, self.antialias),
+            },
+            FontSize::Vector(h) => {
+                let scaled_h = ((h as u32 * scale.percent() as u32 + 50) / 100).min(MAX_GLYPH_DIM as u32) as u8;
+                Font::new(FontSize::Vector(scaled_h.max(6)), self.style, self.antialias)
+            }
+        }
     }
 
     /// Recommended line height (in pixels) for this font configuration.
@@ -525,6 +563,11 @@ pub fn font_for_scale(scale: TypeScale) -> Font {
         TypeScale::Heading => Font::large(),
         TypeScale::Display => Font::vector(32),
     }
+}
+
+/// Automatically selects the modern font matching a TypeScale token scaled by a FontScale multiplier.
+pub fn font_for_scale_with_factor(scale: TypeScale, font_scale: FontScale) -> Font {
+    font_for_scale(scale).scaled(font_scale)
 }
 
 // ---------------------------------------------------------------------------

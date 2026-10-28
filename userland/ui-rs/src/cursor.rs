@@ -44,6 +44,8 @@ pub enum CursorTheme {
     ModernLight,
     /// Retro high-visibility amber phosphor theme
     Amber,
+    /// High-contrast vivid yellow interior with pure black outline (WCAG AAA)
+    HighContrast,
 }
 
 /// Color specification for rendering cursor sprites.
@@ -81,6 +83,12 @@ impl CursorTheme {
                 fill: Color::rgb(255, 176, 0),
                 accent: Color::rgb(255, 215, 0),
                 shadow: Color::rgba(20, 12, 0, 100),
+            },
+            CursorTheme::HighContrast => CursorColors {
+                outline: Color::rgb(0, 0, 0),
+                fill: Color::rgb(255, 255, 0),
+                accent: Color::rgb(255, 255, 255),
+                shadow: Color::rgba(0, 0, 0, 160),
             },
         }
     }
