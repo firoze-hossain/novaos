@@ -201,6 +201,9 @@ extern "C" {
     pub fn sys_dev_get_summary(out: *mut NovaDeviceSummary) -> i32;
     pub fn sys_dev_get_drivers(out: *mut NovaDriverTable) -> i32;
     pub fn sys_dev_get_devices(out: *mut NovaDeviceTable) -> i32;
+
+    // Atomic OS Update syscalls (SYS_OS_UPDATE 79)
+    pub fn sys_os_update(op: i32, arg: *mut u8, arg_len: u32) -> i32;
 }
 
 // ===========================================================================
@@ -450,6 +453,115 @@ impl NovaDeviceSummary {
             nvme_present: 0,
             wifi_present: 0,
             xhci_present: 0,
+        }
+    }
+}
+
+// ===========================================================================
+// Atomic OS Update ABI (kernel/include/atomic_update.h)
+// ===========================================================================
+
+pub const SYS_OS_UPDATE: u32 = 79;
+
+pub const NOVA_UPDATE_OP_STATUS: i32 = 1;
+pub const NOVA_UPDATE_OP_STAGE_AND_APPLY: i32 = 2;
+pub const NOVA_UPDATE_OP_CONFIRM: i32 = 3;
+pub const NOVA_UPDATE_OP_ROLLBACK: i32 = 4;
+
+pub const NOVA_BOOT_SLOT_A: u8 = 0;
+pub const NOVA_BOOT_SLOT_B: u8 = 1;
+
+pub const NOVA_SLOT_STATE_NORMAL: u8 = 0;
+pub const NOVA_SLOT_STATE_TESTING: u8 = 1;
+pub const NOVA_SLOT_STATE_ROLLED_BACK: u8 = 2;
+
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct NovaUpdateStatus {
+    pub active_slot: u8,
+    pub fallback_slot: u8,
+    pub slot_state: u8,
+    pub boot_attempts: u8,
+    pub slot_a_version: [u8; 16],
+    pub slot_b_version: [u8; 16],
+    pub last_error: i32,
+}
+
+impl NovaUpdateStatus {
+    pub const fn empty() -> Self {
+        NovaUpdateStatus {
+            active_slot: NOVA_BOOT_SLOT_A,
+            fallback_slot: NOVA_BOOT_SLOT_A,
+            slot_state: NOVA_SLOT_STATE_NORMAL,
+            boot_attempts: 3,
+            slot_a_version: [0; 16],
+            slot_b_version: [0; 16],
+            last_error: 0,
+        }
+    }
+
+    pub fn active_slot_name(&self) -> &'static str {
+        if self.active_slot == NOVA_BOOT_SLOT_B {
+            "Slot B"
+        } else {
+            "Slot A"
+        }
+    }
+
+    pub fn fallback_slot_name(&self) -> &'static str {
+        if self.fallback_slot == NOVA_BOOT_SLOT_B {
+            "Slot B"
+        } else {
+            "Slot A"
+        }
+    }
+
+    pub fn target_slot(&self) -> u8 {
+        if self.active_slot == NOVA_BOOT_SLOT_A {
+            NOVA_BOOT_SLOT_B
+        } else {
+            NOVA_BOOT_SLOT_A
+        }
+    }
+
+    pub fn target_slot_name(&self) -> &'static str {
+        if self.active_slot == NOVA_BOOT_SLOT_A {
+            "Slot B"
+        } else {
+            "Slot A"
+        }
+    }
+
+    pub fn state_name(&self) -> &'static str {
+        match self.slot_state {
+            NOVA_SLOT_STATE_NORMAL => "Normal (Healthy)",
+            NOVA_SLOT_STATE_TESTING => "Testing Mode",
+            NOVA_SLOT_STATE_ROLLED_BACK => "Rolled Back",
+            _ => "Unknown",
+        }
+    }
+
+    pub fn slot_a_version_str(&self) -> &str {
+        let mut len = 0;
+        while len < 16 && self.slot_a_version[len] != 0 {
+            len += 1;
+        }
+        if len == 0 {
+            "0.88.0"
+        } else {
+            core::str::from_utf8(&self.slot_a_version[..len]).unwrap_or("0.88.0")
+        }
+    }
+
+    pub fn slot_b_version_str(&self) -> &str {
+        let mut len = 0;
+        while len < 16 && self.slot_b_version[len] != 0 {
+            len += 1;
+        }
+        if len == 0 {
+            "None"
+        } else {
+            core::str::from_utf8(&self.slot_b_version[..len]).unwrap_or("None")
         }
     }
 }
@@ -786,6 +898,18 @@ pub unsafe fn reset_mock_environment() {
     devs[12].status = NOVA_DEV_STATUS_ONLINE;
     devs[12].vendor_id = 0x8086;
     devs[12].device_id = 0x7000;
+
+    // Default Atomic Update status
+    MOCK_UPDATE_STATUS = NovaUpdateStatus {
+        active_slot: NOVA_BOOT_SLOT_A,
+        fallback_slot: NOVA_BOOT_SLOT_A,
+        slot_state: NOVA_SLOT_STATE_NORMAL,
+        boot_attempts: 3,
+        slot_a_version: *b"0.88.0\0\0\0\0\0\0\0\0\0\0",
+        slot_b_version: [0; 16],
+        last_error: 0,
+    };
+    MOCK_UPDATE_LAST_OP = 0;
 }
 
 #[cfg(test)]
@@ -1076,4 +1200,59 @@ pub unsafe fn sys_dev_get_devices(out: *mut NovaDeviceTable) -> i32 {
     }
     *out = MOCK_DEV_DEVICES;
     0
+}
+
+#[cfg(test)]
+pub static mut MOCK_UPDATE_STATUS: NovaUpdateStatus = NovaUpdateStatus {
+    active_slot: NOVA_BOOT_SLOT_A,
+    fallback_slot: NOVA_BOOT_SLOT_A,
+    slot_state: NOVA_SLOT_STATE_NORMAL,
+    boot_attempts: 3,
+    slot_a_version: *b"0.88.0\0\0\0\0\0\0\0\0\0\0",
+    slot_b_version: [0; 16],
+    last_error: 0,
+};
+
+#[cfg(test)]
+pub static mut MOCK_UPDATE_LAST_OP: i32 = 0;
+
+#[cfg(test)]
+pub unsafe fn sys_os_update(op: i32, arg: *mut u8, arg_len: u32) -> i32 {
+    MOCK_UPDATE_LAST_OP = op;
+    match op {
+        NOVA_UPDATE_OP_STATUS => {
+            if arg.is_null() || (arg_len as usize) < core::mem::size_of::<NovaUpdateStatus>() {
+                return -7;
+            }
+            core::ptr::copy_nonoverlapping(
+                &MOCK_UPDATE_STATUS as *const _ as *const u8,
+                arg,
+                core::mem::size_of::<NovaUpdateStatus>(),
+            );
+            0
+        }
+        NOVA_UPDATE_OP_STAGE_AND_APPLY => {
+            MOCK_UPDATE_STATUS.slot_state = NOVA_SLOT_STATE_TESTING;
+            MOCK_UPDATE_STATUS.boot_attempts = 3;
+            if MOCK_UPDATE_STATUS.active_slot == NOVA_BOOT_SLOT_A {
+                MOCK_UPDATE_STATUS.slot_b_version = *b"0.89.0\0\0\0\0\0\0\0\0\0\0";
+            } else {
+                MOCK_UPDATE_STATUS.slot_a_version = *b"0.89.0\0\0\0\0\0\0\0\0\0\0";
+            }
+            0
+        }
+        NOVA_UPDATE_OP_CONFIRM => {
+            MOCK_UPDATE_STATUS.slot_state = NOVA_SLOT_STATE_NORMAL;
+            MOCK_UPDATE_STATUS.boot_attempts = 3;
+            0
+        }
+        NOVA_UPDATE_OP_ROLLBACK => {
+            MOCK_UPDATE_STATUS.slot_state = NOVA_SLOT_STATE_ROLLED_BACK;
+            let tmp = MOCK_UPDATE_STATUS.active_slot;
+            MOCK_UPDATE_STATUS.active_slot = MOCK_UPDATE_STATUS.fallback_slot;
+            MOCK_UPDATE_STATUS.fallback_slot = tmp;
+            0
+        }
+        _ => -1,
+    }
 }

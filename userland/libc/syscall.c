@@ -553,6 +553,16 @@ int sys_disk_install(int op, void* arg1, void* arg2) {
     return r;
 }
 
+/* Month 6 / Phase 96: Atomic OS update mechanism (SYS_OS_UPDATE). */
+int sys_os_update(int op, void* arg, unsigned int arg_size) {
+    int r;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(r)
+                      : "a"(SYS_OS_UPDATE), "b"(op), "c"((uint32_t)arg), "d"(arg_size)
+                      : "memory");
+    return r;
+}
+
 /* Month 6: Crash dump auto-export control (SYS_CRASHDUMP_CTL). */
 int sys_crashdump_ctl(int op, void* arg) {
     int r;

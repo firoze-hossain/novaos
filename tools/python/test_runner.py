@@ -339,6 +339,14 @@ ASSERTIONS: list[Assertion] = [
               r"settings-selftest. PASS: accessibility preferences graphical presentation on BufferSurface32",
               "Month 5 Power-user & system apps: userland/settings-rs/settings.rs - "
               "accessibility panel rendering font scaling and high contrast toggles"),
+    Assertion("settings_updates_status_passed",
+              r"settings-selftest. PASS: atomic update boot slot query and status telemetry",
+              "Month 6 First impressions: userland/settings-rs/settings.rs - "
+              "atomic update boot slot query (SYS_OS_UPDATE) and dual-slot status telemetry"),
+    Assertion("settings_updates_ui_passed",
+              r"settings-selftest. PASS: atomic update workflow and dual-slot presentation on BufferSurface32",
+              "Month 6 First impressions: userland/settings-rs/settings.rs - "
+              "atomic update workflow state transitions, progress tracking, and dual-slot presentation"),
     Assertion("term_selftest_passed",
               r"sandbox. PASS: TERM\.ELF --selftest - in-window terminal "
               r"wrapper and shell output dispatch all behaved correctly",
