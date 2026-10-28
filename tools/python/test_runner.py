@@ -282,6 +282,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wm_accessibility_selftest",
               r"\[wm-selftest\] PASS: accessibility high-contrast mode and font scaling",
               "Month 5 Power-user & system apps: WM accessibility basics with font scaling and WCAG AAA high-contrast mode"),
+    Assertion("wm_snapping_polish_selftest",
+              r"\[wm-selftest\] PASS: multi-window productivity polish and window snapping",
+              "Month 5 Power-user & system apps: WM multi-window snapping polish with quadrant tiling, maximize, and smooth edges"),
     Assertion("wm_selftest_passed",
               r"sandbox. PASS: WM\.ELF --selftest - real window dragging, "
               r"click-to-focus, taskbar focus, and edge snap/un-snap all "

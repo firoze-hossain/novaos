@@ -32,6 +32,16 @@ pub const ACTION_VIEW_FULLSCREEN: u32 = 303;
 pub const ACTION_WINDOW_MINIMIZE: u32 = 401;
 pub const ACTION_WINDOW_MAXIMIZE: u32 = 402;
 pub const ACTION_WINDOW_NEXT: u32     = 403;
+pub const ACTION_WINDOW_SNAP_LEFT: u32         = 404;
+pub const ACTION_WINDOW_SNAP_RIGHT: u32        = 405;
+pub const ACTION_WINDOW_SNAP_TOP_LEFT: u32     = 406;
+pub const ACTION_WINDOW_SNAP_TOP_RIGHT: u32    = 407;
+pub const ACTION_WINDOW_SNAP_BOTTOM_LEFT: u32  = 408;
+pub const ACTION_WINDOW_SNAP_BOTTOM_RIGHT: u32 = 409;
+pub const ACTION_WINDOW_RESTORE: u32           = 410;
+pub const ACTION_WINDOW_TILE_SIDE_BY_SIDE: u32 = 411;
+pub const ACTION_WINDOW_TILE_GRID: u32         = 412;
+pub const ACTION_WINDOW_CASCADE: u32           = 413;
 
 pub const ACTION_HELP_ABOUT: u32      = 501;
 pub const ACTION_HELP_DOCS: u32       = 502;

@@ -56,11 +56,136 @@ pub const MAX_WINDOWS: usize = 4;
 pub const MAX_DOCK_ITEMS: usize = 8;
 pub const SNAP_MARGIN: i32 = 4;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// Target docking geometry for snapped windows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SnapState {
     Normal,
     Left,
     Right,
+    Maximize,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl SnapState {
+    #[inline]
+    pub fn is_snapped(&self) -> bool {
+        *self != SnapState::Normal
+    }
+
+    #[inline]
+    pub fn is_half(&self) -> bool {
+        matches!(self, SnapState::Left | SnapState::Right)
+    }
+
+    #[inline]
+    pub fn is_quadrant(&self) -> bool {
+        matches!(
+            self,
+            SnapState::TopLeft
+                | SnapState::TopRight
+                | SnapState::BottomLeft
+                | SnapState::BottomRight
+        )
+    }
+
+    #[inline]
+    pub fn is_maximized(&self) -> bool {
+        *self == SnapState::Maximize
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SnapState::Normal => "Floating",
+            SnapState::Left => "Left Half",
+            SnapState::Right => "Right Half",
+            SnapState::Maximize => "Maximized",
+            SnapState::TopLeft => "Top Left",
+            SnapState::TopRight => "Top Right",
+            SnapState::BottomLeft => "Bottom Left",
+            SnapState::BottomRight => "Bottom Right",
+        }
+    }
+}
+
+/// Usable desktop workspace area taking menubars and taskbars into account.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WorkArea {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl WorkArea {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        WorkArea { x, y, w, h }
+    }
+
+    pub fn to_rect(&self) -> Rect {
+        Rect::new(self.x, self.y, self.w, self.h)
+    }
+
+    pub fn contains(&self, px: i32, py: i32) -> bool {
+        px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
+    }
+}
+
+/// Physical or virtual monitor boundary descriptor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MonitorGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub is_primary: bool,
+}
+
+/// Multi-window productivity tiling modes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TileMode {
+    SideBySide,
+    Grid2x2,
+    Cascade,
+}
+
+/// Computes the exact window bounding rectangle for a snap target within a work area,
+/// ensuring smoother edges, zero overlap, and gapless quadrant/half tiling.
+pub fn calculate_snap_rect(snap: SnapState, work: WorkArea) -> (i32, i32, i32, i32) {
+    match snap {
+        SnapState::Normal => (work.x, work.y, work.w, work.h),
+        SnapState::Maximize => (work.x, work.y, work.w, work.h),
+        SnapState::Left => {
+            let half_w = work.w / 2;
+            (work.x, work.y, half_w, work.h)
+        }
+        SnapState::Right => {
+            let half_w = work.w / 2;
+            (work.x + half_w, work.y, work.w - half_w, work.h)
+        }
+        SnapState::TopLeft => {
+            let half_w = work.w / 2;
+            let half_h = work.h / 2;
+            (work.x, work.y, half_w, half_h)
+        }
+        SnapState::TopRight => {
+            let half_w = work.w / 2;
+            let half_h = work.h / 2;
+            (work.x + half_w, work.y, work.w - half_w, half_h)
+        }
+        SnapState::BottomLeft => {
+            let half_w = work.w / 2;
+            let half_h = work.h / 2;
+            (work.x, work.y + half_h, half_w, work.h - half_h)
+        }
+        SnapState::BottomRight => {
+            let half_w = work.w / 2;
+            let half_h = work.h / 2;
+            (work.x + half_w, work.y + half_h, work.w - half_w, work.h - half_h)
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -131,6 +256,7 @@ pub struct Wm {
     pub hovered_dock_item: Option<usize>,
     pub last_dock_event: Option<DockEvent>,
     pub access_cfg: AccessibilityConfig,
+    pub preview_snap: Option<SnapState>,
 }
 
 impl Wm {
@@ -177,6 +303,7 @@ impl Wm {
             hovered_dock_item: None,
             last_dock_event: None,
             access_cfg: AccessibilityConfig::new(),
+            preview_snap: None,
         }
     }
 
@@ -233,6 +360,7 @@ impl Wm {
             hovered_dock_item: None,
             last_dock_event: None,
             access_cfg: AccessibilityConfig::new(),
+            preview_snap: None,
         }
     }
 
@@ -272,6 +400,269 @@ impl Wm {
         self.cursor_theme = cfg.effective_cursor_theme();
         self.set_theme(cfg.theme);
         self.set_font_scale(cfg.font_scale);
+    }
+
+    /// Returns the active desktop work area respecting top menubars and bottom taskbars.
+    pub fn work_area(&self) -> WorkArea {
+        let top = self.menubar_h;
+        let bottom = self.desktop_h;
+        let h = if bottom > top { bottom - top } else { self.screen_h };
+        WorkArea {
+            x: 0,
+            y: top,
+            w: self.screen_w,
+            h,
+        }
+    }
+
+    /// Primary monitor boundary descriptor for multi-monitor geometry queries.
+    pub fn primary_monitor(&self) -> MonitorGeometry {
+        MonitorGeometry {
+            x: 0,
+            y: 0,
+            w: self.screen_w,
+            h: self.screen_h,
+            is_primary: true,
+        }
+    }
+
+    /// Resolves which monitor contains the given screen coordinates.
+    pub fn monitor_for_point(&self, _px: i32, _py: i32) -> MonitorGeometry {
+        self.primary_monitor()
+    }
+
+    /// Computes the usable work area on a given monitor.
+    pub fn work_area_for_monitor(&self, mon: MonitorGeometry) -> WorkArea {
+        if mon.is_primary {
+            self.work_area()
+        } else {
+            WorkArea::new(mon.x, mon.y, mon.w, mon.h)
+        }
+    }
+
+    /// Active pixel threshold for screen edge snap triggering.
+    pub fn snap_edge_margin(&self) -> i32 {
+        if self.screen_w >= 800 { 12 } else { SNAP_MARGIN }
+    }
+
+    /// Active pixel zone along the top/bottom edges for corner quadrant snap triggering.
+    pub fn snap_corner_margin(&self) -> i32 {
+        20
+    }
+
+    /// Detects potential snap targets (quadrants, halves, or maximize) based on cursor coordinates.
+    pub fn detect_snap_target(&self, px: i32, py: i32) -> Option<SnapState> {
+        let work = self.work_area();
+        let edge = self.snap_edge_margin();
+        let top_edge = if self.screen_w >= 800 { 2 } else { 1 };
+        let corner = self.snap_corner_margin();
+
+        let at_left = px <= work.x + edge;
+        let at_right = px >= work.x + work.w - edge;
+        let at_top = py <= work.y + top_edge;
+
+        if at_left {
+            if py <= work.y + corner {
+                Some(SnapState::TopLeft)
+            } else if py >= work.y + work.h - corner {
+                Some(SnapState::BottomLeft)
+            } else {
+                Some(SnapState::Left)
+            }
+        } else if at_right {
+            if py <= work.y + corner {
+                Some(SnapState::TopRight)
+            } else if py >= work.y + work.h - corner {
+                Some(SnapState::BottomRight)
+            } else {
+                Some(SnapState::Right)
+            }
+        } else if at_top {
+            Some(SnapState::Maximize)
+        } else {
+            None
+        }
+    }
+
+    /// Docks a window to a target snap state within the current monitor work area.
+    pub fn snap_window(&mut self, idx: usize, snap: SnapState) {
+        if idx >= MAX_WINDOWS {
+            return;
+        }
+        let work = self.work_area();
+        let w = &mut self.windows[idx];
+        if snap == SnapState::Normal {
+            let (px, py, pw, ph) = w.pre_snap;
+            w.snap = SnapState::Normal;
+            w.x = px;
+            w.y = py;
+            w.w = pw;
+            w.h = ph;
+            return;
+        }
+        if w.snap == SnapState::Normal {
+            w.pre_snap = (w.x, w.y, w.w, w.h);
+        }
+        w.snap = snap;
+        let (sx, sy, sw, sh) = calculate_snap_rect(snap, work);
+        w.x = sx;
+        w.y = sy;
+        w.w = sw;
+        w.h = sh;
+    }
+
+    /// Toggles a window between maximized full-workarea state and normal floating state.
+    pub fn toggle_maximize(&mut self, idx: usize) {
+        if idx >= MAX_WINDOWS {
+            return;
+        }
+        if self.windows[idx].snap == SnapState::Maximize {
+            self.snap_window(idx, SnapState::Normal);
+        } else {
+            self.snap_window(idx, SnapState::Maximize);
+        }
+    }
+
+    /// Tiles active open windows according to the requested productivity layout.
+    pub fn tile_windows(&mut self, mode: TileMode) {
+        match mode {
+            TileMode::SideBySide => {
+                let mut open_wins = [0usize; 2];
+                let mut count = 0;
+                for i in (0..MAX_WINDOWS).rev() {
+                    let win_idx = self.z_order[i];
+                    if self.windows[win_idx].is_open && !self.windows[win_idx].is_minimized {
+                        open_wins[count] = win_idx;
+                        count += 1;
+                        if count == 2 {
+                            break;
+                        }
+                    }
+                }
+                if count >= 1 {
+                    self.snap_window(open_wins[0], SnapState::Left);
+                }
+                if count >= 2 {
+                    self.snap_window(open_wins[1], SnapState::Right);
+                }
+            }
+            TileMode::Grid2x2 => {
+                let quadrants = [
+                    SnapState::TopLeft,
+                    SnapState::TopRight,
+                    SnapState::BottomLeft,
+                    SnapState::BottomRight,
+                ];
+                let mut count = 0;
+                for i in (0..MAX_WINDOWS).rev() {
+                    let win_idx = self.z_order[i];
+                    if self.windows[win_idx].is_open && !self.windows[win_idx].is_minimized {
+                        self.snap_window(win_idx, quadrants[count]);
+                        count += 1;
+                        if count == 4 {
+                            break;
+                        }
+                    }
+                }
+            }
+            TileMode::Cascade => {
+                let work = self.work_area();
+                let (cw, ch) = if self.screen_w >= 800 { (360, 250) } else { (160, 110) };
+                let step_x = if self.screen_w >= 800 { 32 } else { 16 };
+                let step_y = if self.screen_w >= 800 { 28 } else { 14 };
+
+                let mut count = 0;
+                for i in 0..MAX_WINDOWS {
+                    let win_idx = self.z_order[i];
+                    let w = &mut self.windows[win_idx];
+                    if w.is_open && !w.is_minimized {
+                        w.snap = SnapState::Normal;
+                        w.w = cw;
+                        w.h = ch;
+                        w.x = (work.x + count * step_x).min(self.screen_w - cw);
+                        w.y = (work.y + count * step_y).min(self.desktop_h - ch);
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cycles through all available snap states for keyboard productivity navigation.
+    pub fn cycle_snap(&mut self, idx: usize) {
+        if idx >= MAX_WINDOWS {
+            return;
+        }
+        let next_snap = match self.windows[idx].snap {
+            SnapState::Normal => SnapState::Left,
+            SnapState::Left => SnapState::Right,
+            SnapState::Right => SnapState::TopLeft,
+            SnapState::TopLeft => SnapState::TopRight,
+            SnapState::TopRight => SnapState::BottomLeft,
+            SnapState::BottomLeft => SnapState::BottomRight,
+            SnapState::BottomRight => SnapState::Maximize,
+            SnapState::Maximize => SnapState::Normal,
+        };
+        self.snap_window(idx, next_snap);
+    }
+
+    /// Handles standard desktop menu action IDs for window management.
+    pub fn handle_window_action(&mut self, action_id: u32) -> bool {
+        let active_idx = match self.active_window() {
+            Some(idx) => idx,
+            None => return false,
+        };
+        match action_id {
+            ui::menu::ACTION_WINDOW_MINIMIZE => {
+                self.minimize_window(active_idx);
+                true
+            }
+            ui::menu::ACTION_WINDOW_MAXIMIZE => {
+                self.toggle_maximize(active_idx);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_LEFT => {
+                self.snap_window(active_idx, SnapState::Left);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_RIGHT => {
+                self.snap_window(active_idx, SnapState::Right);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_TOP_LEFT => {
+                self.snap_window(active_idx, SnapState::TopLeft);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_TOP_RIGHT => {
+                self.snap_window(active_idx, SnapState::TopRight);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_BOTTOM_LEFT => {
+                self.snap_window(active_idx, SnapState::BottomLeft);
+                true
+            }
+            ui::menu::ACTION_WINDOW_SNAP_BOTTOM_RIGHT => {
+                self.snap_window(active_idx, SnapState::BottomRight);
+                true
+            }
+            ui::menu::ACTION_WINDOW_RESTORE => {
+                self.snap_window(active_idx, SnapState::Normal);
+                true
+            }
+            ui::menu::ACTION_WINDOW_TILE_SIDE_BY_SIDE => {
+                self.tile_windows(TileMode::SideBySide);
+                true
+            }
+            ui::menu::ACTION_WINDOW_TILE_GRID => {
+                self.tile_windows(TileMode::Grid2x2);
+                true
+            }
+            ui::menu::ACTION_WINDOW_CASCADE => {
+                self.tile_windows(TileMode::Cascade);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Raises `win_index` to topmost in z-order.
@@ -701,6 +1092,7 @@ impl Wm {
                     item_index: item_idx,
                     action_id,
                 });
+                self.handle_window_action(action_id);
                 self.active_menu = None;
                 return;
             }
@@ -744,11 +1136,15 @@ impl Wm {
                 let btn_size = if self.titlebar_h >= 20 { 12 } else { 8 };
                 let btn_y = w.y + (self.titlebar_h - btn_size) / 2;
                 let close_x = w.x + w.w - btn_size - 8;
-                let min_x = close_x - (btn_size + 6) * 2;
+                let max_x = close_x - btn_size - 6;
+                let min_x = max_x - btn_size - 6;
 
                 if py >= btn_y && py < btn_y + btn_size {
                     if px >= close_x && px < close_x + btn_size {
                         self.close_window(idx);
+                        return;
+                    } else if px >= max_x && px < max_x + btn_size {
+                        self.toggle_maximize(idx);
                         return;
                     } else if px >= min_x && px < min_x + btn_size {
                         self.minimize_window(idx);
@@ -760,11 +1156,14 @@ impl Wm {
             self.raise(idx);
             let w = &mut self.windows[idx];
             if w.snap != SnapState::Normal {
+                let old_w = w.w.max(1);
+                let rel_x = (px - w.x).clamp(0, old_w);
                 let (_, _, pw, ph) = w.pre_snap;
                 w.snap = SnapState::Normal;
                 w.w = pw;
                 w.h = ph;
-                w.x = (px - pw / 4).clamp(0, self.screen_w - pw);
+                let new_offset_x = (pw * rel_x) / old_w;
+                w.x = (px - new_offset_x).clamp(0, self.screen_w - pw);
                 w.y = py.min(self.desktop_h - ph).max(0);
             }
             self.dragging = Some(idx);
@@ -780,21 +1179,13 @@ impl Wm {
     }
 
     pub fn on_drag_release(&mut self, idx: usize, px: i32) {
-        let w = &mut self.windows[idx];
-        if px <= SNAP_MARGIN {
-            w.pre_snap = (w.x, w.y, w.w, w.h);
-            w.snap = SnapState::Left;
-            w.x = 0;
-            w.y = 0;
-            w.w = self.screen_w / 2;
-            w.h = self.desktop_h;
-        } else if px >= self.screen_w - SNAP_MARGIN {
-            w.pre_snap = (w.x, w.y, w.w, w.h);
-            w.snap = SnapState::Right;
-            w.x = self.screen_w / 2;
-            w.y = 0;
-            w.w = self.screen_w / 2;
-            w.h = self.desktop_h;
+        self.on_drag_release_at(idx, px, self.cursor_y);
+    }
+
+    pub fn on_drag_release_at(&mut self, idx: usize, px: i32, py: i32) {
+        self.preview_snap = None;
+        if let Some(target) = self.detect_snap_target(px, py) {
+            self.snap_window(idx, target);
         }
     }
 
@@ -825,10 +1216,12 @@ impl Wm {
                 let w = &mut self.windows[idx];
                 w.x = (self.cursor_x - self.drag_offset_x).clamp(0, self.screen_w - w.w);
                 w.y = (self.cursor_y - self.drag_offset_y).clamp(0, self.desktop_h - w.h);
+                self.preview_snap = self.detect_snap_target(self.cursor_x, self.cursor_y);
             }
             if just_released {
-                self.on_drag_release(idx, self.cursor_x);
+                self.on_drag_release_at(idx, self.cursor_x, self.cursor_y);
                 self.dragging = None;
+                self.preview_snap = None;
             }
         }
 
@@ -997,6 +1390,32 @@ impl Wm {
                 let bar_x = min_x + (btn_size - bar_w) / 2;
                 let bar_color = if is_high_contrast { Color::BLACK } else { Color::WHITE };
                 surface.fill_rect(Rect::new(bar_x, cy, bar_w, 1), bar_color);
+            }
+        }
+
+        // 2b. Visual snap preview ghost overlay
+        if let Some(snap) = self.preview_snap {
+            let (sx, sy, sw, sh) = calculate_snap_rect(snap, self.work_area());
+            if sw > 8 && sh > 8 {
+                if is_high_contrast {
+                    ui::draw::draw_rect_outline(
+                        surface,
+                        Rect::new(sx + 2, sy + 2, sw - 4, sh - 4),
+                        3,
+                        Color::rgb(255, 255, 0),
+                    );
+                } else {
+                    surface.fill_rect(
+                        Rect::new(sx + 3, sy + 3, sw - 6, sh - 6),
+                        Color::rgba(59, 130, 246, 45),
+                    );
+                    ui::draw::draw_rect_outline(
+                        surface,
+                        Rect::new(sx + 3, sy + 3, sw - 6, sh - 6),
+                        2,
+                        palette.accent_primary,
+                    );
+                }
             }
         }
 
@@ -2036,10 +2455,89 @@ pub fn run_selftest() -> i32 {
         code |= 2048;
     }
 
+    // Case 12 (Month 5 Power-user & system apps): Multi-window productivity polish - refining window snapping
+    let case12_code = selftest_case_12_snapping_polish(test_buf);
+    code |= case12_code;
+
     if code == 0 {
         unsafe { ffi::sys_write(b"[wm-selftest] all cases passed\n\0".as_ptr()) };
     }
     code
+}
+
+#[inline(never)]
+fn selftest_case_12_snapping_polish(test_buf: &mut [u32]) -> i32 {
+    let mut wm_snap = Wm::new_for_display(1024, 768);
+    let work = wm_snap.work_area();
+    let work_ok = work.x == 0 && work.y == 24 && work.w == 1024 && work.h == 708;
+
+    // 1. Quadrant tiling: snap windows into all 4 quadrants
+    wm_snap.snap_window(0, SnapState::TopLeft);
+    wm_snap.snap_window(1, SnapState::TopRight);
+    wm_snap.snap_window(2, SnapState::BottomLeft);
+    wm_snap.snap_window(3, SnapState::BottomRight);
+
+    let quad0_ok = wm_snap.windows[0].x == 0 && wm_snap.windows[0].y == 24
+        && wm_snap.windows[0].w == 512 && wm_snap.windows[0].h == 354;
+    let quad1_ok = wm_snap.windows[1].x == 512 && wm_snap.windows[1].y == 24
+        && wm_snap.windows[1].w == 512 && wm_snap.windows[1].h == 354;
+    let quad2_ok = wm_snap.windows[2].x == 0 && wm_snap.windows[2].y == 378
+        && wm_snap.windows[2].w == 512 && wm_snap.windows[2].h == 354;
+    let quad3_ok = wm_snap.windows[3].x == 512 && wm_snap.windows[3].y == 378
+        && wm_snap.windows[3].w == 512 && wm_snap.windows[3].h == 354;
+
+    // Smoother edges invariant: all 4 quadrants combined cover the entire work area with 0 gap and 0 overlap
+    let gapless_w = wm_snap.windows[0].w + wm_snap.windows[1].w == work.w;
+    let gapless_h = wm_snap.windows[0].h + wm_snap.windows[2].h == work.h;
+    let quads_ok = quad0_ok && quad1_ok && quad2_ok && quad3_ok && gapless_w && gapless_h;
+
+    // 2. Maximize toggle and restoration
+    let orig_geom = wm_snap.windows[0].pre_snap;
+    wm_snap.toggle_maximize(0);
+    let max_ok = wm_snap.windows[0].snap == SnapState::Maximize
+        && wm_snap.windows[0].x == 0 && wm_snap.windows[0].y == 24
+        && wm_snap.windows[0].w == 1024 && wm_snap.windows[0].h == 708;
+
+    wm_snap.toggle_maximize(0);
+    let restore_ok = wm_snap.windows[0].snap == SnapState::Normal
+        && (wm_snap.windows[0].x, wm_snap.windows[0].y, wm_snap.windows[0].w, wm_snap.windows[0].h) == orig_geom;
+
+    // 3. Automated side-by-side split tiling
+    wm_snap.tile_windows(TileMode::SideBySide);
+    let top_win = wm_snap.z_order[MAX_WINDOWS - 1];
+    let second_win = wm_snap.z_order[MAX_WINDOWS - 2];
+    let sbs_ok = wm_snap.windows[top_win].snap == SnapState::Left
+        && wm_snap.windows[second_win].snap == SnapState::Right;
+
+    // 4. Snap preview ghost outline rendering on BufferSurface32
+    wm_snap.preview_snap = Some(SnapState::TopRight);
+    test_buf[..1024 * 50].fill(0);
+    let mut snap_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 50], 1024, 50);
+    wm_snap.render(&mut snap_surf);
+    // Preview outline for TopRight is at x=512+3..1024-3, y=24+3..50
+    let preview_pixel = snap_surf.buffer[27 * 1024 + 520];
+    let palette = Theme::Dark.palette();
+    let preview_rendered = preview_pixel != 0 && preview_pixel != palette.desktop_bg.to_xrgb();
+
+    // 5. Proportional un-snapping
+    wm_snap.raise(0);
+    wm_snap.snap_window(0, SnapState::Left);
+    wm_snap.cursor_x = 256; // 50% across the 512px snapped window
+    wm_snap.cursor_y = 35;
+    wm_snap.on_left_press(256, 35);
+    let was_dragging = wm_snap.dragging == Some(0);
+    let unsnap_proportional_ok = wm_snap.windows[0].snap == SnapState::Normal
+        && (wm_snap.cursor_x - wm_snap.windows[0].x - wm_snap.windows[0].w / 2).abs() <= 5
+        && was_dragging;
+    wm_snap.apply_mouse(mouse(0, 0, false)); // release drag
+
+    if work_ok && quads_ok && max_ok && restore_ok && sbs_ok && preview_rendered && unsnap_proportional_ok {
+        unsafe { ffi::sys_write(b"[wm-selftest] PASS: multi-window productivity polish and window snapping\n\0".as_ptr()) };
+        0
+    } else {
+        unsafe { ffi::sys_write(b"[wm-selftest] FAIL: multi-window productivity polish and window snapping\n\0".as_ptr()) };
+        4096
+    }
 }
 
 fn load_access_cfg() -> Option<AccessibilityConfig> {
@@ -2210,9 +2708,135 @@ mod tests {
 
         assert_eq!(wm.windows[0].snap, SnapState::Left);
         assert_eq!(wm.windows[0].x, 0);
-        assert_eq!(wm.windows[0].y, 0);
+        assert_eq!(wm.windows[0].y, 24);
         assert_eq!(wm.windows[0].w, 512);
-        assert_eq!(wm.windows[0].h, 732);
+        assert_eq!(wm.windows[0].h, 708);
+    }
+
+    #[test]
+    fn test_wm_legacy_snapping_proportions() {
+        let mut wm = Wm::new();
+        wm.cursor_x = 25;
+        wm.cursor_y = 25;
+        wm.apply_mouse(mouse(0, 0, true));
+        wm.apply_mouse(mouse(-1000, 0, true));
+        wm.apply_mouse(mouse(0, 0, false));
+
+        assert_eq!(wm.windows[0].snap, SnapState::Left);
+        assert_eq!(wm.windows[0].x, 0);
+        assert_eq!(wm.windows[0].y, 0);
+        assert_eq!(wm.windows[0].w, 160);
+        assert_eq!(wm.windows[0].h, 188);
+    }
+
+    #[test]
+    fn test_wm_quadrant_snapping() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        let work = wm.work_area();
+        assert_eq!(work.y, 24);
+        assert_eq!(work.h, 708);
+
+        wm.snap_window(0, SnapState::TopLeft);
+        assert_eq!(wm.windows[0].x, 0);
+        assert_eq!(wm.windows[0].y, 24);
+        assert_eq!(wm.windows[0].w, 512);
+        assert_eq!(wm.windows[0].h, 354);
+
+        wm.snap_window(1, SnapState::TopRight);
+        assert_eq!(wm.windows[1].x, 512);
+        assert_eq!(wm.windows[1].y, 24);
+        assert_eq!(wm.windows[1].w, 512);
+        assert_eq!(wm.windows[1].h, 354);
+
+        wm.snap_window(2, SnapState::BottomLeft);
+        assert_eq!(wm.windows[2].x, 0);
+        assert_eq!(wm.windows[2].y, 378);
+        assert_eq!(wm.windows[2].w, 512);
+        assert_eq!(wm.windows[2].h, 354);
+
+        wm.snap_window(3, SnapState::BottomRight);
+        assert_eq!(wm.windows[3].x, 512);
+        assert_eq!(wm.windows[3].y, 378);
+        assert_eq!(wm.windows[3].w, 512);
+        assert_eq!(wm.windows[3].h, 354);
+    }
+
+    #[test]
+    fn test_wm_maximize_toggle() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        let orig = (wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h);
+        wm.toggle_maximize(0);
+        assert_eq!(wm.windows[0].snap, SnapState::Maximize);
+        assert_eq!(wm.windows[0].x, 0);
+        assert_eq!(wm.windows[0].y, 24);
+        assert_eq!(wm.windows[0].w, 1024);
+        assert_eq!(wm.windows[0].h, 708);
+
+        wm.toggle_maximize(0);
+        assert_eq!(wm.windows[0].snap, SnapState::Normal);
+        assert_eq!((wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h), orig);
+    }
+
+    #[test]
+    fn test_wm_tile_side_by_side() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.tile_windows(TileMode::SideBySide);
+        let top = wm.z_order[MAX_WINDOWS - 1];
+        let second = wm.z_order[MAX_WINDOWS - 2];
+        assert_eq!(wm.windows[top].snap, SnapState::Left);
+        assert_eq!(wm.windows[second].snap, SnapState::Right);
+        assert_eq!(wm.windows[top].w + wm.windows[second].w, 1024);
+        assert_eq!(wm.windows[top].h, 708);
+        assert_eq!(wm.windows[second].h, 708);
+    }
+
+    #[test]
+    fn test_wm_tile_grid2x2() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.tile_windows(TileMode::Grid2x2);
+        let w_top = wm.z_order[3];
+        let w_2nd = wm.z_order[2];
+        let w_3rd = wm.z_order[1];
+        let w_4th = wm.z_order[0];
+        assert_eq!(wm.windows[w_top].snap, SnapState::TopLeft);
+        assert_eq!(wm.windows[w_2nd].snap, SnapState::TopRight);
+        assert_eq!(wm.windows[w_3rd].snap, SnapState::BottomLeft);
+        assert_eq!(wm.windows[w_4th].snap, SnapState::BottomRight);
+    }
+
+    #[test]
+    fn test_wm_proportional_unsnap() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0);
+        wm.snap_window(0, SnapState::Left);
+        assert_eq!(wm.windows[0].w, 512);
+
+        // Click at 50% across snapped window
+        wm.cursor_x = 256;
+        wm.cursor_y = 35;
+        wm.on_left_press(256, 35);
+
+        assert_eq!(wm.windows[0].snap, SnapState::Normal);
+        // Restored width is 360, center should be near cursor_x (256)
+        let restored_center = wm.windows[0].x + wm.windows[0].w / 2;
+        assert!((restored_center - 256).abs() <= 5);
+    }
+
+    #[test]
+    fn test_wm_window_action_dispatch() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0);
+        assert!(wm.handle_window_action(ui::menu::ACTION_WINDOW_SNAP_LEFT));
+        assert_eq!(wm.windows[0].snap, SnapState::Left);
+
+        assert!(wm.handle_window_action(ui::menu::ACTION_WINDOW_SNAP_RIGHT));
+        assert_eq!(wm.windows[0].snap, SnapState::Right);
+
+        assert!(wm.handle_window_action(ui::menu::ACTION_WINDOW_MAXIMIZE));
+        assert_eq!(wm.windows[0].snap, SnapState::Maximize);
+
+        assert!(wm.handle_window_action(ui::menu::ACTION_WINDOW_RESTORE));
+        assert_eq!(wm.windows[0].snap, SnapState::Normal);
     }
 
     #[test]
