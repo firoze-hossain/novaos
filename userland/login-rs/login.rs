@@ -373,7 +373,18 @@ impl LoginScreen {
 
         let rc = unsafe { ffi::sys_login(u_buf.as_ptr(), p_buf.as_ptr()) };
 
+        // Zeroize temporary plaintext password buffer immediately
+        for b in p_buf.iter_mut() {
+            *b = 0;
+        }
+
         if rc == 0 {
+            // Zeroize stored password buffer on authentication success
+            for b in self.password_buf.iter_mut() {
+                *b = 0;
+            }
+            self.password_len = 0;
+
             let uid = unsafe { ffi::sys_getuid() };
             let gid = if self.is_custom_user || self.selected_account_idx >= self.account_count {
                 uid
@@ -385,11 +396,16 @@ impl LoginScreen {
             self.set_status("Identity verified! Session launching...");
             true
         } else {
+            // Zeroize stored password buffer on authentication failure
+            for b in self.password_buf.iter_mut() {
+                *b = 0;
+            }
+            self.password_len = 0;
+
             self.failed_attempts += 1;
             self.auth_status = AuthStatus::Failed {
                 attempts: self.failed_attempts,
             };
-            self.password_len = 0;
             self.set_status("Authentication failed: invalid username or password.");
             false
         }

@@ -8,6 +8,7 @@ A from-scratch x86 operating system in C and Assembly, combining a
 Linux-style modular kernel, an Ubuntu-style friendly userland/package
 manager, and Windows-style usability conventions. See
 [USER_GUIDE.md](docs/USER_GUIDE.md) for the complete end-user manual and desktop guide,
+[SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) for the cross-track security audit & capability matrix,
 [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full vision and roadmap,
 [PROGRESS.md](PROGRESS.md) for exactly what's implemented today, and
 [CHANGELOG.md](CHANGELOG.md) for the release history. Licensed under

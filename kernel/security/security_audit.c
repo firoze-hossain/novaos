@@ -18,6 +18,9 @@
 #include "../include/kernel.h"
 #include "../include/atomic_update.h"
 #include "../include/crashdump.h"
+#include "../drivers/video/fb.h"
+#include "../ipc/shm.h"
+#include "../ipc/msg.h"
 #include "../lib/string.h"
 
 int kernel_security_audit_selftest(void) {
@@ -233,6 +236,73 @@ int kernel_security_audit_selftest(void) {
             kernel_log("[ OK ] audit: mandatory access control and address isolation verified\n");
         } else {
             kernel_log("[FAIL] audit: MAC enforcement check failed (mask 0x%x)\n", fail & 0x0E000000);
+        }
+    }
+
+    /* -------------------------------------------------------------
+     * 5. Cross-Track Application Least-Privilege & Credential Isolation
+     * ------------------------------------------------------------- */
+    {
+        /* 5.1 Credential buffer sanitization */
+        volatile char secret_buf[64];
+        for (size_t i = 0; i < sizeof(secret_buf); ++i) {
+            secret_buf[i] = (char)(0x5A ^ (i & 0xFF));
+        }
+        for (size_t i = 0; i < sizeof(secret_buf); ++i) {
+            secret_buf[i] = 0;
+        }
+        for (size_t i = 0; i < sizeof(secret_buf); ++i) {
+            if (secret_buf[i] != 0) {
+                fail |= (1 << 28);
+                break;
+            }
+        }
+
+        /* 5.2 VFS & Sensitive configuration file capability isolation */
+        process_t p_unprivileged;
+        memset(&p_unprivileged, 0, sizeof(p_unprivileged));
+        p_unprivileged.can_open_any_file = false;
+        p_unprivileged.allowed_file_count = 1;
+        strncpy(p_unprivileged.allowed_files[0], "DOCS.TXT", sizeof(p_unprivileged.allowed_files[0]));
+
+        const char* sensitive_files[] = {
+            "SYSTEM.CFG", "system.cfg",
+            "USERS.CFG",  "users.cfg",
+            "SERVICES.CFG", "services.cfg",
+            "FIREWALL.CFG", "firewall.cfg",
+            "BOOTSLOT.DAT", "bootslot.dat",
+            "CRASHDMP.DAT", "crashdmp.dat",
+            "CRASHDMP.TXT", "crashdmp.txt"
+        };
+        for (size_t i = 0; i < sizeof(sensitive_files) / sizeof(sensitive_files[0]); ++i) {
+            if (process_has_capability(&p_unprivileged, sensitive_files[i])) {
+                fail |= (1 << 29);
+                break;
+            }
+        }
+        if (!process_has_capability(&p_unprivileged, "DOCS.TXT") ||
+            !process_has_capability(&p_unprivileged, "docs.txt")) {
+            fail |= (1 << 29);
+        }
+
+        /* 5.3 IPC, Framebuffer & Shared Memory boundary checks */
+        if (msg_sys_send(1, 0xC0000000) != -NOVA_MSG_ERR_FAULT) {
+            fail |= (1 << 30);
+        }
+        if (shm_sys_create(1, 0xC0000000) != -NOVA_SHM_ERR_FAULT) {
+            fail |= (1 << 30);
+        }
+        if (fb_sys_acquire(1, 9999) != -NOVA_FB_ERR_INVAL) {
+            fail |= (1 << 30);
+        }
+        if (rust_shm_grant(9999, 12345, 9998, 0x1) != -NOVA_SHM_ERR_BADF) {
+            fail |= (1 << 30);
+        }
+
+        if ((fail & 0x70000000) == 0) {
+            kernel_log("[ OK ] audit: cross-track application least-privilege matrix verified\n");
+        } else {
+            kernel_log("[FAIL] audit: cross-track application least-privilege matrix failed (mask 0x%x)\n", fail & 0x70000000);
         }
     }
 

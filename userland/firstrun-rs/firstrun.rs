@@ -744,6 +744,10 @@ impl FirstrunApp {
             let rc = unsafe { ffi::sys_write_file(b"USERS.CFG\0".as_ptr(), user_buf.as_ptr(), user_len as u32) };
             self.apply.step_users_saved = rc >= 0;
         }
+        // Zeroize temporary user buffer to wipe password hash and salt from stack
+        for b in user_buf.iter_mut() {
+            *b = 0;
+        }
 
         self.apply.progress_pct = 65;
 

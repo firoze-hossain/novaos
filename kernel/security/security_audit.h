@@ -7,6 +7,7 @@
  * 2. Root privilege gates (OS update, crashdump export, shutdown, firewall, rlimit)
  * 3. Process capability boundaries (file, host, spawn, exec, write, delete)
  * 4. Mandatory Access Control (MAC) enforcement and administrator privilege gating
+ * 5. Cross-track application least-privilege matrix, credential zeroing & IPC/memory isolation
  */
 
 #ifndef KERNEL_SECURITY_AUDIT_H

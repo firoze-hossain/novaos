@@ -203,6 +203,8 @@ void firstrun_check_and_run(void) {
         (const uint8_t*)username_buf, (uint32_t)strlen(username_buf), 0, 0,
         (const uint8_t*)password_buf, (uint32_t)strlen(password_buf),
         timer_get_ticks());
+    /* Month 6 Security Audit: Zeroize password buffer immediately to prevent retention in memory */
+    memset(password_buf, 0, sizeof(password_buf));
     if (user_added) {
         if (!userscfg_save()) {
             vga_puts("[WARN] Could not save the account to disk - it "
