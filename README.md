@@ -9,6 +9,7 @@ Linux-style modular kernel, an Ubuntu-style friendly userland/package
 manager, and Windows-style usability conventions. See
 [USER_GUIDE.md](docs/USER_GUIDE.md) for the complete end-user manual and desktop guide,
 [SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) for the cross-track security audit & capability matrix,
+[RELEASE_SIGNOFF_V1.0.md](docs/RELEASE_SIGNOFF_V1.0.md) for the official v1.0.0 release certification and sign-off checklist,
 [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full vision and roadmap,
 [PROGRESS.md](PROGRESS.md) for exactly what's implemented today, and
 [CHANGELOG.md](CHANGELOG.md) for the release history. Licensed under

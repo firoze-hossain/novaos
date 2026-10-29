@@ -3,8 +3,60 @@
 All notable changes to NovaOS are documented here. See
 [PROGRESS.md](PROGRESS.md) for full technical detail, verification
 evidence, and known limitations behind every phase summarized below.
+See [RELEASE_SIGNOFF_V1.0.md](docs/RELEASE_SIGNOFF_V1.0.md) for the official
+production release certification and 56-milestone completion report.
 
-## [1.0.0] - First Release
+## [1.0.0] - Official Production Release & 6-Month Build Plan Milestone (2026-10-29)
+
+The complete delivery of the 6-Month NovaOS Build Plan: 56 out of 56 planned tasks
+delivered across both the Kernel Foundation Track (26 features) and the Interface & Userland
+Track (26 features), backed by cross-cutting automated testing, dual Desktop/Server installation
+profiles, and an exhaustive security review.
+
+### Highlights
+
+- **Kernel Foundation & Hardware Drivers (26 Tasks Delivered)**:
+  - Memory: Full dynamic paging with high-memory split (`0xC0000000`) and page tables.
+  - Multi-Core (SMP): ACPI MADT parsing, APIC/IOAPIC drivers, inter-processor interrupts (IPI),
+    and per-core preemptive scheduler scaling deterministically across 2 and 4 CPU cores.
+  - Storage & Filesystems: Ext2 filesystem, FAT32 write-ahead journal with atomic crash recovery,
+    MBR multi-partition parser, and in-kernel disk partitioning/formatting engine (`SYS_DISK_INSTALL`).
+  - Networking: Full TCP/IP stack with socket API, DHCP client, DNS UDP resolver, TFTP client,
+    stateful packet filter firewall with 256 tracked flows, and in-kernel package repository HTTP server.
+  - Storage & Bus Drivers: ATA PIO (LBA28), NVMe PCIe 1.3+ controller, VirtIO-blk, xHCI USB 3.0 controller,
+    and 802.11 Wi-Fi MAC layer subsystem.
+  - Video & Audio: Dual display backends (Bochs VBE 1024x768x32bpp linear framebuffer & VirtIO-GPU 2D with
+    sub-rectangle damage flushing) and AC97 PCI hardware audio mixer.
+  - System Lifecycle: ACPI S5 soft-off power management (`SYS_SHUTDOWN`), A/B atomic OS updates with
+    automatic fallback, and automated crash dump export (`/CRASHDMP.DAT` and `/CRASHDMP.TXT`).
+
+- **Interface & Userland Applications (26 Tasks Delivered)**:
+  - 13 pure `#![no_std]` Rust ring-3 userland applications operating with zero-syscall
+    `BufferSurface32` rasterization:
+    1. `ui-rs`: Shared design system, UI tokens, widgets, vector drawing, and anti-aliased typography.
+    2. `novainit-rs`: PID 1 supervisor managing system services, dependencies, and restart policies.
+    3. `wm-rs`: Compositor and window manager with 8-zone window snapping, dynamic tiling, titlebars,
+       persistent top menu bar, and application dock.
+    4. `files-rs`: Graphical file manager with VFS navigation, file metadata cards, and preview.
+    5. `term-rs`: Terminal emulator with VT100 ANSI sequences, scrollback history, and pipes.
+    6. `edit-rs`: Monospace text editor with multi-line text buffer, font scaling, and toolbar.
+    7. `store-rs`: Graphical package store verifying HMAC-SHA256 package cryptographic signatures.
+    8. `login-rs`: Graphical login screen and lockscreen with PBKDF2-HMAC-SHA256 and credential zeroing.
+    9. `settings-rs`: Modular preferences shell with Network/Firewall, Users, Services, Device Manager,
+       Accessibility (100%-150% font scaling, WCAG AAA high contrast), and Dual-Slot Updates panels.
+    10. `klog-rs`: Structured kernel log viewer with severity/facility filtering and keyword search.
+    11. `actmon-rs`: Activity monitor with live CPU usage graphs, physical RAM telemetry, and process sorting.
+    12. `installer-rs`: Graphical installer wizard driving disk partitioning and deployment.
+    13. `crashrep-rs`: Graphical crash dump reporter inspecting crash snapshots and backtraces.
+
+- **Release & Cross-Cutting Infrastructure (4 Tasks Delivered)**:
+  - Automated Testing: Scaled test runner from 81 to 319 assertions on Desktop profile and 248 assertions
+    on Server profile with 100% pass rate.
+  - Desktop & Server Editions: Single shared kernel binary generating two distinct profiles: Desktop
+    (`disk.img`) with full GUI suite and Server (`disk-server.img`) stripped of compositor for headless efficiency.
+  - Security Review & Audit: Complete 84-syscall authorization audit, MAC profile enforcement, credential memory
+    zeroization, and Phase 98 in-kernel self-test.
+  - Official Release Candidate: Packaging `release/v1.0.0/`, cryptographic `SHA256SUMS`, and release qualification suite.
 
 The culmination of Phases 1-22: a bootable, self-hosting kernel with a
 working shell, filesystem, networking stack, GUI, package manager, and

@@ -413,6 +413,12 @@ test-editions:
 test-security:
 	@sh tools/tests/run_security_audit_test.sh
 
+# Month 6: Final v1.0 release-candidate build and sign-off verification checklist
+release-signoff: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG)
+	@sh tools/release/release_signoff.sh
+
+release: release-signoff
+
 # Phase 95: Dedicated 4-core SMP scaling validation test target.
 test-smp4: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout 600 \
@@ -688,4 +694,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test ui-qa test-editions test-security clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
