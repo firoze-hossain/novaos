@@ -185,6 +185,17 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
 
     paging_init();
 
+    /* NovaOS 2.0 (Month 1 Foundation): Pure Rust modern UEFI 2.9 bootloader
+     * and GPT partition discovery verification (boot/uefi-loader/). Verifies
+     * protective MBR, primary GPT header & CRC32, root filesystem GUID
+     * (0FC63DAF-8483-4772-8E79-3D69D8477DE4), ESP GUID, PE/COFF Secure Boot
+     * Authenticode signature checking, GOP native resolution discovery (1080p/4K),
+     * and 64-bit BootInfo handover contract. */
+    extern int rust_uefi_boot_selftest(void);
+    int uefi_res = rust_uefi_boot_selftest();
+    kernel_log("[ %s ] Pure Rust UEFI 2.9 bootloader & GPT engine initialized (GOP 1080p/4K, Secure Boot PE signature, BootInfo handover)\n",
+               uefi_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

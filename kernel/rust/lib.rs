@@ -63,6 +63,9 @@ mod procman;
 #[path = "../src/arch/x86_64/paging.rs"]
 pub mod paging64;
 
+#[path = "../../boot/uefi-loader/src/lib.rs"]
+pub mod uefi_loader;
+
 use core::panic::PanicInfo;
 
 extern "C" {

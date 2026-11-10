@@ -1,0 +1,15 @@
+[package]
+name = "uefi-loader"
+version = "2.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Pure Rust modern UEFI 2.9 bootloader for NovaOS x86_64 Long Mode"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

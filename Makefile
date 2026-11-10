@@ -575,6 +575,13 @@ login-test:
 paging64-test:
 	@sh tools/tests/run_paging64_tests.sh
 
+# Month 1 - Foundation: Pure Rust UEFI 2.9 Bootloader & GPT Partition Discovery
+# suite on the host: protective MBR, GPT header/array CRC32, root/ESP discovery,
+# Authenticode PE32+ signature check, GOP native 1080p/4K resolution query, ELF64 loader,
+# BootInfo handover, and release BOOTX64.EFI compilation for x86_64-unknown-uefi.
+uefi-test:
+	@sh tools/tests/run_uefi_tests.sh
+
 # Interface Track / Month 6 - First impressions: NovaOS Graphical Installer Wizard (installer-rs)
 # suite on the host: wizard state machine, disk selection, partition layout calculations,
 # user account credential synthesis (USERS.CFG/SYSTEM.CFG), installation pipeline, and BufferSurface32 rendering.
@@ -700,4 +707,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
