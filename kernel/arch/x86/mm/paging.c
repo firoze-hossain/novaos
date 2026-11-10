@@ -1,19 +1,16 @@
 /*
- * paging.c - x86 32-bit paging (identity-mapped boot configuration)
+ * paging.c - x86 paging & x86_64 Long Mode PML4 paging engine bridge
  *
  * Sets up a two-level page directory/page table structure identity-
  * mapping the first 64MB of physical memory 1:1 to the same virtual
- * addresses, then flips CR0.PG on. Nothing in the kernel's addressing
- * changes as a result (it was already linked to run at 0x100000 and
- * everything it touches is below 64MB), but this is the prerequisite
- * for anything Phase 4+ wants to do with real virtual memory (per-
- * process address spaces, guard pages, copy-on-write, etc.) - the
- * kernel now runs *through* the MMU instead of the MMU being off.
+ * addresses, then flips CR0.PG on.
  *
- * Known limitation (see PROGRESS.md): this is 32-bit non-PAE paging,
- * so page table entries have no NX (non-executable) bit - that
- * requires PAE or long mode. Every mapped page here is both writable
- * and executable. Real W^X enforcement is tracked as future work.
+ * For NovaOS 2.0 (Pure Rust x86_64 Long Mode), full 4-level paging
+ * (PML4 -> PDPT -> PD -> PT) is implemented in kernel/src/arch/x86_64/paging.rs
+ * with 48-bit address space, 2MB/1GB huge page support, NX hardware
+ * protection, higher-half kernel mapping at 0xFFFF_8000_0000_0000,
+ * and zero-unsafe page-table walker. This file bridges the boot-time
+ * initialization and runs the 64-bit engine verification.
  */
 #include "paging.h"
 #include "pmm.h"
@@ -246,6 +243,19 @@ void paging_init(void) {
     );
 
     kernel_log("[ OK ] Paging enabled (identity-mapped 0-64MB)\n");
+
+    /* NovaOS 2.0 (x86_64 Long Mode): Pure Rust x86_64 PML4 4-level paging engine
+     * verification and self-test (kernel/src/arch/x86_64/paging.rs). Prepares
+     * PML4 root table, 48-bit virtual address space, identity mapping of first 4GB
+     * with 2MB huge pages, higher-half kernel base mapping at 0xFFFF_8000_0000_0000,
+     * hardware NX protection, and Long Mode control register activation state. */
+    extern int rust_x86_64_paging_selftest(void);
+    int p64_rc = rust_x86_64_paging_selftest();
+    if (p64_rc == 0) {
+        kernel_log("[ OK ] Pure Rust x86_64 Long Mode & PML4 4-level paging engine initialized (48-bit address space, NX, 2MB/1GB huge pages, higher-half base 0xFFFF800000000000)\n");
+    } else {
+        kernel_log("[FAIL] Pure Rust x86_64 Long Mode & PML4 4-level paging engine self-test failed: code %d\n", p64_rc);
+    }
 }
 
 /* IMPORTANT CAVEAT shared by every function below: they treat a
