@@ -13,4 +13,7 @@ bool keyboard_has_char(void);
  * next decoded ASCII character, consuming it from the input buffer. */
 char keyboard_get_char(void);
 
+/* Injects an ASCII character into the input buffer (used by USB HID keyboard driver). */
+void keyboard_inject_char(char c);
+
 #endif

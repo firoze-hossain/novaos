@@ -233,6 +233,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Pure Rust NVMe 2.0 PCIe storage controller initialized (PCI 0x010802, ASQ/ACQ, IOSQ/IOCQ, SGL/PRP, 2.5+ GB/s)\n",
                nvme2_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 1 Foundation): Pure Rust xHCI USB 3.2 Host Controller & HID Stack
+     * (kernel/src/drivers/usb/xhci.rs, kernel/src/drivers/usb/hid.rs). Enumerate PCI class 0x0C0330,
+     * map 64-bit BAR0 MMIO space, configure DCBAA and circular TRB rings, discover root hub ports,
+     * decode USB HID descriptor reports, and inject input events into the kernel input queue. */
+    extern int rust_xhci_hid_selftest(void);
+    int xhci_hid_res = rust_xhci_hid_selftest();
+    kernel_log("[ %s ] Pure Rust xHCI USB 3.2 controller & HID stack initialized (DCBAA, TRB rings, root hub, keyboard/mouse/touch)\n",
+               xhci_hid_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

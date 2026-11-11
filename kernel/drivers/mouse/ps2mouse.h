@@ -22,4 +22,7 @@ bool ps2mouse_is_present(void);
  * polling interface for a compositor's render loop. */
 mouse_state_t ps2mouse_read(void);
 
+/* Injects relative motion and button state (used by USB HID mouse driver). */
+void mouse_inject_state(int dx, int dy, bool left, bool right, bool middle);
+
 #endif

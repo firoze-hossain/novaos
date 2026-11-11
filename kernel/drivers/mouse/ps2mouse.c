@@ -153,3 +153,11 @@ mouse_state_t ps2mouse_read(void) {
 
     return state;
 }
+
+void mouse_inject_state(int dx, int dy, bool left, bool right, bool middle) {
+    accum_dx += dx;
+    accum_dy += dy;
+    left_button = left;
+    right_button = right;
+    middle_button = middle;
+}

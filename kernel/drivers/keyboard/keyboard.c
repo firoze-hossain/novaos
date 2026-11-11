@@ -83,3 +83,7 @@ char keyboard_get_char(void) {
     buf_tail = (buf_tail + 1) % BUFFER_SIZE;
     return c;
 }
+
+void keyboard_inject_char(char c) {
+    buffer_push(c);
+}

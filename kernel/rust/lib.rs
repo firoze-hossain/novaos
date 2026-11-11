@@ -81,6 +81,9 @@ pub mod scheduler64;
 #[path = "../src/drivers/storage/nvme.rs"]
 pub mod nvme2;
 
+#[path = "../src/drivers/usb/mod.rs"]
+pub mod usb;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -209,4 +212,11 @@ pub extern "C" fn rust_smp_scheduler_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_nvme2_selftest() -> i32 {
     nvme2::run_nvme2_selftest()
+}
+
+/// NovaOS 2.0 (Month 1 - Foundation): Pure Rust xHCI USB 3.2 Host Controller & HID Stack
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_xhci_hid_selftest() -> i32 {
+    usb::run_xhci_hid_selftest()
 }
