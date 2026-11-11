@@ -69,6 +69,12 @@ pub mod syscall64;
 #[path = "../../boot/uefi-loader/src/lib.rs"]
 pub mod uefi_loader;
 
+#[path = "../src/mm/vmm.rs"]
+pub mod vmm;
+
+#[path = "../src/mm/fault.rs"]
+pub mod fault;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -176,4 +182,11 @@ pub extern "C" fn rust_kernel_selftest_add(a: i32, b: i32) -> i32 {
         i += 1;
     }
     sum
+}
+
+/// NovaOS 2.0 (Month 1 - Foundation): Demand Paging & Copy-on-Write (CoW) Virtual Memory Engine
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_demand_paging_cow_selftest() -> i32 {
+    fault::run_demand_paging_cow_selftest()
 }

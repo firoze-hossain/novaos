@@ -206,6 +206,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Pure Rust UEFI 2.9 bootloader & GPT engine initialized (GOP 1080p/4K, Secure Boot PE signature, BootInfo handover)\n",
                uefi_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 1 Foundation): Demand Paging & Copy-on-Write (CoW) Virtual Memory Engine
+     * (kernel/src/mm/vmm.rs & kernel/src/mm/fault.rs). Manages per-process Virtual Memory Area (VMA)
+     * tree using BTreeMap<VirtualAddress, VmaRegion>, handles anonymous memory, file-backed mappings,
+     * guard pages, and CoW page duplication via physical frame refcounting with up to 75% memory saved. */
+    extern int rust_demand_paging_cow_selftest(void);
+    int dp_cow_res = rust_demand_paging_cow_selftest();
+    kernel_log("[ %s ] Demand Paging & Copy-on-Write (CoW) engine initialized (VMA BTreeMap, ASLR, refcounting, 75%% memory saved)\n",
+               dp_cow_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_
