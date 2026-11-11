@@ -242,6 +242,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Pure Rust xHCI USB 3.2 controller & HID stack initialized (DCBAA, TRB rings, root hub, keyboard/mouse/touch)\n",
                xhci_hid_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 2 Storage & Async I/O): Concurrent VFS with Lockless Dentry Cache & Async Inotify
+     * (kernel/src/fs/vfs/mod.rs, dcache.rs, inotify.rs). Striped dcache (64 buckets), hierarchical path
+     * resolution, global mount table (/dev, /proc, /sys, /mnt), POSIX DAC permissions, and async inotify. */
+    extern int rust_vfs_selftest(void);
+    int vfs_rust_res = rust_vfs_selftest();
+    kernel_log("[ %s ] Concurrent VFS & lockless dcache initialized (lockless dcache, /dev, /proc, /sys, inotify, POSIX DAC)\n",
+               vfs_rust_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

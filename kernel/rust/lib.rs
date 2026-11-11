@@ -84,6 +84,9 @@ pub mod nvme2;
 #[path = "../src/drivers/usb/mod.rs"]
 pub mod usb;
 
+#[path = "../src/fs/vfs/mod.rs"]
+pub mod vfs;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -219,4 +222,11 @@ pub extern "C" fn rust_nvme2_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_xhci_hid_selftest() -> i32 {
     usb::run_xhci_hid_selftest()
+}
+
+/// NovaOS 2.0 (Month 2 - Storage & Async I/O): Concurrent VFS with Lockless Dentry Cache & Async Inotify
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_vfs_selftest() -> i32 {
+    vfs::run_vfs_selftest()
 }
