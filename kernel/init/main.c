@@ -224,6 +224,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Preemptive Tickless SMP Scheduler initialized (5 priority classes, work-stealing, APIC one-shot, 2-32 cores)\n",
                smp_sched_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 1 Foundation): Pure Rust NVMe 2.0 PCIe Storage Controller Driver
+     * (kernel/src/drivers/storage/nvme.rs). Enumerate PCI class 0x010802, map 64-bit BAR0 MMIO
+     * controller registers, allocate circular ring buffers in DMA memory (ASQ/ACQ, IOSQ/IOCQ),
+     * handle physical PRPs and NVMe 2.0 SGLs for zero-copy transfers, MSI-X routing, and BlockDevice trait. */
+    extern int rust_nvme2_selftest(void);
+    int nvme2_res = rust_nvme2_selftest();
+    kernel_log("[ %s ] Pure Rust NVMe 2.0 PCIe storage controller initialized (PCI 0x010802, ASQ/ACQ, IOSQ/IOCQ, SGL/PRP, 2.5+ GB/s)\n",
+               nvme2_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

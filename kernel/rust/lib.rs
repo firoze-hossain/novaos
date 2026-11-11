@@ -78,6 +78,9 @@ pub mod fault;
 #[path = "../src/sched/scheduler.rs"]
 pub mod scheduler64;
 
+#[path = "../src/drivers/storage/nvme.rs"]
+pub mod nvme2;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -199,4 +202,11 @@ pub extern "C" fn rust_demand_paging_cow_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_smp_scheduler_selftest() -> i32 {
     scheduler64::run_smp_scheduler_selftest()
+}
+
+/// NovaOS 2.0 (Month 1 - Foundation): Pure Rust NVMe 2.0 PCIe Storage Controller Driver
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_nvme2_selftest() -> i32 {
+    nvme2::run_nvme2_selftest()
 }
