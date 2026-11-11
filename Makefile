@@ -296,7 +296,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 	@mkdir -p $(dir $@)
 	$(ASM) -f bin $< -o $@
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs kernel/rust/disk_installer.rs kernel/src/mm/vmm.rs kernel/src/mm/fault.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs kernel/rust/disk_installer.rs kernel/src/mm/vmm.rs kernel/src/mm/fault.rs kernel/src/sched/thread.rs kernel/src/sched/runqueue.rs kernel/src/sched/scheduler.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	env RUSTC_BOOTSTRAP=1 $(RUSTC) --edition 2021 -Z unstable-options --target $(RUST_TARGET_JSON) \
 	    --crate-type lib -C panic=abort -C opt-level=2 \
@@ -595,6 +595,13 @@ syscall64-test:
 vmm-test:
 	@sh tools/tests/run_vmm_tests.sh
 
+# Month 1 - Foundation: Preemptive Tickless SMP Scheduler with Priority Classes
+# suite on the host: 5 priority classes, Windows NT dynamic boost & decay, Linux CFS vruntime,
+# ThreadControlBlock with affinity (2-32 cores), TicketSpinLock, per-CPU runqueues with O(1) bitmap,
+# adaptive sleep queues, cross-core work-stealing, and tickless Local APIC one-shot timers.
+sched-test:
+	@sh tools/tests/run_sched_tests.sh
+
 # Interface Track / Month 6 - First impressions: NovaOS Graphical Installer Wizard (installer-rs)
 # suite on the host: wizard state machine, disk selection, partition layout calculations,
 # user account credential synthesis (USERS.CFG/SYSTEM.CFG), installation pipeline, and BufferSurface32 rendering.
@@ -720,4 +727,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot

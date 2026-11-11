@@ -215,6 +215,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Demand Paging & Copy-on-Write (CoW) engine initialized (VMA BTreeMap, ASLR, refcounting, 75%% memory saved)\n",
                dp_cow_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 1 Foundation): Preemptive Tickless SMP Scheduler with Priority Classes
+     * (kernel/src/sched/scheduler.rs, runqueue.rs, thread.rs). Supports 5 priority classes
+     * (Realtime, Interactive, Normal, Batch, Idle) with Windows NT-style dynamic boost, Linux CFS
+     * virtual runtime fair queuing, per-CPU runqueues, lockless work-stealing, and APIC one-shot timers. */
+    extern int rust_smp_scheduler_selftest(void);
+    int smp_sched_res = rust_smp_scheduler_selftest();
+    kernel_log("[ %s ] Preemptive Tickless SMP Scheduler initialized (5 priority classes, work-stealing, APIC one-shot, 2-32 cores)\n",
+               smp_sched_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

@@ -75,6 +75,9 @@ pub mod vmm;
 #[path = "../src/mm/fault.rs"]
 pub mod fault;
 
+#[path = "../src/sched/scheduler.rs"]
+pub mod scheduler64;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -189,4 +192,11 @@ pub extern "C" fn rust_kernel_selftest_add(a: i32, b: i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_demand_paging_cow_selftest() -> i32 {
     fault::run_demand_paging_cow_selftest()
+}
+
+/// NovaOS 2.0 (Month 1 - Foundation): Preemptive Tickless SMP Scheduler with Priority Classes
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_smp_scheduler_selftest() -> i32 {
+    scheduler64::run_smp_scheduler_selftest()
 }
