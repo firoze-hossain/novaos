@@ -275,6 +275,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Unified page cache & LZ4 zswap subsystem initialized (2-list LRU, dirty flush, LZ4 compress, 85%% watermark)\n",
                pc_swap_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 2 Storage & Async I/O): Linux/POSIX Compatibility Layer (novalibc & POSIX ABI)
+     * (kernel/src/compat/posix.rs, userland/libs/novalibc, userland/libs/nova-rt).
+     * POSIX.1-2017 syscall translation, System V AMD64 crt0, pthreads, epoll, and ld-nova.so dynamic linker. */
+    extern int rust_posix_compat_selftest(void);
+    int posix_res = rust_posix_compat_selftest();
+    kernel_log("[ %s ] POSIX.1-2017 compatibility layer & novalibc ABI initialized (novalibc, nova-rt crt0, pthread, epoll, ld-nova.so)\n",
+               posix_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

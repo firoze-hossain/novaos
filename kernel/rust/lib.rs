@@ -99,6 +99,9 @@ pub mod pagecache;
 #[path = "../src/mm/swap.rs"]
 pub mod swap;
 
+#[path = "../src/compat/posix.rs"]
+pub mod posix_compat;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -270,4 +273,11 @@ pub extern "C" fn rust_pagecache_swap_selftest() -> i32 {
         return 100 + res_sw;
     }
     0
+}
+
+/// NovaOS 2.0 (Month 2 - Storage & Async I/O): Linux/POSIX Compatibility Layer (novalibc & POSIX ABI)
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_posix_compat_selftest() -> i32 {
+    posix_compat::run_posix_compat_selftest()
 }
