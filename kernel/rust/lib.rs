@@ -90,6 +90,9 @@ pub mod vfs;
 #[path = "../src/fs/novafs/mod.rs"]
 pub mod novafs;
 
+#[path = "../src/io/uring.rs"]
+pub mod uring;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -239,4 +242,11 @@ pub extern "C" fn rust_vfs_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_novafs_selftest() -> i32 {
     novafs::run_novafs_selftest()
+}
+
+/// NovaOS 2.0 (Month 2 - Storage & Async I/O): Asynchronous I/O Ring Engine (nova_uring)
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_uring_selftest() -> i32 {
+    uring::run_uring_selftest()
 }

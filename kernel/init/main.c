@@ -259,6 +259,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Pure Rust NovaFS initialized (B-tree CoW, extents, SHA-256 checksums, atomic snapshots, subvolumes)\n",
                novafs_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 2 Storage & Async I/O): Asynchronous I/O Ring Engine (nova_uring)
+     * (kernel/src/io/uring.rs). Lockless submission and completion ring buffers in shared memory,
+     * zero-syscall completion harvesting, and kernel SQPOLL worker engine. */
+    extern int rust_uring_selftest(void);
+    int uring_res = rust_uring_selftest();
+    kernel_log("[ %s ] Asynchronous I/O ring engine initialized (nova_uring, SQ/CQ lockless rings, zero-copy, SQPOLL)\n",
+               uring_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_
