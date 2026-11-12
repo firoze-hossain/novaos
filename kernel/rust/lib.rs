@@ -291,3 +291,10 @@ pub extern "C" fn rust_posix_compat_selftest() -> i32 {
 pub extern "C" fn rust_drm_kms_selftest() -> i32 {
     gpu::run_drm_kms_selftest()
 }
+
+/// NovaOS 2.0 (Month 4 - Graphics & DRM): VirtIO-GPU 3D Hardware Acceleration & Virgl Mesa Bridge
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_virtio_3d_selftest() -> i32 {
+    gpu::run_virtio_3d_selftest()
+}

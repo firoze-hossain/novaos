@@ -658,6 +658,12 @@ posix-test:
 drm-test:
 	@sh tools/tests/run_drm_kms_tests.sh
 
+# Month 4 - Graphics & DRM: VirtIO-GPU 3D Hardware Acceleration & Virgl Mesa Bridge
+# suite on the host: Virgl 3D command stream encoding (virgl_cmd), 3D context & resource lifecycle,
+# command submission (SUBMIT_3D), 3D transfers, GPU synchronization fences, and Mesa bridge IOCTLs.
+virgl3d-test:
+	@sh tools/tests/run_virtio_3d_tests.sh
+
 # Interface Track / Month 6 - First impressions: NovaOS Graphical Installer Wizard (installer-rs)
 # suite on the host: wizard state machine, disk selection, partition layout calculations,
 # user account credential synthesis (USERS.CFG/SYSTEM.CFG), installation pipeline, and BufferSurface32 rendering.
@@ -783,4 +789,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
