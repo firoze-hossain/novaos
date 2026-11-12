@@ -267,6 +267,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Asynchronous I/O ring engine initialized (nova_uring, SQ/CQ lockless rings, zero-copy, SQPOLL)\n",
                uring_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 2 Storage & Async I/O): Kernel Memory Page Cache & Anonymous Swap Subsystem
+     * (kernel/src/mm/pagecache.rs, swap.rs). Unified page cache with 2-list LRU (active/inactive),
+     * asynchronous dirty flush engine, and anonymous swap backed by in-RAM LZ4 zswap compression (85% watermark). */
+    extern int rust_pagecache_swap_selftest(void);
+    int pc_swap_res = rust_pagecache_swap_selftest();
+    kernel_log("[ %s ] Unified page cache & LZ4 zswap subsystem initialized (2-list LRU, dirty flush, LZ4 compress, 85%% watermark)\n",
+               pc_swap_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

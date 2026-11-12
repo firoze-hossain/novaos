@@ -93,6 +93,12 @@ pub mod novafs;
 #[path = "../src/io/uring.rs"]
 pub mod uring;
 
+#[path = "../src/mm/pagecache.rs"]
+pub mod pagecache;
+
+#[path = "../src/mm/swap.rs"]
+pub mod swap;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -249,4 +255,19 @@ pub extern "C" fn rust_novafs_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_uring_selftest() -> i32 {
     uring::run_uring_selftest()
+}
+
+/// NovaOS 2.0 (Month 2 - Storage & Async I/O): Kernel Memory Page Cache & Anonymous Swap Subsystem
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_pagecache_swap_selftest() -> i32 {
+    let res_pc = pagecache::run_pagecache_selftest();
+    if res_pc != 0 {
+        return res_pc;
+    }
+    let res_sw = swap::run_swap_selftest();
+    if res_sw != 0 {
+        return 100 + res_sw;
+    }
+    0
 }
