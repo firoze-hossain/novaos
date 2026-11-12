@@ -105,6 +105,9 @@ pub mod posix_compat;
 #[path = "../src/drivers/gpu/mod.rs"]
 pub mod gpu;
 
+#[path = "../src/syscall/mod.rs"]
+pub mod syscall;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -297,4 +300,23 @@ pub extern "C" fn rust_drm_kms_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_virtio_3d_selftest() -> i32 {
     gpu::run_virtio_3d_selftest()
+}
+
+/// NovaOS 2.0 (Month 4 - Graphics & DRM): Zero-Copy DMA-BUF Framebuffer Sharing & GPU Memory Allocator
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_dmabuf_selftest() -> i32 {
+    syscall::run_dmabuf_selftest()
+}
+
+/// NovaOS 2.0 (Month 4 - Graphics & DRM): C-ABI DMA-BUF Syscall Dispatch Hook
+#[no_mangle]
+pub extern "C" fn rust_sys_dmabuf_dispatch(
+    caller_pid: u32,
+    syscall_nr: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+) -> isize {
+    syscall::dispatch_drm_syscall(caller_pid, syscall_nr, arg1, arg2, arg3)
 }

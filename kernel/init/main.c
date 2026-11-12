@@ -299,6 +299,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] VirtIO-GPU 3D acceleration & Virgl Mesa bridge initialized (3D ctx, resources, transfer_to_host_3d, command buffers)\n",
                virtio3d_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 4 - Graphics & DRM): Zero-Copy DMA-BUF Framebuffer Sharing & GPU Memory Allocator
+     * (kernel/src/drivers/gpu/dmabuf.rs, kernel/src/syscall/drm.rs).
+     * SYS_DMABUF_ALLOC/EXPORT/IMPORT/MAP, contiguous & scatter-gather GPU page pool, client+compositor zero-copy sharing. */
+    extern int rust_dmabuf_selftest(void);
+    int dmabuf_res = rust_dmabuf_selftest();
+    kernel_log("[ %s ] Zero-copy DMA-BUF GPU memory allocator initialized (SYS_DMABUF_ALLOC/EXPORT/IMPORT/MAP, sg_table, zero-copy MMU)\n",
+               dmabuf_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

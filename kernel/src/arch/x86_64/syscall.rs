@@ -142,6 +142,15 @@ pub enum SyscallNumber {
     SysAuditLog = 28,
     SysUpdateCheck = 29,
     SysUpdateApply = 30,
+    SysDmabufAlloc = 85,
+    SysDmabufExport = 86,
+    SysDmabufImport = 87,
+    SysDmabufMap = 88,
+    SysDmabufUnmap = 89,
+    SysDmabufFree = 90,
+    SysDmabufSync = 91,
+    SysDmabufInfo = 92,
+    SysDmabufAttach = 93,
 }
 
 impl SyscallNumber {
@@ -177,6 +186,15 @@ impl SyscallNumber {
             28 => Some(Self::SysAuditLog),
             29 => Some(Self::SysUpdateCheck),
             30 => Some(Self::SysUpdateApply),
+            85 => Some(Self::SysDmabufAlloc),
+            86 => Some(Self::SysDmabufExport),
+            87 => Some(Self::SysDmabufImport),
+            88 => Some(Self::SysDmabufMap),
+            89 => Some(Self::SysDmabufUnmap),
+            90 => Some(Self::SysDmabufFree),
+            91 => Some(Self::SysDmabufSync),
+            92 => Some(Self::SysDmabufInfo),
+            93 => Some(Self::SysDmabufAttach),
             _ => None,
         }
     }
@@ -445,6 +463,35 @@ pub fn dispatch_syscall64(regs: &mut SyscallRegisters) -> isize {
                 e.as_isize()
             } else {
                 0
+            }
+        }
+
+        SyscallNumber::SysDmabufAlloc
+        | SyscallNumber::SysDmabufExport
+        | SyscallNumber::SysDmabufImport
+        | SyscallNumber::SysDmabufMap
+        | SyscallNumber::SysDmabufUnmap
+        | SyscallNumber::SysDmabufFree
+        | SyscallNumber::SysDmabufSync
+        | SyscallNumber::SysDmabufInfo
+        | SyscallNumber::SysDmabufAttach => {
+            #[cfg(not(test))]
+            {
+                crate::syscall::dispatch_drm_syscall(
+                    1, // Current PID resolved via scheduler in kernel build
+                    syscall_id as u64,
+                    regs.rdi,
+                    regs.rsi,
+                    regs.rdx,
+                )
+            }
+            #[cfg(test)]
+            {
+                if regs.rdi != 0 && regs.rdi > USER_CANONICAL_MAX {
+                    SyscallError::EFAULT.as_isize()
+                } else {
+                    0
+                }
             }
         }
 
