@@ -283,6 +283,14 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] POSIX.1-2017 compatibility layer & novalibc ABI initialized (novalibc, nova-rt crt0, pthread, epoll, ld-nova.so)\n",
                posix_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 4 - Graphics & DRM): DRM/KMS Kernel Mode-Setting & Display Plane Pipeline
+     * (kernel/src/drivers/gpu/drm.rs, kms.rs).
+     * Character device /dev/dri/card0, CRTC, Connector, Planes, VBLANK, PageFlip, and Hardware Cursor. */
+    extern int rust_drm_kms_selftest(void);
+    int drm_res = rust_drm_kms_selftest();
+    kernel_log("[ %s ] DRM/KMS display pipeline initialized (/dev/dri/card0, CRTC, Connector, Planes, VBLANK, PageFlip)\n",
+               drm_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

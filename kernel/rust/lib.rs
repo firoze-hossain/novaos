@@ -102,6 +102,9 @@ pub mod swap;
 #[path = "../src/compat/posix.rs"]
 pub mod posix_compat;
 
+#[path = "../src/drivers/gpu/mod.rs"]
+pub mod gpu;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -280,4 +283,11 @@ pub extern "C" fn rust_pagecache_swap_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_posix_compat_selftest() -> i32 {
     posix_compat::run_posix_compat_selftest()
+}
+
+/// NovaOS 2.0 (Month 4 - Graphics & DRM): DRM/KMS Kernel Mode-Setting & Display Plane Pipeline
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_drm_kms_selftest() -> i32 {
+    gpu::run_drm_kms_selftest()
 }

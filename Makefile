@@ -652,6 +652,12 @@ pagecache-test:
 posix-test:
 	@sh tools/tests/run_posix_compat_tests.sh
 
+# Month 4 - Graphics & DRM: DRM/KMS Kernel Mode-Setting & Display Plane Pipeline
+# suite on the host: KMS display mode validation, CRTC, Connector, Encoders, Planes (Primary, Cursor, Overlay),
+# tear-free atomic page flip on VBLANK, hardware cursor positioning, and /dev/dri/card0 character device IOCTLs.
+drm-test:
+	@sh tools/tests/run_drm_kms_tests.sh
+
 # Interface Track / Month 6 - First impressions: NovaOS Graphical Installer Wizard (installer-rs)
 # suite on the host: wizard state machine, disk selection, partition layout calculations,
 # user account credential synthesis (USERS.CFG/SYSTEM.CFG), installation pipeline, and BufferSurface32 rendering.
@@ -777,4 +783,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot

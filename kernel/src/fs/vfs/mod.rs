@@ -383,6 +383,12 @@ impl VfsManager {
         let dev_zero = self.alloc_inode(2, "zero", S_IFCHR | 0o666, 0, 0);
         let dev_klog = self.alloc_inode(2, "klog", S_IFCHR | 0o644, 0, 0);
         let dev_nvme = self.alloc_inode(2, "nvme0n1", S_IFBLK | 0o660, 0, 0);
+        let dev_dri = self.alloc_inode(2, "dri", S_IFDIR | 0o755, 0, 0);
+        let dev_card0 = if let Some(dri_ino) = dev_dri {
+            self.alloc_inode(dri_ino, "card0", S_IFCHR | 0o660, 0, 0)
+        } else {
+            None
+        };
 
         // Populate /proc nodes
         let proc_uptime = self.alloc_inode(3, "uptime", S_IFREG | 0o444, 0, 0);
@@ -411,6 +417,12 @@ impl VfsManager {
         }
         if let Some(ino) = dev_nvme {
             GLOBAL_DCACHE.insert(2, "nvme0n1", ino, DENTRY_POSITIVE);
+        }
+        if let Some(dri_ino) = dev_dri {
+            GLOBAL_DCACHE.insert(2, "dri", dri_ino, DENTRY_DIRECTORY);
+            if let Some(c0_ino) = dev_card0 {
+                GLOBAL_DCACHE.insert(dri_ino, "card0", c0_ino, DENTRY_POSITIVE);
+            }
         }
         if let Some(ino) = proc_uptime {
             GLOBAL_DCACHE.insert(3, "uptime", ino, DENTRY_POSITIVE);
