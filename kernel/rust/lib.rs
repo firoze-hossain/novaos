@@ -87,6 +87,9 @@ pub mod usb;
 #[path = "../src/fs/vfs/mod.rs"]
 pub mod vfs;
 
+#[path = "../src/fs/novafs/mod.rs"]
+pub mod novafs;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -229,4 +232,11 @@ pub extern "C" fn rust_xhci_hid_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn rust_vfs_selftest() -> i32 {
     vfs::run_vfs_selftest()
+}
+
+/// NovaOS 2.0 (Month 2 - Storage & Async I/O): Pure Rust Enterprise Filesystem (NovaFS)
+/// with B-Tree CoW, 64-bit extents, SHA-256 integrity, atomic snapshots & subvolumes.
+#[no_mangle]
+pub extern "C" fn rust_novafs_selftest() -> i32 {
+    novafs::run_novafs_selftest()
 }
