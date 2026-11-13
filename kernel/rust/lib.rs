@@ -105,6 +105,9 @@ pub mod posix_compat;
 #[path = "../src/drivers/gpu/mod.rs"]
 pub mod gpu;
 
+#[path = "../src/drivers/audio/mod.rs"]
+pub mod audio;
+
 #[path = "../src/syscall/mod.rs"]
 pub mod syscall;
 
@@ -319,4 +322,37 @@ pub extern "C" fn rust_sys_dmabuf_dispatch(
     arg3: u64,
 ) -> isize {
     syscall::dispatch_drm_syscall(caller_pid, syscall_nr, arg1, arg2, arg3)
+}
+
+/// NovaOS 2.0 (Month 5 - Desktop Experience): Intel High Definition Audio (HDA / Azalia) Subsystem
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_hda_selftest() -> i32 {
+    audio::run_hda_selftest()
+}
+
+/// NovaOS 2.0 (Month 5 - Desktop Experience): C-ABI Audio PCM Playback write handler
+#[no_mangle]
+pub extern "C" fn rust_hda_write_pcm(buf: *const u8, len: usize) -> isize {
+    if buf.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = unsafe { core::slice::from_raw_parts(buf, len) };
+    audio::pcm_playback_write(slice) as isize
+}
+
+/// NovaOS 2.0 (Month 5 - Desktop Experience): C-ABI Audio PCM Capture read handler
+#[no_mangle]
+pub extern "C" fn rust_hda_read_pcm(buf: *mut u8, len: usize) -> isize {
+    if buf.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    audio::pcm_capture_read(slice) as isize
+}
+
+/// NovaOS 2.0 (Month 5 - Desktop Experience): C-ABI Audio PCM Ioctl handler
+#[no_mangle]
+pub extern "C" fn rust_hda_ioctl(cmd: u32, arg: u64) -> isize {
+    audio::pcm_playback_ioctl(cmd, arg)
 }

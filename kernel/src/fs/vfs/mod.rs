@@ -389,6 +389,17 @@ impl VfsManager {
         } else {
             None
         };
+        let dev_snd = self.alloc_inode(2, "snd", S_IFDIR | 0o755, 0, 0);
+        let dev_pcm0p = if let Some(snd_ino) = dev_snd {
+            self.alloc_inode(snd_ino, "pcm0p", S_IFCHR | 0o660, 0, 0)
+        } else {
+            None
+        };
+        let dev_pcm0c = if let Some(snd_ino) = dev_snd {
+            self.alloc_inode(snd_ino, "pcm0c", S_IFCHR | 0o660, 0, 0)
+        } else {
+            None
+        };
 
         // Populate /proc nodes
         let proc_uptime = self.alloc_inode(3, "uptime", S_IFREG | 0o444, 0, 0);
@@ -422,6 +433,15 @@ impl VfsManager {
             GLOBAL_DCACHE.insert(2, "dri", dri_ino, DENTRY_DIRECTORY);
             if let Some(c0_ino) = dev_card0 {
                 GLOBAL_DCACHE.insert(dri_ino, "card0", c0_ino, DENTRY_POSITIVE);
+            }
+        }
+        if let Some(snd_ino) = dev_snd {
+            GLOBAL_DCACHE.insert(2, "snd", snd_ino, DENTRY_DIRECTORY);
+            if let Some(p0_ino) = dev_pcm0p {
+                GLOBAL_DCACHE.insert(snd_ino, "pcm0p", p0_ino, DENTRY_POSITIVE);
+            }
+            if let Some(c0_ino) = dev_pcm0c {
+                GLOBAL_DCACHE.insert(snd_ino, "pcm0c", c0_ino, DENTRY_POSITIVE);
             }
         }
         if let Some(ino) = proc_uptime {

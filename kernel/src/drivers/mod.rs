@@ -3,3 +3,4 @@
 pub mod storage;
 pub mod usb;
 pub mod gpu;
+pub mod audio;

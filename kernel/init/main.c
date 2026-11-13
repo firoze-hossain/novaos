@@ -307,6 +307,15 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Zero-copy DMA-BUF GPU memory allocator initialized (SYS_DMABUF_ALLOC/EXPORT/IMPORT/MAP, sg_table, zero-copy MMU)\n",
                dmabuf_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 5 - Desktop Experience): Intel High Definition Audio (HDA / Azalia) Subsystem
+     * (kernel/src/drivers/audio/hda.rs, kernel/src/drivers/audio/codec.rs).
+     * 24-bit 96kHz multi-channel PCM playback/recording, CORB/RIRB DMA engine, BDL cyclic rings,
+     * per-stream volume controls, and /dev/snd/pcm0p /dev/snd/pcm0c for novasound daemon. */
+    extern int rust_hda_selftest(void);
+    int hda_res = rust_hda_selftest();
+    kernel_log("[ %s ] Intel High Definition Audio (HDA / Azalia) controller initialized (24-bit 96kHz, CORB/RIRB, BDL cyclic DMA, /dev/snd/pcm0p)\n",
+               hda_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_
