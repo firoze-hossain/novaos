@@ -677,6 +677,13 @@ dmabuf-test:
 compositor-test:
 	@sh tools/tests/run_compositor_tests.sh
 
+# Month 4 - Compositor & UI: Modern UI Toolkit & Scene Graph (nova-ui in Pure Rust)
+# suite on the host: flexbox layout engine, vector shape rasterization (SDF rounded rects, Bezier paths),
+# hardware-accelerated shaders (Gaussian blur, box shadows, backdrop filters), retained-mode scene graph,
+# damage region tracking, responsive event routing, and declarative widgets with reactive state bindings.
+nova-ui-test:
+	@sh tools/tests/run_nova_ui_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -808,4 +815,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
