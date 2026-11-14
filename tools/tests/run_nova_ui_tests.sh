@@ -15,9 +15,9 @@ set -e
 cd "$(dirname "$0")/../.."
 
 if command -v cargo >/dev/null 2>&1; then
-    echo "--- userland/libs/nova-ui host tests (Modern UI Toolkit & Scene Graph) ---"
+    echo "--- userland/libs/nova-ui host tests (Modern UI Toolkit, Scene Graph & Fluent/macOS Theme) ---"
     (cd userland/libs/nova-ui && cargo test --quiet)
-    echo "[PASS] All 19 Modern UI Toolkit & Scene Graph (nova-ui) tests passed successfully."
+    echo "[PASS] All 25 Modern UI Toolkit, Scene Graph & Fluent/macOS Theme (nova-ui) tests passed successfully."
 else
     echo "nova-ui-test: cargo not found - skipping the suite"
 fi

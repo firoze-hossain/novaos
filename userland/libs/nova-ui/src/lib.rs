@@ -28,6 +28,7 @@ pub mod scene;
 pub mod event;
 pub mod reactive;
 pub mod widget;
+pub mod theme;
 
 pub mod prelude {
     pub use crate::layout::{
@@ -46,6 +47,11 @@ pub mod prelude {
     pub use crate::widget::{
         ButtonState, ButtonWidget, ListWidget, ModalWidget, SliderWidget, TableWidget,
         TabsWidget, TextInputWidget, PRIMARY_ACCENT,
+    };
+    pub use crate::theme::{
+        contrast_ratio, get_elevation_tiers, meets_wcag_aa, relative_luminance,
+        render_acrylic_panel, render_elevated_card, AccentPalette, ColorTokens, CornerTokens,
+        ElevationShadow, ElevationTier, ThemeManager, ThemeMode,
     };
 }
 
@@ -210,6 +216,18 @@ pub fn run_nova_ui_selftest() -> bool {
     if input.text != "A" || !modal.is_open {
         return false;
     }
+
+    // 8. Fluent Acrylic & macOS Material Design System
+    let mut theme = ThemeManager::new(ThemeMode::Dark, AccentPalette::FluentBlue);
+    theme.subscribe(card);
+    if !meets_wcag_aa(theme.tokens.text_primary, theme.tokens.card_background) {
+        return false;
+    }
+    theme.toggle_theme(&mut sg);
+    if theme.mode != ThemeMode::Light || !sg.get_node(card).unwrap().dirty_paint {
+        return false;
+    }
+    render_acrylic_panel(&mut surface, Rect::new(5, 5, 50, 50), theme.corners.medium, &theme.tokens);
 
     true
 }
