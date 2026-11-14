@@ -1,7 +1,7 @@
 //! userland/desktop/nova-shell/src/lib.rs
 //!
 //! NovaOS Desktop Shell Library.
-//! Exposes top menu bar, status indicators, centered taskbar, and application dock.
+//! Exposes top menu bar, status indicators, centered taskbar, application dock, and action center.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -13,10 +13,12 @@ use alloc::vec;
 pub mod menubar;
 pub mod dock;
 pub mod taskbar;
+pub mod action_center;
 
 pub use menubar::*;
 pub use dock::*;
 pub use taskbar::*;
+pub use action_center::*;
 
 use nova_ui::prelude::*;
 
@@ -104,6 +106,30 @@ pub fn run_nova_shell_selftest() -> bool {
     // Taskbar BufferSurface rendering
     let mut tb_surface = BufferSurface::new(1024, 48);
     taskbar.render(&mut tb_surface);
+
+    // 3. Action Center & Notification Flyout Verification
+    let mut ac = action_center::ActionCenterDrawer::new(
+        1024,
+        768,
+        ThemeMode::Dark,
+        AccentPalette::FluentBlue,
+    );
+    ac.open();
+    let notif_id = ac.post_notification(
+        "calendar",
+        "Calendar",
+        "📅",
+        "Sprint Standup",
+        "Starting in 10 minutes",
+        action_center::NotificationUrgency::Normal,
+        vec![action_center::NotificationAction::new("join", "Join")],
+    );
+    if ac.notifications.is_empty() || ac.notifications[0].id != notif_id {
+        return false;
+    }
+    ac.tick_animations(1.0);
+    let mut ac_surface = BufferSurface::new(1024, 768);
+    ac.render(&mut ac_surface);
 
     true
 }

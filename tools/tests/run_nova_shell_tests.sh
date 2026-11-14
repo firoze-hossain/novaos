@@ -15,6 +15,14 @@
 #    5. Launch bounce physics: vertical impulse, gravity, and elastic restitution simulation.
 #    6. Live window thumbnail previews: miniature surface previews from compositor with close (✕) and minimize (—) actions.
 #    7. Start Launcher button and Quick Search pill with vector icon rasterization.
+# C. Windows Action Center & Notification Flyout:
+#    1. Slide-in right drawer with acrylic blur and Level 4 elevation shadows.
+#    2. Rich push notifications with actionable buttons (reply, dismiss, open).
+#    3. Transient banner toasts in bottom-right corner with auto-dismiss countdown.
+#    4. Quick Settings grid: Wi-Fi, Bluetooth, Dark Mode, Night Light, DND / Focus Assist, Airplane Mode.
+#    5. Dual sliders for Display Brightness and Audio Volume.
+#    6. Configurable Quiet Hours / DND toast suppression.
+#    7. Persistent notification history archive with "Clear all" clearing.
 #
 # No QEMU needed; executes in under two seconds.
 #
@@ -23,10 +31,10 @@ set -e
 cd "$(dirname "$0")/../.."
 
 if command -v cargo >/dev/null 2>&1; then
-    echo "--- userland/desktop/nova-shell host tests (Top Menu Bar, Centered Taskbar & Dock) ---"
+    echo "--- userland/desktop/nova-shell host tests (Top Menu Bar, Taskbar & Action Center) ---"
     (cd userland/desktop/nova-shell && cargo test --quiet)
     (cd userland/desktop/nova-shell && cargo run --quiet -- --selftest)
-    echo "[PASS] All 12 NovaOS Desktop Shell (nova-shell) tests passed successfully."
+    echo "[PASS] All 17 NovaOS Desktop Shell (nova-shell) tests passed successfully."
 else
     echo "nova-shell-test: cargo not found - skipping the suite"
 fi
