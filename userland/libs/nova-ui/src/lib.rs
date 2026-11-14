@@ -29,6 +29,7 @@ pub mod event;
 pub mod reactive;
 pub mod widget;
 pub mod theme;
+pub mod font;
 
 pub mod prelude {
     pub use crate::layout::{
@@ -52,6 +53,10 @@ pub mod prelude {
         contrast_ratio, get_elevation_tiers, meets_wcag_aa, relative_luminance,
         render_acrylic_panel, render_elevated_card, AccentPalette, ColorTokens, CornerTokens,
         ElevationShadow, ElevationTier, ThemeManager, ThemeMode,
+    };
+    pub use crate::font::{
+        create_test_ttf_font, CachedGlyph, FontEngine, FontMetrics, GlyphAtlas, GlyphOutline,
+        OutlinePoint, ParsedFont, SubpixelCoverage,
     };
 }
 
@@ -228,6 +233,17 @@ pub fn run_nova_ui_selftest() -> bool {
         return false;
     }
     render_acrylic_panel(&mut surface, Rect::new(5, 5, 50, 50), theme.corners.medium, &theme.tokens);
+
+    // 9. TrueType/OpenType Vector Font Engine & Subpixel Antialiasing
+    let mut font_engine = FontEngine::new();
+    let (measured_w, measured_h) = font_engine.measure_text("AV -> ≠ Ω", 14.0, 1.0);
+    if measured_w <= 0.0 || measured_h <= 0.0 {
+        return false;
+    }
+    font_engine.render_text(&mut surface, "A->B", Point::new(10, 10), 16.0, 1.0, WHITE);
+    if font_engine.atlas.entries.is_empty() {
+        return false;
+    }
 
     true
 }
