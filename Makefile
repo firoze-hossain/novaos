@@ -670,6 +670,13 @@ virgl3d-test:
 dmabuf-test:
 	@sh tools/tests/run_dmabuf_tests.sh
 
+# Month 4 - Compositor & UI: Hardware-Accelerated Wayland-Style Display Server (nova-compositor)
+# suite on the host: double-buffered surface state machine, application window isolation, anti-keylogger
+# protection, VBLANK-synchronized atomic page flips (60 FPS), zero-copy DMA-BUF direct scanout,
+# hardware cursor plane, Windows 11 snap layouts, and HiDPI display scaling.
+compositor-test:
+	@sh tools/tests/run_compositor_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -801,4 +808,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot

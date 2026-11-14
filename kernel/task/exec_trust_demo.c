@@ -583,6 +583,20 @@ void exec_trust_demo_task(void) {
                         "account creation, network setup, and preferences all behaved correctly.\n"
                       : "[sandbox] FAIL: FIRSTRUN.ELF --selftest reported at least "
                         "one failing case.\n");
+
+        /* Month 4 - Compositor & UI: COMPOSITOR.ELF --selftest.
+         * Proves Wayland display server, double-buffered surface state machine,
+         * DMA-BUF zero-copy attachment, anti-keylogger window security isolation,
+         * VBLANK-synchronized atomic page flips, hardware cursor plane, Windows 11 snap layouts,
+         * and HiDPI display scaling from ring 3. */
+        static const char* const compositor_all[] = {"COMPOSITOR.ELF", "--selftest"};
+        int pid_comp = sys_exec_trusted("COMPOSITOR.ELF", (const char**)compositor_all, 2);
+        int code_comp = (pid_comp >= 0) ? sys_wait(pid_comp) : -1;
+        sys_write(pid_comp >= 0 && code_comp == 0
+                      ? "[sandbox] PASS: COMPOSITOR.ELF --selftest - Wayland display server, "
+                        "DMA-BUF zero-copy, and window isolation all behaved correctly.\n"
+                      : "[sandbox] FAIL: COMPOSITOR.ELF --selftest reported at least "
+                        "one failing case.\n");
     }
 
     /* Phase 87: mandatory access control. MACTEST.ELF is the unconfined root

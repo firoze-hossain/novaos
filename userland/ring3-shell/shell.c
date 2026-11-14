@@ -921,6 +921,16 @@ static void cmd_pkg(int argc, char* argv[]) {
     }
 }
 
+static bool ends_with_elf(const char* s) {
+    if (!s) return false;
+    int len = strlen(s);
+    if (len < 4) return false;
+    return (s[len - 4] == '.' &&
+            (s[len - 3] == 'E' || s[len - 3] == 'e') &&
+            (s[len - 2] == 'L' || s[len - 2] == 'l') &&
+            (s[len - 1] == 'F' || s[len - 1] == 'f'));
+}
+
 int main(int argc, char** argv, char** envp) {
     (void)argc;
     (void)argv;
@@ -1020,8 +1030,21 @@ int main(int argc, char** argv, char** envp) {
             cmd_shutdown();
         } else if (strcmp(tokens[0], "pkg") == 0) {
             cmd_pkg(argc2, tokens);
+        } else if (strcmp(tokens[0], "wm") == 0) {
+            char* run_args[] = {"run", "WM.ELF"};
+            cmd_run(2, run_args);
+        } else if (strcmp(tokens[0], "compositor") == 0 || strcmp(tokens[0], "wayland") == 0) {
+            char* run_args[] = {"run", "COMPOSITOR.ELF"};
+            cmd_run(2, run_args);
         } else if (strcmp(tokens[0], "gui") == 0) {
             cmd_gui();
+        } else if (ends_with_elf(tokens[0])) {
+            char* run_args[MAX_TOKENS + 1];
+            run_args[0] = "run";
+            for (int i = 0; i < argc2; i++) {
+                run_args[i + 1] = tokens[i];
+            }
+            cmd_run(argc2 + 1, run_args);
         } else if (strcmp(tokens[0], "ping") == 0) {
             cmd_ping(argc2, tokens);
         } else if (strcmp(tokens[0], "nslookup") == 0) {

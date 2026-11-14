@@ -4,6 +4,7 @@
 
 # ---- Build artifacts ----
 build/
+target/
 iso/
 *.o
 *.elf

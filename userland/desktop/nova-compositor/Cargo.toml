@@ -1,0 +1,16 @@
+[package]
+name = "nova-compositor"
+version = "0.1.0"
+edition = "2021"
+authors = ["NovaOS Team"]
+description = "Hardware-Accelerated Wayland-Style Display Server for NovaOS"
+
+[dependencies]
+
+[lib]
+name = "nova_compositor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nova-compositor"
+path = "src/main.rs"

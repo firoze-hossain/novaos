@@ -639,6 +639,11 @@ ASSERTIONS: list[Assertion] = [
     Assertion("firstrun_cfg_generation_passed",
               r"firstrun-selftest. PASS: configuration file generation \(SYSTEM\.CFG, USERS\.CFG, FIREWALL\.CFG, ACCESS\.CFG\)",
               "Month 6 First impressions: userland/firstrun-rs/firstrun.rs - complete system configuration files generation"),
+    Assertion("compositor_selftest_passed",
+              r"sandbox. PASS: COMPOSITOR\.ELF --selftest - Wayland display server, "
+              r"DMA-BUF zero-copy, and window isolation all behaved correctly",
+              "Month 4 Compositor & UI: userland/desktop/nova-compositor - "
+              "Hardware-accelerated Wayland display server, zero-copy DMA-BUF, and window isolation"),
     Assertion("novainit_selftest_passed",
               r"sandbox. PASS: NOVAINIT\.ELF --selftest - real dependency "
               r"ordering, restart-always, and restart-on-crash \(both the "
@@ -1284,6 +1289,7 @@ SERVER_EXCLUDE_ASSERTIONS = {
     "firstrun_identity_passed",
     "firstrun_account_synthesis_passed",
     "firstrun_cfg_generation_passed",
+    "compositor_selftest_passed",
 }
 
 SERVER_ASSERTIONS = [
