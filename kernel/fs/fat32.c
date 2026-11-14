@@ -382,6 +382,13 @@ static bool walk_root(const uint8_t want_name[11],
                     found_entry = entry;
                     return true;
                 }
+                /* If want_name came from a >8 char name (e.g. COMPOSITOR.ELF -> want_name "COMPOSIT   ELF"
+                 * vs entry.name "COMPOS~1  ELF"), also match the numeric-tail short name prefix and extension. */
+                if (memcmp(entry.name, want_name, 6) == 0 && entry.name[6] == '~' &&
+                    memcmp(&entry.name[8], &want_name[8], 3) == 0) {
+                    found_entry = entry;
+                    return true;
+                }
             } else if (callback != NULL) {
                 char display_name[13];
                 from_fat_8_3(entry.name, display_name);
@@ -557,7 +564,9 @@ static bool find_existing_entry_location(const uint8_t want_name[11],
                 (entry.attr & FAT_ATTR_VOLUME_ID)) {
                 continue;
             }
-            if (memcmp(entry.name, want_name, 11) == 0) {
+            if (memcmp(entry.name, want_name, 11) == 0 ||
+                (memcmp(entry.name, want_name, 6) == 0 && entry.name[6] == '~' &&
+                 memcmp(&entry.name[8], &want_name[8], 3) == 0)) {
                 *out_cluster = cluster;
                 *out_offset = offset;
                 return true;

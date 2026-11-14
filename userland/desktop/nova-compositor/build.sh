@@ -56,4 +56,5 @@ ld -m elf_i386 -Ttext=0x08048000 --entry=_start -static \
     "$LIBRUST/libcore.rlib" "$LIBRUST/libcompiler_builtins.rlib"
 
 cp compositor.elf "$REPO_ROOT/tools/fixtures/COMPOSITOR.ELF"
-echo "✅ Built tools/fixtures/COMPOSITOR.ELF (Wayland Display Server)"
+cp compositor.elf "$REPO_ROOT/tools/fixtures/COMPOSIT.ELF"
+echo "✅ Built tools/fixtures/COMPOSITOR.ELF and COMPOSIT.ELF (Wayland Display Server)"

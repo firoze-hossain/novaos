@@ -591,6 +591,9 @@ void exec_trust_demo_task(void) {
          * and HiDPI display scaling from ring 3. */
         static const char* const compositor_all[] = {"COMPOSITOR.ELF", "--selftest"};
         int pid_comp = sys_exec_trusted("COMPOSITOR.ELF", (const char**)compositor_all, 2);
+        if (pid_comp < 0) {
+            pid_comp = sys_exec_trusted("COMPOSIT.ELF", (const char**)compositor_all, 2);
+        }
         int code_comp = (pid_comp >= 0) ? sys_wait(pid_comp) : -1;
         sys_write(pid_comp >= 0 && code_comp == 0
                       ? "[sandbox] PASS: COMPOSITOR.ELF --selftest - Wayland display server, "

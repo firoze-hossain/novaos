@@ -121,6 +121,20 @@ impl CompositorServer {
 // Entry Point & Self-Test Verification Mode
 // -----------------------------------------------------------------------------
 
+fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    for (i, &b) in prefix.iter().enumerate() {
+        unsafe {
+            if *ptr.add(i) != b {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 #[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
@@ -129,11 +143,8 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
     if argc > 1 && !argv.is_null() {
         unsafe {
             let arg1 = *argv.offset(1);
-            if !arg1.is_null() {
-                let bytes = core::slice::from_raw_parts(arg1, 10);
-                if bytes.starts_with(b"--selftest") {
-                    is_selftest = true;
-                }
+            if starts_with_cstr(arg1, b"--selftest") {
+                is_selftest = true;
             }
         }
     }
