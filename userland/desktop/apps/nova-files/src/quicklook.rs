@@ -113,7 +113,7 @@ impl QuickLookOverlay {
             FileKind::Audio => {
                 self.render_audio_preview(surface, entry, body_rect, is_dark);
             }
-            FileKind::PackageArchive => {
+            FileKind::PackageArchive | FileKind::ApplicationBundle => {
                 self.render_archive_preview(surface, entry, body_rect, is_dark);
             }
             _ => {

@@ -15,6 +15,7 @@ use crate::tags::FileTag;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileKind {
     Directory,
+    ApplicationBundle,
     TextDocument,
     Code,
     Image,
@@ -29,14 +30,16 @@ pub enum FileKind {
 impl FileKind {
     /// Classifies a file given its name and directory flag.
     pub fn classify(name: &str, is_dir: bool, is_symlink: bool) -> Self {
+        let name_lower = name.to_ascii_lowercase();
+        if name_lower.ends_with(".app") {
+            return Self::ApplicationBundle;
+        }
         if is_dir {
             return Self::Directory;
         }
         if is_symlink {
             return Self::Symlink;
         }
-
-        let name_lower = name.to_ascii_lowercase();
         if name_lower.ends_with(".rs")
             || name_lower.ends_with(".c")
             || name_lower.ends_with(".h")
@@ -100,6 +103,7 @@ impl FileKind {
     pub const fn description(&self) -> &'static str {
         match self {
             Self::Directory => "Folder",
+            Self::ApplicationBundle => "Application Bundle",
             Self::TextDocument => "Text Document",
             Self::Code => "Source Code",
             Self::Image => "Raster Image",
@@ -116,6 +120,7 @@ impl FileKind {
     pub const fn icon_symbol(&self) -> &'static str {
         match self {
             Self::Directory => "📁",
+            Self::ApplicationBundle => "📦",
             Self::TextDocument => "📄",
             Self::Code => "💻",
             Self::Image => "🖼️",

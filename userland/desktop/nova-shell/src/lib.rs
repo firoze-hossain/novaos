@@ -14,11 +14,13 @@ pub mod menubar;
 pub mod dock;
 pub mod taskbar;
 pub mod action_center;
+pub mod launcher;
 
 pub use menubar::*;
 pub use dock::*;
 pub use taskbar::*;
 pub use action_center::*;
+pub use launcher::*;
 
 use nova_ui::prelude::*;
 
@@ -130,6 +132,64 @@ pub fn run_nova_shell_selftest() -> bool {
     ac.tick_animations(1.0);
     let mut ac_surface = BufferSurface::new(1024, 768);
     ac.render(&mut ac_surface);
+
+    // 4. Application Launcher & .app Bundle Architecture Verification
+    let mut launcher = launcher::AppLauncher::new(
+        1024,
+        768,
+        ThemeMode::Dark,
+        AccentPalette::FluentBlue,
+    );
+    launcher.open();
+    if !launcher.is_visible || launcher.items.is_empty() {
+        return false;
+    }
+
+    // Verify stock bundle discovery
+    if launcher.scanner.find_by_id("org.novaos.calculator").is_none() {
+        return false;
+    }
+
+    // Search query filtering
+    launcher.set_search_query("Terminal");
+    if launcher.items.len() != 1 || launcher.items[0].bundle_id != "org.novaos.terminal" {
+        return false;
+    }
+    launcher.set_search_query("");
+
+    // Category filtering
+    launcher.select_category("Development");
+    if launcher.items.is_empty() {
+        return false;
+    }
+    launcher.select_category("All");
+
+    // Drag-and-drop bundle installation
+    let drop_res = launcher.handle_bundle_drop("/tmp/MusicPlayer.app");
+    if drop_res.is_err() {
+        return false;
+    }
+    if launcher.scanner.find_by_id("org.user.musicplayer").is_none() {
+        return false;
+    }
+
+    // Launch app sandbox profile generation
+    let profile = match launcher.launch_app("org.novaos.calculator") {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    if !profile.ld_library_path.contains("Calculator.app/lib") {
+        return false;
+    }
+
+    // Clean uninstallation
+    if launcher.uninstall_app("org.user.musicplayer", true).is_err() {
+        return false;
+    }
+
+    // BufferSurface rendering
+    let mut launcher_surface = BufferSurface::new(1024, 768);
+    launcher.render(&mut launcher_surface);
 
     true
 }

@@ -335,6 +335,7 @@ impl ViewEngine {
             let icon_rect = Rect::new(slot.bounds.x + (slot.bounds.width - 40) / 2, slot.bounds.y + 10, 40, 40);
             let icon_color = match slot.entry.kind {
                 FileKind::Directory => Color::rgba(255, 200, 70, 255),
+                FileKind::ApplicationBundle => Color::rgba(0, 122, 255, 255),
                 FileKind::TextDocument => Color::rgba(100, 180, 255, 255),
                 FileKind::Code => Color::rgba(70, 210, 120, 255),
                 FileKind::Image => Color::rgba(230, 120, 230, 255),
