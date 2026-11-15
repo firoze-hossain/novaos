@@ -354,7 +354,7 @@ $(ISO_FILE): $(KERNEL_BIN)
 # and PROGRESS.md for why). Requires `parted`, `mtools` (mformat/
 # mcopy), and `e2fsprogs` (mkfs.ext2, debugfs) - installed by `make
 # setup` on every supported OS.
-$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF $(DISK_FIXTURES_DIR)/ext2root/EXT2TEST.TXT tools/build-disk-image.sh
+$(DISK_IMG): $(DISK_FIXTURES_DIR)/HELLO.TXT $(DISK_FIXTURES_DIR)/EDITOR.PKG $(DISK_FIXTURES_DIR)/GAME.PKG $(DISK_FIXTURES_DIR)/SYSTEM.CFG $(DISK_FIXTURES_DIR)/HELLO.ELF $(DISK_FIXTURES_DIR)/HELLOC.ELF $(DISK_FIXTURES_DIR)/COMPOSITOR.ELF $(DISK_FIXTURES_DIR)/ext2root/EXT2TEST.TXT tools/build-disk-image.sh
 	./tools/build-disk-image.sh $(DISK_IMG) desktop
 	@echo "✅ Partitioned Desktop test disk image created: $(DISK_IMG)"
 

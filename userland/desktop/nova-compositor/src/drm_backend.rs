@@ -48,8 +48,8 @@ pub struct DrmModeInfo {
     pub name: [u8; 32],
 }
 
-impl Default for DrmModeInfo {
-    fn default() -> Self {
+impl DrmModeInfo {
+    pub const fn empty() -> Self {
         Self {
             width: DEFAULT_DISPLAY_WIDTH,
             height: DEFAULT_DISPLAY_HEIGHT,
@@ -57,6 +57,12 @@ impl Default for DrmModeInfo {
             pixel_clock_khz: 65000,
             name: *b"1024x768@60Hz\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
         }
+    }
+}
+
+impl Default for DrmModeInfo {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -77,8 +83,8 @@ pub struct DrmFramebuffer {
     pub dma_fd: i32,
 }
 
-impl Default for DrmFramebuffer {
-    fn default() -> Self {
+impl DrmFramebuffer {
+    pub const fn empty() -> Self {
         Self {
             fb_id: 0,
             gem_handle: 0,
@@ -90,6 +96,12 @@ impl Default for DrmFramebuffer {
             is_dmabuf: false,
             dma_fd: -1,
         }
+    }
+}
+
+impl Default for DrmFramebuffer {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -123,6 +135,26 @@ pub struct DrmBackend {
 }
 
 impl DrmBackend {
+    pub const fn empty() -> Self {
+        Self {
+            mode: DrmModeInfo::empty(),
+            crtc_id: 0,
+            connector_id: 0,
+            front_fb: DrmFramebuffer::empty(),
+            back_fb: DrmFramebuffer::empty(),
+            active_scanout_fb_id: 0,
+            is_page_flip_pending: false,
+            cursor_fb: DrmFramebuffer::empty(),
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: false,
+            frame_counter: 0,
+            vblank_counter: 0,
+            last_vblank_timestamp_us: 0,
+            direct_scanout_active: false,
+            total_zero_copy_flips: 0,
+        }
+    }
     pub fn new() -> Self {
         let mode = DrmModeInfo::default();
         let front = DrmFramebuffer {

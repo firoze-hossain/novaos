@@ -45,7 +45,9 @@
  * a coincidence). Not a guess: this exact fix was verified to
  * resolve that exact, reproduced crash - see this phase's own
  * PROGRESS.md entry for the full, honest investigation. */
-#define USER_STACK_SIZE   (16 * 1024)
+/* Month 4 & 5 Compositor / UI Track: increased from 16KB to 32KB
+ * to provide comfortable headroom for modern userland Rust applications. */
+#define USER_STACK_SIZE   (32 * 1024)
 
 /* Where a user task's private stack is mapped in its OWN address
  * space. Every user process uses the same virtual address for it -

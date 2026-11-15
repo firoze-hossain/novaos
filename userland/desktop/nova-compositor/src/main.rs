@@ -48,18 +48,35 @@ pub struct CompositorServer {
 }
 
 impl CompositorServer {
-    pub fn new() -> Self {
+    pub const fn empty() -> Self {
         let ws = WorkspaceArea::new(1024, 768, 24, 36);
         Self {
-            drm: DrmBackend::new(),
+            drm: DrmBackend::empty(),
             security: SecurityManager::new(),
             snap: SnapEngine::new(ws),
             scale: DisplayScale::Scale100,
             surfaces: [const { None }; MAX_SURFACES],
             surface_count: 0,
             active_surface_idx: None,
-            running: true,
+            running: false,
         }
+    }
+
+    pub fn init(&mut self) {
+        let ws = WorkspaceArea::new(1024, 768, 24, 36);
+        self.drm = DrmBackend::new();
+        self.security = SecurityManager::new();
+        self.snap = SnapEngine::new(ws);
+        self.scale = DisplayScale::Scale100;
+        self.surface_count = 0;
+        self.active_surface_idx = None;
+        self.running = true;
+    }
+
+    pub fn new() -> Self {
+        let mut server = Self::empty();
+        server.init();
+        server
     }
 
     pub fn create_surface(&mut self, surface_id: SurfaceId, client_id: ClientId) -> Result<(), &'static str> {
@@ -117,6 +134,8 @@ impl CompositorServer {
     }
 }
 
+pub static mut GLOBAL_SERVER: CompositorServer = CompositorServer::empty();
+
 // -----------------------------------------------------------------------------
 // Entry Point & Self-Test Verification Mode
 // -----------------------------------------------------------------------------
@@ -127,7 +146,8 @@ fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
     }
     for (i, &b) in prefix.iter().enumerate() {
         unsafe {
-            if *ptr.add(i) != b {
+            let ch = *ptr.add(i);
+            if ch == 0 || ch != b {
                 return false;
             }
         }
@@ -165,27 +185,31 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8) -> i32 {
         return res;
     }
 
+    run_daemon()
+}
+
+fn run_daemon() -> i32 {
     // Interactive daemon mode
     unsafe {
         let banner = b"NovaOS Wayland Display Server (nova-compositor v2.0.0)\n\0";
         ffi::sys_write(banner.as_ptr());
         ffi::sys_fb_acquire();
-    }
 
-    let mut server = CompositorServer::new();
-    let mut time_us: u64 = 0;
+        #[allow(static_mut_refs)]
+        let server = &mut GLOBAL_SERVER;
+        server.init();
+        let mut time_us: u64 = 0;
 
-    // Active frame loop (60 FPS pacing)
-    while server.running {
-        time_us += 16666; // 16.66ms per frame = 60.0 FPS
-        server.composite_frame(time_us);
-        unsafe { ffi::sys_yield() };
-        if time_us > 1_000_000 {
-            break; // Demo run cycle
+        // Active frame loop (60 FPS pacing)
+        while server.running {
+            time_us += 16666; // 16.66ms per frame = 60.0 FPS
+            server.composite_frame(time_us);
+            ffi::sys_yield();
+            if time_us > 1_000_000 {
+                break; // Demo run cycle
+            }
         }
-    }
 
-    unsafe {
         ffi::sys_fb_release();
     }
 

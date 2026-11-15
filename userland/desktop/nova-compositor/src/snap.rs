@@ -433,7 +433,7 @@ pub struct SnapEngine {
 }
 
 impl SnapEngine {
-    pub fn new(workspace: WorkspaceArea) -> Self {
+    pub const fn new(workspace: WorkspaceArea) -> Self {
         Self {
             workspace,
             active_layout: SnapLayout::None,
