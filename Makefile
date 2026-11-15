@@ -703,6 +703,13 @@ nova-search-test:
 nova-files-test:
 	@sh tools/tests/run_nova_files_tests.sh
 
+# Month 5 - Desktop Experience: Pro Developer Terminal (nova-term - Ubuntu/Modern Terminal Parity)
+# suite on the host: 24-bit TrueColor, ANSI/VT100 escape parser, multiple tabs, split horizontal/vertical panes,
+# customizable themes (Dracula, Nord, Solarized, Monokai, OneDark, NovaDark), clipboard integration,
+# URL click-to-open, GPU glyph cache, PTY session & SIGWINCH resize signaling.
+nova-term-test:
+	@sh tools/tests/run_nova_term_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -834,4 +841,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
