@@ -696,6 +696,13 @@ nova-shell-test:
 nova-search-test:
 	@sh tools/tests/run_nova_search_tests.sh
 
+# Month 5 - Desktop Experience: Next-Gen File Explorer (nova-files - Finder + File Explorer Synthesized)
+# suite on the host: 4 view modes (Icons, List, Columns, Details), path breadcrumbs,
+# sidebar favorites/drives/tags, Spacebar QuickLook floating preview, NovaFS snapshot version history,
+# clipboard operations, drag-and-drop, tabbed browsing, and properties inspector.
+nova-files-test:
+	@sh tools/tests/run_nova_files_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
