@@ -730,6 +730,14 @@ nova-settings-test:
 nova-store-test:
 	@sh tools/tests/run_nova_store_tests.sh
 
+# Month 5 - Desktop Experience: Code & Text Editor (nova-edit - Piece-Table + Multi-Language Syntax)
+# suite on the host: piece-table text buffer for O(1) mutations on multi-megabyte files,
+# multi-language syntax highlighting (Rust, C, Python, Markdown, Shell, JSON), multi-cursor editing,
+# code folding with block scopes, bracket matching & auto-closing delimiters, find and replace,
+# project directory sidebar, multi-file tabs with auto-save, and dark acrylic BufferSurface rendering.
+nova-edit-test:
+	@sh tools/tests/run_nova_edit_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -861,4 +869,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
