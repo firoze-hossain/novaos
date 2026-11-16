@@ -796,6 +796,12 @@ wireguard-test:
 novafw-test:
 	@sh tools/tests/run_novafw_tests.sh
 
+# Month 3 - Server & Containers: Pure Rust OpenSSH-Compatible SSH-2 Server Daemon (novasshd)
+# suite on the host: Curve25519 ECDH, Ed25519/RSA signatures, ChaCha20-Poly1305/AES-GCM AEAD,
+# ~/.ssh/authorized_keys & USERS.CFG auth, PTY /bin/novash session, SFTP v3 and SCP transfers.
+novasshd-test:
+	@sh tools/tests/run_novasshd_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -927,4 +933,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
