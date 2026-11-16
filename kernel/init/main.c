@@ -1037,6 +1037,15 @@ void kernel_late_init(void) {
                        result == 0 ? "pass" : "fail");
         }
 
+        /* Month 3: Stateful Packet-Filter Firewall with Connection Tracking & NAT (novafw) */
+        {
+            extern int rust_novafw_selftest(void);
+            int result = rust_novafw_selftest();
+            kernel_log("[ %s ] Kernel-side Stateful Firewall self-test (Conntrack, NAT, SNAT/DNAT, RateLimit, AntiScan): %s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       result == 0 ? "pass" : "fail");
+        }
+
         /* Phase 78: kernel/rust/udp.rs's own self-test - the same
          * "exercise the table/filtering logic directly, synthetically"
          * reasoning as rust_tcp_selftest() just above: bind/connect/

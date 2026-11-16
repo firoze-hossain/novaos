@@ -913,6 +913,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("wireguard_selftest",
               r"Kernel-side WireGuard VPN self-test \(X25519, ChaCha20Poly1305, BLAKE2s, Noise, Routing\): pass",
               "Native In-Kernel WireGuard VPN self-test (X25519, ChaCha20Poly1305, BLAKE2s, Noise IKpsk2, Cryptokey Routing) passed cleanly"),
+    Assertion("novafw_selftest",
+              r"Kernel-side Stateful Firewall self-test \(Conntrack, NAT, SNAT/DNAT, RateLimit, AntiScan\): pass",
+              "Stateful Packet-Filter Firewall with Connection Tracking (Conntrack, NAT, SNAT/DNAT, RateLimit, AntiScan) passed cleanly"),
     Assertion("http_selftest_parsing",
               r"Kernel-side Rust HTTP self-test \(1/2\): "
               r"header-body-split=pass truncated-detected=pass "

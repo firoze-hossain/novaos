@@ -37,6 +37,13 @@ extern void rust_udp_handle_packet(uint32_t src_ip, const uint8_t* payload,
 extern bool rust_wireguard_handle_packet(uint32_t src_ip, const uint8_t* payload,
                                          uint16_t length);
 
+/* Month 3: Stateful Packet-Filter Firewall with Conntrack, NAT, and Rate Limiting */
+extern bool rust_novafw_filter_in(uint32_t src_ip, uint8_t proto,
+                                  bool fragment, const uint8_t* payload,
+                                  uint16_t length);
+extern bool rust_novafw_filter_out(uint32_t dest_ip, uint8_t proto,
+                                   const uint8_t* payload, uint16_t length);
+
 typedef struct __attribute__((packed)) {
     uint8_t  version_ihl;
     uint8_t  tos;
@@ -79,6 +86,10 @@ bool ip_send(uint32_t dest_ip, uint8_t protocol, const void* payload,
      * sent should not cost an ARP request. A refusal looks like any other send
      * failure to the caller. */
     if (!fw_allow_out(dest_ip, protocol, payload, payload_len)) {
+        return false;
+    }
+
+    if (!rust_novafw_filter_out(dest_ip, protocol, payload, payload_len)) {
         return false;
     }
 
@@ -157,6 +168,9 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
     {
         bool fragment = (eth_ntohs(hdr.flags_fragment) & 0x3FFF) != 0;
         if (!fw_allow_in(src_ip, hdr.protocol, fragment, transport, transport_len)) {
+            return;
+        }
+        if (!rust_novafw_filter_in(src_ip, hdr.protocol, fragment, transport, transport_len)) {
             return;
         }
     }
