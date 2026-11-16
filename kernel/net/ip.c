@@ -32,6 +32,11 @@ extern void rust_tcp_handle_packet(uint32_t src_ip, const uint8_t* payload,
 extern void rust_udp_handle_packet(uint32_t src_ip, const uint8_t* payload,
                                     uint16_t length);
 
+/* Month 3: Native In-Kernel WireGuard VPN Tunneling Engine
+ * Inbound UDP dispatch to wg0 virtual interface on listen port (51820). */
+extern bool rust_wireguard_handle_packet(uint32_t src_ip, const uint8_t* payload,
+                                         uint16_t length);
+
 typedef struct __attribute__((packed)) {
     uint8_t  version_ihl;
     uint8_t  tos;
@@ -163,6 +168,7 @@ void ip_handle_packet(const uint8_t src_mac[6], const uint8_t* payload,
         case IP_PROTO_UDP:
             udp_handle_packet(src_ip, transport, transport_len);
             rust_udp_handle_packet(src_ip, transport, transport_len);
+            rust_wireguard_handle_packet(src_ip, transport, transport_len);
             break;
         case IP_PROTO_TCP:
             rust_tcp_handle_packet(src_ip, transport, transport_len);

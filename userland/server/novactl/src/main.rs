@@ -39,6 +39,7 @@ fn print_usage() {
     println!("    stats    Display a live stream of container resource usage statistics");
     println!("    exec     Run a command in a running container");
     println!("    images   List local container images");
+    println!("    wg       Configure and manage native WireGuard VPN tunnels");
     println!("    selftest Run automated verification test suite");
     println!();
     println!("OPTIONS FOR 'run':");
@@ -105,6 +106,12 @@ fn main() {
             if run_novactl_selftest() {
                 process::exit(0);
             } else {
+                process::exit(1);
+            }
+        }
+        "wg" => {
+            if let Err(e) = novactl::wireguard::execute_wg_command(&args[2..]) {
+                eprintln!("Error: {}", e);
                 process::exit(1);
             }
         }

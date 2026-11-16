@@ -1027,6 +1027,16 @@ void kernel_late_init(void) {
                        result == 0 ? "pass" : "fail");
         }
 
+        /* Month 3: Native In-Kernel WireGuard VPN Tunneling Engine
+         * (Curve25519, ChaCha20-Poly1305, BLAKE2s, Noise IKpsk2, Cryptokey Routing) */
+        {
+            extern int rust_wireguard_selftest(void);
+            int result = rust_wireguard_selftest();
+            kernel_log("[ %s ] Kernel-side WireGuard VPN self-test (X25519, ChaCha20Poly1305, BLAKE2s, Noise, Routing): %s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       result == 0 ? "pass" : "fail");
+        }
+
         /* Phase 78: kernel/rust/udp.rs's own self-test - the same
          * "exercise the table/filtering logic directly, synthetically"
          * reasoning as rust_tcp_selftest() just above: bind/connect/

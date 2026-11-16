@@ -16,6 +16,7 @@ pub mod namespace;
 pub mod network;
 pub mod oci;
 pub mod storage;
+pub mod wireguard;
 
 pub use cgroup::{CgroupController, ContainerMetrics};
 pub use container::{Container, ContainerConfig, ContainerEngine, ContainerStatus};
@@ -213,7 +214,7 @@ pub fn run_novactl_selftest() -> bool {
     println!("PASSED (ps, logs, exec, stats, stop, start, restart verified)");
 
     // 8. Test Clean Container Removal
-    print!("[TEST 8/8] Container Teardown & Resource Deallocation... ");
+    print!("[TEST 8/9] Container Teardown & Resource Deallocation... ");
     assert!(engine.stop("perf-container").is_ok());
     let rm_res = engine.rm("perf-container", false);
     assert!(rm_res.is_ok(), "Container removal failed: {:?}", rm_res.err());
@@ -221,8 +222,40 @@ pub fn run_novactl_selftest() -> bool {
     assert_eq!(engine.list(true).len(), 0);
     println!("PASSED");
 
+    // 9. Test Native In-Kernel WireGuard VPN Configuration Subsystem (novactl wg)
+    print!("[TEST 9/9] WireGuard VPN CLI (genkey, pubkey, set, show)... ");
+    let privkey = wireguard::generate_private_key();
+    let b64_priv = wireguard::base64_encode_32(&privkey);
+    assert_eq!(b64_priv.len(), 44);
+    let decoded_priv = wireguard::base64_decode_32(&b64_priv).expect("Base64 decode failed");
+    assert_eq!(decoded_priv, privkey);
+
+    let pubkey = wireguard::derive_public_key(&privkey);
+    let b64_pub = wireguard::base64_encode_32(&pubkey);
+    assert_eq!(b64_pub.len(), 44);
+
+    let set_args = vec![
+        "set".to_string(),
+        "wg0".to_string(),
+        "private-key".to_string(),
+        b64_priv,
+        "listen-port".to_string(),
+        "51820".to_string(),
+        "peer".to_string(),
+        b64_pub,
+        "endpoint".to_string(),
+        "198.51.100.2:51820".to_string(),
+        "allowed-ips".to_string(),
+        "10.0.0.2/32, 192.168.1.0/24".to_string(),
+        "persistent-keepalive".to_string(),
+        "25".to_string(),
+    ];
+    assert!(wireguard::execute_wg_command(&set_args).is_ok());
+    assert!(wireguard::execute_wg_command(&["show".to_string(), "wg0".to_string()]).is_ok());
+    println!("PASSED");
+
     println!("============================================================");
-    println!("  ALL 8/8 NOVACTL CONTAINER RUNTIME ENGINE CHECKS PASSED    ");
+    println!("  ALL 9/9 NOVACTL CONTAINER & WIREGUARD CHECKS PASSED       ");
     println!("============================================================");
     true
 }
