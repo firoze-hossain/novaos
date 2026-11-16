@@ -120,6 +120,9 @@ pub mod config;
 #[path = "../src/security/mod.rs"]
 pub mod security;
 
+#[path = "../src/net/mod.rs"]
+pub mod net;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -449,5 +452,18 @@ pub extern "C" fn rust_cgroup_charge_memory(pid: u32, bytes: u64, is_anon: bool)
 pub extern "C" fn rust_cgroup_on_scheduler_tick(pid: u32, current_tick: u64, delta_usec: u64, is_user: bool) -> bool {
     security::cgroups::global_cgroup_on_scheduler_tick(pid, current_tick, delta_usec, is_user)
 }
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Enterprise Cloud TCP Stack
+/// (RFC 8312 CUBIC, BBR, RFC 2018 SACK, RFC 7323 Window Scaling, RFC 4987 SYN Cookies, RFC 1122 Keepalive)
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_enterprise_tcp_selftest() -> i32 {
+    if net::run_enterprise_tcp_selftest() {
+        0
+    } else {
+        1
+    }
+}
+
 
 

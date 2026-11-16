@@ -907,6 +907,9 @@ ASSERTIONS: list[Assertion] = [
     Assertion("tcp_selftest_recv", r"Kernel-side Rust TCP self-test.*recv=pass",
               "kernel/rust/tcp.rs correctly delivered synthetic inbound data "
               "to rust_tcp_recv()"),
+    Assertion("enterprise_tcp_selftest",
+              r"Kernel-side Enterprise TCP self-test \(Cubic, BBR, SACK, WindowScale, SYNCookies, Keepalive\): pass",
+              "Enterprise TCP Stack self-test (Cubic, BBR, SACK, Window Scaling, SYN Cookies, Keepalive) passed cleanly"),
     Assertion("http_selftest_parsing",
               r"Kernel-side Rust HTTP self-test \(1/2\): "
               r"header-body-split=pass truncated-detected=pass "

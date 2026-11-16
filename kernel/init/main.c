@@ -1016,6 +1016,17 @@ void kernel_late_init(void) {
                        (result & 32) ? "FAIL" : "pass");
         }
 
+        /* NovaOS 2.0 (Month 3 - Server & Containers): Enterprise Cloud TCP Stack
+         * (RFC 8312 CUBIC, BBR, RFC 2018 SACK, RFC 7323 Window Scaling,
+         * RFC 4987 SYN Cookies, RFC 1122 Keepalive) */
+        {
+            extern int rust_enterprise_tcp_selftest(void);
+            int result = rust_enterprise_tcp_selftest();
+            kernel_log("[ %s ] Kernel-side Enterprise TCP self-test (Cubic, BBR, SACK, WindowScale, SYNCookies, Keepalive): %s\n",
+                       result == 0 ? "OK" : "FAIL",
+                       result == 0 ? "pass" : "fail");
+        }
+
         /* Phase 78: kernel/rust/udp.rs's own self-test - the same
          * "exercise the table/filtering logic directly, synthetically"
          * reasoning as rust_tcp_selftest() just above: bind/connect/

@@ -98,6 +98,18 @@
 use crate::spinlock::SpinLock;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::net::tcp::bbr::BbrCongestionControl;
+use crate::net::tcp::cubic::CubicCongestionControl;
+use crate::net::tcp::keepalive::{KeepaliveAction, TcpKeepalive};
+use crate::net::tcp::sack::{
+    parse_sack_options, SackBlock, SackReceiver, SackScoreboard,
+};
+use crate::net::tcp::syncookie::SynCookieGenerator;
+use crate::net::tcp::window_scale::{parse_window_scale_option, TcpWindowScale};
+use crate::net::tcp::CongestionAlgorithm;
+
+static SYN_COOKIE_GEN: SynCookieGenerator = SynCookieGenerator::new();
+
 const MAX_TCP_CONNS: usize = 8;
 const MAX_BACKLOG: usize = 4;
 const TCP_MSS: usize = 536; /* conservative default MSS, same value
@@ -225,6 +237,18 @@ struct TcpConn {
     /// waiting for rust_tcp_accept() to pop them. -1 = empty slot.
     backlog: [i8; MAX_BACKLOG],
     backlog_len: u8,
+
+    // Enterprise TCP Extensions (RFC 8312 Cubic, BBR, RFC 2018 SACK, RFC 7323 WS, RFC 1122 Keepalive)
+    pub congestion_algo: CongestionAlgorithm,
+    pub cubic: CubicCongestionControl,
+    pub bbr: BbrCongestionControl,
+    pub sack_receiver: SackReceiver,
+    pub sack_scoreboard: SackScoreboard,
+    pub window_scale: TcpWindowScale,
+    pub keepalive: TcpKeepalive,
+    pub peer_window: u32,
+    pub rtt_sample_seq: u32,
+    pub rtt_sample_time: u32,
 }
 
 impl TcpConn {
@@ -256,6 +280,67 @@ impl TcpConn {
             time_wait_deadline: 0,
             backlog: [-1; MAX_BACKLOG],
             backlog_len: 0,
+            congestion_algo: CongestionAlgorithm::Cubic,
+            cubic: CubicCongestionControl::new(TCP_MSS as u32),
+            bbr: BbrCongestionControl::new(TCP_MSS as u32),
+            sack_receiver: SackReceiver::new(),
+            sack_scoreboard: SackScoreboard::new(),
+            window_scale: TcpWindowScale::new(),
+            keepalive: TcpKeepalive::new(),
+            peer_window: 65535,
+            rtt_sample_seq: 0,
+            rtt_sample_time: 0,
+        }
+    }
+
+    pub fn current_cwnd(&self) -> u32 {
+        match self.congestion_algo {
+            CongestionAlgorithm::Cubic => self.cubic.cwnd,
+            CongestionAlgorithm::Bbr => self.bbr.cwnd,
+        }
+    }
+
+    pub fn on_ack_received(
+        &mut self,
+        ack_seq: u32,
+        acked_bytes: u32,
+        now_ticks: u32,
+        sack_blocks: &[SackBlock],
+    ) {
+        let rtt_ms = if self.rtt_sample_time > 0 && seq_ge(ack_seq, self.rtt_sample_seq) {
+            let ticks = now_ticks.saturating_sub(self.rtt_sample_time);
+            self.rtt_sample_time = 0;
+            (ticks.max(1) * 10).min(5000)
+        } else {
+            50
+        };
+
+        let now_ms = now_ticks.wrapping_mul(10);
+        self.sack_scoreboard.process_sack_blocks(ack_seq, sack_blocks);
+
+        let in_flight = self.sack_scoreboard.in_flight_bytes();
+        match self.congestion_algo {
+            CongestionAlgorithm::Cubic => {
+                self.cubic.on_ack(acked_bytes, rtt_ms, now_ms);
+            }
+            CongestionAlgorithm::Bbr => {
+                self.bbr.on_ack(acked_bytes, rtt_ms, in_flight, now_ms);
+            }
+        }
+
+        self.keepalive.on_activity(now_ticks);
+    }
+
+    pub fn on_loss(&mut self, now_ticks: u32) {
+        let now_ms = now_ticks.wrapping_mul(10);
+        let in_flight = self.sack_scoreboard.in_flight_bytes();
+        match self.congestion_algo {
+            CongestionAlgorithm::Cubic => {
+                self.cubic.on_loss(now_ms);
+            }
+            CongestionAlgorithm::Bbr => {
+                self.bbr.on_loss(in_flight);
+            }
         }
     }
 
@@ -343,7 +428,9 @@ static POLL_CURSOR: AtomicUsize = AtomicUsize::new(0);
 /// zero checksum, real TCP stacks universally validate this and drop
 /// segments that fail it), and hands it to ip_send(). Always called
 /// with CONNS' lock already released - see the module doc.
-fn send_segment(
+/// Builds one TCP segment (header + optional options + data), computes its real
+/// checksum and hands it to ip_send(). Always called with CONNS' lock released.
+fn send_segment_with_options(
     remote_ip: u32,
     local_port: u16,
     remote_port: u16,
@@ -351,23 +438,35 @@ fn send_segment(
     ack: u32,
     flags: u8,
     window: u16,
+    options: &[u8],
     data: &[u8],
 ) -> bool {
-    let mut seg = [0u8; 20 + TCP_MSS];
+    let opt_padded_len = (options.len() + 3) / 4 * 4;
+    let header_len = 20 + opt_padded_len;
+    let data_len = core::cmp::min(data.len(), TCP_MSS);
+    let total = header_len + data_len;
+
+    let mut seg = [0u8; 60 + TCP_MSS];
     seg[0..2].copy_from_slice(&local_port.to_be_bytes());
     seg[2..4].copy_from_slice(&remote_port.to_be_bytes());
     seg[4..8].copy_from_slice(&seq.to_be_bytes());
     seg[8..12].copy_from_slice(&ack.to_be_bytes());
-    seg[12] = 5 << 4; /* 20-byte header, no options */
+    seg[12] = ((header_len / 4) as u8) << 4;
     seg[13] = flags;
     seg[14..16].copy_from_slice(&window.to_be_bytes());
     seg[16..18].copy_from_slice(&0u16.to_be_bytes()); /* checksum placeholder */
     seg[18..20].copy_from_slice(&0u16.to_be_bytes());
-    let data_len = core::cmp::min(data.len(), TCP_MSS);
-    seg[20..20 + data_len].copy_from_slice(&data[..data_len]);
-    let total = 20 + data_len;
 
-    let mut csum_buf = [0u8; 12 + 20 + TCP_MSS];
+    if !options.is_empty() {
+        seg[20..20 + options.len()].copy_from_slice(options);
+        for p in (20 + options.len())..header_len {
+            seg[p] = 1; // NOP
+        }
+    }
+
+    seg[header_len..header_len + data_len].copy_from_slice(&data[..data_len]);
+
+    let mut csum_buf = [0u8; 12 + 60 + TCP_MSS];
     csum_buf[0..4].copy_from_slice(&NET_OUR_IP.to_be_bytes());
     csum_buf[4..8].copy_from_slice(&remote_ip.to_be_bytes());
     csum_buf[8] = 0;
@@ -381,17 +480,36 @@ fn send_segment(
     unsafe { ip_send(remote_ip, IP_PROTO_TCP, seg.as_ptr(), total as u16) }
 }
 
+fn send_segment(
+    remote_ip: u32,
+    local_port: u16,
+    remote_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    window: u16,
+    data: &[u8],
+) -> bool {
+    send_segment_with_options(remote_ip, local_port, remote_port, seq, ack, flags, window, &[], data)
+}
+
 fn send_syn(idx: usize) {
-    let (local_port, remote_port, remote_ip, seq, window) = {
+    let (local_port, remote_port, remote_ip, seq, window, rcv_scale) = {
         let conns = CONNS.lock();
         let c = &conns[idx];
-        (c.local_port, c.remote_port, c.remote_ip, c.send_unacked, c.advertised_window())
+        (c.local_port, c.remote_port, c.remote_ip, c.send_unacked, c.advertised_window(), c.window_scale.rcv_scale)
     };
-    send_segment(remote_ip, local_port, remote_port, seq, 0, TCP_FLAG_SYN, window, &[]);
+    let mss_bytes = (TCP_MSS as u16).to_be_bytes();
+    let options = [
+        2, 4, mss_bytes[0], mss_bytes[1], // MSS
+        3, 3, rcv_scale, 1,               // Window Scale + NOP
+        4, 2, 1, 1,                       // SACK Permitted + 2 NOPs
+    ];
+    send_segment_with_options(remote_ip, local_port, remote_port, seq, 0, TCP_FLAG_SYN, window, &options, &[]);
 }
 
 fn send_syn_ack(idx: usize) {
-    let (local_port, remote_port, remote_ip, seq, ack, window) = {
+    let (local_port, remote_port, remote_ip, seq, ack, window, rcv_scale) = {
         let conns = CONNS.lock();
         let c = &conns[idx];
         (
@@ -401,9 +519,16 @@ fn send_syn_ack(idx: usize) {
             c.send_unacked,
             c.recv_next,
             c.advertised_window(),
+            c.window_scale.rcv_scale,
         )
     };
-    send_segment(
+    let mss_bytes = (TCP_MSS as u16).to_be_bytes();
+    let options = [
+        2, 4, mss_bytes[0], mss_bytes[1], // MSS
+        3, 3, rcv_scale, 1,               // Window Scale + NOP
+        4, 2, 1, 1,                       // SACK Permitted + 2 NOPs
+    ];
+    send_segment_with_options(
         remote_ip,
         local_port,
         remote_port,
@@ -411,14 +536,17 @@ fn send_syn_ack(idx: usize) {
         ack,
         TCP_FLAG_SYN | TCP_FLAG_ACK,
         window,
+        &options,
         &[],
     );
 }
 
 fn send_ack_only(idx: usize) {
-    let (local_port, remote_port, remote_ip, seq, ack, window) = {
+    let (local_port, remote_port, remote_ip, seq, ack, window, sack_buf, sack_len) = {
         let conns = CONNS.lock();
         let c = &conns[idx];
+        let mut buf = [0u8; 36];
+        let len = c.sack_receiver.write_sack_option(&mut buf);
         (
             c.local_port,
             c.remote_port,
@@ -426,9 +554,25 @@ fn send_ack_only(idx: usize) {
             c.send_unacked.wrapping_add(c.sent_count as u32),
             c.recv_next,
             c.advertised_window(),
+            buf,
+            len,
         )
     };
-    send_segment(remote_ip, local_port, remote_port, seq, ack, TCP_FLAG_ACK, window, &[]);
+    if sack_len > 0 {
+        send_segment_with_options(
+            remote_ip,
+            local_port,
+            remote_port,
+            seq,
+            ack,
+            TCP_FLAG_ACK,
+            window,
+            &sack_buf[..sack_len],
+            &[],
+        );
+    } else {
+        send_segment(remote_ip, local_port, remote_port, seq, ack, TCP_FLAG_ACK, window, &[]);
+    }
 }
 
 /// Allocates a new, unbound socket. Returns its id (an index into this
@@ -804,6 +948,11 @@ pub unsafe extern "C" fn rust_tcp_handle_packet(src_ip: u32, payload: *const u8,
      * CONNS' lock below but only ever executed after releasing it. */
     let mut send_synack_for: i32 = -1;
     let mut send_ack_for: i32 = -1;
+    let mut stateless_synack: Option<(u32, u16, u16, u32, u32)> = None;
+
+    let options_bytes = if data_offset > 20 { &data[20..data_offset] } else { &[] };
+    let (sack_perm, sack_blocks, sack_cnt) = parse_sack_options(options_bytes);
+    let ws_opt = parse_window_scale_option(options_bytes);
 
     {
         let mut conns = CONNS.lock();
@@ -838,6 +987,14 @@ pub unsafe extern "C" fn rust_tcp_handle_packet(src_ip: u32, payload: *const u8,
                     conns[idx].rto_ticks = BASE_RTO_TICKS;
                     conns[idx].retrans_count = 0;
                     conns[idx].rto_deadline = 0;
+                    conns[idx].window_scale.negotiate(ws_opt);
+                    if sack_perm {
+                        conns[idx].sack_receiver.sack_permitted = true;
+                        conns[idx].sack_scoreboard.sack_enabled = true;
+                    }
+                    let raw_win = u16::from_be_bytes([data[14], data[15]]);
+                    conns[idx].peer_window = conns[idx].window_scale.decode_window(raw_win);
+                    conns[idx].keepalive.on_activity(timer_get_ticks());
                     send_ack_for = idx as i32;
                 }
             } else if conns[idx].state == TcpState::SynReceived {
@@ -848,6 +1005,9 @@ pub unsafe extern "C" fn rust_tcp_handle_packet(src_ip: u32, payload: *const u8,
                     conns[idx].rto_ticks = BASE_RTO_TICKS;
                     conns[idx].retrans_count = 0;
                     conns[idx].rto_deadline = 0;
+                    let raw_win = u16::from_be_bytes([data[14], data[15]]);
+                    conns[idx].peer_window = conns[idx].window_scale.decode_window(raw_win);
+                    conns[idx].keepalive.on_activity(timer_get_ticks());
                     let lidx = conns[idx].listener_id;
                     if lidx >= 0
                         && conns[lidx as usize].in_use
@@ -871,40 +1031,57 @@ pub unsafe extern "C" fn rust_tcp_handle_packet(src_ip: u32, payload: *const u8,
                  * ACK/data/FIN processing, the same way a real TCP
                  * stack's segment-processing path is shared across
                  * them. */
-                if (flags & TCP_FLAG_ACK) != 0 && seq_gt(ack, conns[idx].send_unacked) {
-                    let raw = ack.wrapping_sub(conns[idx].send_unacked);
-                    let advance = core::cmp::min(raw, conns[idx].send_buffered as u32) as u16;
-                    conns[idx].send_buf_consume(advance);
-                    conns[idx].send_unacked = ack;
-                    conns[idx].rto_ticks = BASE_RTO_TICKS;
-                    conns[idx].retrans_count = 0;
-                    if conns[idx].send_buffered == 0 {
-                        conns[idx].rto_deadline = 0;
-                    }
-                    if conns[idx].fin_sent && seq_ge(ack, conns[idx].fin_seq.wrapping_add(1)) {
-                        conns[idx].state = match conns[idx].state {
-                            TcpState::FinWait1 => TcpState::FinWait2,
-                            TcpState::Closing => TcpState::TimeWait,
-                            TcpState::LastAck => TcpState::Closed,
-                            other => other,
-                        };
-                        conns[idx].rto_deadline = 0;
-                        if conns[idx].state == TcpState::TimeWait {
-                            conns[idx].time_wait_deadline =
-                                timer_get_ticks() + TIME_WAIT_TICKS;
-                        } else if conns[idx].state == TcpState::Closed {
-                            conns[idx].in_use = false;
+                let raw_win = u16::from_be_bytes([data[14], data[15]]);
+                conns[idx].peer_window = conns[idx].window_scale.decode_window(raw_win);
+                let now_ticks = timer_get_ticks();
+                conns[idx].keepalive.on_activity(now_ticks);
+
+                if (flags & TCP_FLAG_ACK) != 0 {
+                    if seq_gt(ack, conns[idx].send_unacked) {
+                        let raw = ack.wrapping_sub(conns[idx].send_unacked);
+                        let advance = core::cmp::min(raw, conns[idx].send_buffered as u32) as u16;
+                        conns[idx].send_buf_consume(advance);
+                        conns[idx].send_unacked = ack;
+                        conns[idx].rto_ticks = BASE_RTO_TICKS;
+                        conns[idx].retrans_count = 0;
+                        if conns[idx].send_buffered == 0 {
+                            conns[idx].rto_deadline = 0;
                         }
+                        conns[idx].on_ack_received(ack, advance as u32, now_ticks, &sack_blocks[..sack_cnt]);
+
+                        if conns[idx].fin_sent && seq_ge(ack, conns[idx].fin_seq.wrapping_add(1)) {
+                            conns[idx].state = match conns[idx].state {
+                                TcpState::FinWait1 => TcpState::FinWait2,
+                                TcpState::Closing => TcpState::TimeWait,
+                                TcpState::LastAck => TcpState::Closed,
+                                other => other,
+                            };
+                            conns[idx].rto_deadline = 0;
+                            if conns[idx].state == TcpState::TimeWait {
+                                conns[idx].time_wait_deadline =
+                                    timer_get_ticks() + TIME_WAIT_TICKS;
+                            } else if conns[idx].state == TcpState::Closed {
+                                conns[idx].in_use = false;
+                            }
+                        }
+                    } else if ack == conns[idx].send_unacked && sack_cnt > 0 {
+                        conns[idx].on_ack_received(ack, 0, now_ticks, &sack_blocks[..sack_cnt]);
                     }
                 }
 
                 if conns[idx].in_use
                     && !payload_bytes.is_empty()
-                    && seq == conns[idx].recv_next
                 {
-                    let accepted = conns[idx].recv_buf_write(payload_bytes);
-                    conns[idx].recv_next = conns[idx].recv_next.wrapping_add(accepted as u32);
-                    if accepted > 0 {
+                    if seq == conns[idx].recv_next {
+                        let accepted = conns[idx].recv_buf_write(payload_bytes);
+                        let rcv_nxt = conns[idx].recv_next.wrapping_add(accepted as u32);
+                        conns[idx].recv_next = rcv_nxt;
+                        conns[idx].sack_receiver.prune_acknowledged(rcv_nxt);
+                        if accepted > 0 {
+                            send_ack_for = idx as i32;
+                        }
+                    } else if seq_gt(seq, conns[idx].recv_next) {
+                        conns[idx].sack_receiver.add_received_range(seq, payload_bytes.len() as u32);
                         send_ack_for = idx as i32;
                     }
                 }
@@ -964,21 +1141,102 @@ pub unsafe extern "C" fn rust_tcp_handle_packet(src_ip: u32, payload: *const u8,
                     conns[nidx].rto_ticks = BASE_RTO_TICKS;
                     conns[nidx].retrans_count = 0;
                     conns[nidx].rto_deadline = timer_get_ticks() + BASE_RTO_TICKS;
+                    conns[nidx].window_scale.negotiate(ws_opt);
+                    if sack_perm {
+                        conns[nidx].sack_receiver.sack_permitted = true;
+                        conns[nidx].sack_scoreboard.sack_enabled = true;
+                    }
+                    let raw_win = u16::from_be_bytes([data[14], data[15]]);
+                    conns[nidx].peer_window = conns[nidx].window_scale.decode_window(raw_win);
+                    conns[nidx].keepalive.on_activity(timer_get_ticks());
                     send_synack_for = nidx as i32;
+                } else {
+                    // Under SYN flood pressure / full connection slots: stateless SYN cookie!
+                    let cookie = SYN_COOKIE_GEN.generate_cookie(
+                        src_ip,
+                        src_port,
+                        NET_OUR_IP,
+                        dst_port,
+                        TCP_MSS as u16,
+                        timer_get_ticks(),
+                    );
+                    stateless_synack = Some((src_ip, dst_port, src_port, cookie, seq.wrapping_add(1)));
                 }
-                /* else: no free connection slot - dropped, matching this
-                 * kernel's usual fixed-capacity-exhaustion behavior (see
-                 * e.g. pipe.rs's own rust_pipe_create()). */
             }
-            /* else: SYN to a port nothing is listening on - dropped, not
-             * RST'd; see the module doc's scope note. */
+        } else if (flags & TCP_FLAG_ACK) != 0 && (flags & TCP_FLAG_SYN) == 0 && (flags & TCP_FLAG_RST) == 0 {
+            // Verify SYN cookie for unmatched ACK completing stateless handshake
+            let cookie = ack.wrapping_sub(1);
+            if let Some(mss) = SYN_COOKIE_GEN.verify_cookie(
+                cookie,
+                src_ip,
+                src_port,
+                NET_OUR_IP,
+                dst_port,
+                timer_get_ticks(),
+            ) {
+                let mut listener: i32 = -1;
+                for i in 0..MAX_TCP_CONNS {
+                    if conns[i].in_use && conns[i].is_listener && conns[i].state == TcpState::Listen
+                        && conns[i].local_port == dst_port
+                    {
+                        listener = i as i32;
+                        break;
+                    }
+                }
+                if listener >= 0 {
+                    let mut free_idx: i32 = -1;
+                    for i in 0..MAX_TCP_CONNS {
+                        if !conns[i].in_use {
+                            free_idx = i as i32;
+                            break;
+                        }
+                    }
+                    if free_idx >= 0 {
+                        let nidx = free_idx as usize;
+                        conns[nidx] = TcpConn::new();
+                        conns[nidx].in_use = true;
+                        conns[nidx].state = TcpState::Established;
+                        conns[nidx].local_port = dst_port;
+                        conns[nidx].remote_ip = src_ip;
+                        conns[nidx].remote_port = src_port;
+                        conns[nidx].listener_id = listener as i8;
+                        conns[nidx].send_unacked = ack;
+                        conns[nidx].recv_next = seq;
+                        conns[nidx].cubic = CubicCongestionControl::new(mss as u32);
+                        conns[nidx].bbr = BbrCongestionControl::new(mss as u32);
+                        conns[nidx].keepalive.on_activity(timer_get_ticks());
+                        let l = listener as usize;
+                        if (conns[l].backlog_len as usize) < MAX_BACKLOG {
+                            let pos = conns[l].backlog_len as usize;
+                            conns[l].backlog[pos] = nidx as i8;
+                            conns[l].backlog_len += 1;
+                        }
+                    }
+                }
+            }
         }
-        /* else: an unmatched ACK/data/FIN/RST with no connection at all
-         * - dropped, same scope note. */
     }
 
     if send_synack_for >= 0 {
         send_syn_ack(send_synack_for as usize);
+    } else if let Some((rem_ip, loc_port, rem_port, c_seq, c_ack)) = stateless_synack {
+        let mss_bytes = (TCP_MSS as u16).to_be_bytes();
+        let options = [
+            2, 4, mss_bytes[0], mss_bytes[1], // MSS
+            3, 3, 7, 1,                       // Window Scale + NOP
+            4, 2, 1, 1,                       // SACK Permitted + 2 NOPs
+        ];
+        send_segment_with_options(
+            rem_ip,
+            loc_port,
+            rem_port,
+            c_seq,
+            c_ack,
+            TCP_FLAG_SYN | TCP_FLAG_ACK,
+            65535,
+            &options,
+            &[],
+        );
     } else if send_ack_for >= 0 {
         send_ack_only(send_ack_for as usize);
     }
@@ -1048,6 +1306,7 @@ pub extern "C" fn rust_tcp_poll() {
                             conns[i].retrans_count += 1;
                             conns[i].rto_ticks = core::cmp::min(conns[i].rto_ticks * 2, MAX_RTO_TICKS);
                             conns[i].rto_deadline = 0; /* re-armed by the send pass below */
+                            conns[i].on_loss(now);
                         }
                     }
                 }
@@ -1101,9 +1360,71 @@ pub extern "C" fn rust_tcp_poll() {
                 continue;
             }
 
+            // 1. Keepalive Poll
+            let unacked = conns[i].send_unacked;
+            match conns[i].keepalive.poll(unacked, now) {
+                KeepaliveAction::None => {}
+                KeepaliveAction::SendProbe { probe_seq } => {
+                    let seg = SegOut {
+                        remote_ip: conns[i].remote_ip,
+                        local_port: conns[i].local_port,
+                        remote_port: conns[i].remote_port,
+                        seq: probe_seq,
+                        ack: conns[i].recv_next,
+                        flags: TCP_FLAG_ACK,
+                        window: conns[i].advertised_window(),
+                        data: [0u8; TCP_MSS],
+                        data_len: 0,
+                    };
+                    chosen = Some(seg);
+                    POLL_CURSOR.store(i + 1, Ordering::Relaxed);
+                    break;
+                }
+                KeepaliveAction::Timeout => {
+                    conns[i].in_use = false;
+                    continue;
+                }
+            }
+
+            // 2. SACK Loss Hole Fast Retransmission
+            if let Some((hole_left, hole_right)) = conns[i].sack_scoreboard.get_next_lost_hole() {
+                let rel_offset = hole_left.wrapping_sub(conns[i].send_unacked);
+                let hole_len = hole_right.wrapping_sub(hole_left) as usize;
+                if (rel_offset as usize) < (conns[i].send_buffered as usize) {
+                    let chunk = core::cmp::min(hole_len, TCP_MSS);
+                    let mut data = [0u8; TCP_MSS];
+                    let got = conns[i].send_buf_peek(rel_offset as u16, &mut data[..chunk]);
+                    if got > 0 {
+                        let seg = SegOut {
+                            remote_ip: conns[i].remote_ip,
+                            local_port: conns[i].local_port,
+                            remote_port: conns[i].remote_port,
+                            seq: hole_left,
+                            ack: conns[i].recv_next,
+                            flags: TCP_FLAG_ACK | TCP_FLAG_PSH,
+                            window: conns[i].advertised_window(),
+                            data,
+                            data_len: got,
+                        };
+                        chosen = Some(seg);
+                        POLL_CURSOR.store(i + 1, Ordering::Relaxed);
+                        break;
+                    }
+                }
+            }
+
+            // 3. Unsent Data with Congestion Control and Peer Window Flow Control
             let unsent = conns[i].send_buffered.saturating_sub(conns[i].sent_count);
-            if unsent > 0 {
-                let chunk = core::cmp::min(unsent as usize, TCP_MSS);
+            let in_flight = conns[i].sent_count as u32;
+            let max_allowed = core::cmp::min(conns[i].current_cwnd(), conns[i].peer_window);
+
+            if unsent > 0 && (in_flight < max_allowed || in_flight == 0) {
+                let budget = if max_allowed > in_flight {
+                    (max_allowed - in_flight) as usize
+                } else {
+                    TCP_MSS
+                };
+                let chunk = core::cmp::min(unsent as usize, core::cmp::min(TCP_MSS, budget));
                 let mut data = [0u8; TCP_MSS];
                 let got = conns[i].send_buf_peek(conns[i].sent_count, &mut data[..chunk]);
                 let seq = conns[i].send_unacked.wrapping_add(conns[i].sent_count as u32);
@@ -1120,6 +1441,7 @@ pub extern "C" fn rust_tcp_poll() {
                     data,
                     data_len: got,
                 };
+                conns[i].sack_scoreboard.record_sent(seq, seq.wrapping_add(got as u32));
                 conns[i].sent_count += got as u16;
                 if conns[i].rto_deadline == 0 {
                     conns[i].rto_deadline = now + conns[i].rto_ticks;
