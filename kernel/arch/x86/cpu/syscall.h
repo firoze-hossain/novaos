@@ -682,6 +682,21 @@
  * SYS_PROC_INFO queries live CPU/memory metrics and scheduler process table telemetry. */
 #define SYS_PROC_INFO      84
 
+/* Month 3 - Server & Containers: Linux-grade Namespaces, unshare, setns, clone flags */
+#define SYS_UNSHARE        85
+#define SYS_SETNS          86
+#define SYS_NS_CLONE       87
+#define SYS_NS_INFO        88
+
+/* Standard Linux clone/unshare namespace flags */
+#define CLONE_NEWNS        0x00020000 /* Mount namespace */
+#define CLONE_NEWCGROUP    0x02000000 /* Cgroup namespace */
+#define CLONE_NEWUTS       0x04000000 /* UTS namespace */
+#define CLONE_NEWIPC       0x08000000 /* IPC namespace */
+#define CLONE_NEWUSER      0x10000000 /* User namespace */
+#define CLONE_NEWPID       0x20000000 /* PID namespace */
+#define CLONE_NEWNET       0x40000000 /* Network namespace */
+
 /* Month 6 / Phase 98: Full kernel security audit helper prototypes */
 struct process;
 bool process_has_capability(const struct process* p, const char* filename);

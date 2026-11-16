@@ -114,6 +114,9 @@ pub mod syscall;
 #[path = "../src/config/mod.rs"]
 pub mod config;
 
+#[path = "../src/security/mod.rs"]
+pub mod security;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -370,3 +373,42 @@ pub extern "C" fn rust_server_profile_selftest() -> i32 {
         1
     }
 }
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Linux-Grade Kernel Namespaces
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_namespace_selftest() -> i32 {
+    if security::namespace::run_namespace_selftest() {
+        0
+    } else {
+        1
+    }
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): C-ABI Namespace Syscall Dispatcher
+#[no_mangle]
+pub extern "C" fn rust_sys_namespace_dispatch(
+    caller_pid: u32,
+    syscall_nr: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+) -> isize {
+    syscall::dispatch_namespace_syscall(caller_pid, syscall_nr, arg1, arg2, arg3)
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Namespace Process Fork/Clone Hook
+#[no_mangle]
+pub extern "C" fn rust_namespace_on_fork(parent_pid: u32, child_pid: u32, clone_flags: u32) -> isize {
+    match security::namespace::global_clone_process(parent_pid, child_pid, clone_flags) {
+        Ok(local_pid) => local_pid as isize,
+        Err(e) => e,
+    }
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Namespace Process Exit Hook
+#[no_mangle]
+pub extern "C" fn rust_namespace_on_exit(host_pid: u32) {
+    security::namespace::global_exit_process(host_pid);
+}
+

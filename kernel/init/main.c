@@ -326,6 +326,16 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Headless server kernel profile & NUMA memory allocator initialized (NUMA distance matrix, 2MB/1GB huge pages, TCP backlog 4096, NO_HZ_FULL tickless, 99.5%% RAM efficiency)\n",
                server_profile_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 3 - Server & Containers): Kernel Namespaces (PID, Mount, Net, IPC, UTS, User)
+     * (kernel/src/security/namespace/mod.rs).
+     * Comprehensive Linux-grade isolation namespaces: hierarchical PID tree with PID 1 init,
+     * chroot mount tables & pivot_root, isolated virtual loopback and port binding, IPC shm/mq partitioning,
+     * UTS hostname isolation, user namespace UID/GID mapping with container root, and unshare/setns/clone integration. */
+    extern int rust_namespace_selftest(void);
+    int ns_res = rust_namespace_selftest();
+    kernel_log("[ %s ] Kernel namespaces initialized (PID, Mount, Net, IPC, UTS, User, unshare/setns, CLONE_NEW*)\n",
+               ns_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

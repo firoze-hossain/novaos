@@ -52,6 +52,9 @@ pub const LINUX_SYS_CLOCK_GETTIME: u64 = 228;
 pub const LINUX_SYS_EPOLL_WAIT: u64    = 232;
 pub const LINUX_SYS_EPOLL_CTL: u64     = 233;
 pub const LINUX_SYS_PIPE2: u64         = 293;
+pub const LINUX_SYS_CLONE: u64         = 56;
+pub const LINUX_SYS_UNSHARE: u64       = 272;
+pub const LINUX_SYS_SETNS: u64         = 308;
 
 // -----------------------------------------------------------------------------
 // NovaOS Target Syscall Identifiers
@@ -92,6 +95,9 @@ pub enum NovaSyscallId {
     Getppid = 41,
     Getuid = 42,
     Getgid = 43,
+    Unshare = 85,
+    Setns = 86,
+    Clone = 87,
 }
 
 // -----------------------------------------------------------------------------
@@ -145,6 +151,9 @@ impl PosixTranslationEngine {
             LINUX_SYS_EPOLL_WAIT => Some(NovaSyscallId::EpollWait),
             LINUX_SYS_EPOLL_CTL => Some(NovaSyscallId::EpollCtl),
             LINUX_SYS_PIPE2 => Some(NovaSyscallId::Pipe2),
+            LINUX_SYS_CLONE => Some(NovaSyscallId::Clone),
+            LINUX_SYS_UNSHARE => Some(NovaSyscallId::Unshare),
+            LINUX_SYS_SETNS => Some(NovaSyscallId::Setns),
             _ => None,
         };
 

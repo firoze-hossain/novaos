@@ -2610,6 +2610,38 @@ void syscall_handler(registers_t* regs) {
             handle_fb_readback(regs);
             break;
 
+        case SYS_UNSHARE: {
+            extern int32_t rust_sys_namespace_dispatch(uint32_t caller_pid, uint64_t syscall_nr, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+            process_t* cur = scheduler_current();
+            uint32_t pid = cur ? cur->pid : 1;
+            regs->eax = (uint32_t)rust_sys_namespace_dispatch(pid, 94, regs->ebx, regs->ecx, regs->edx);
+            break;
+        }
+
+        case SYS_SETNS: {
+            extern int32_t rust_sys_namespace_dispatch(uint32_t caller_pid, uint64_t syscall_nr, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+            process_t* cur = scheduler_current();
+            uint32_t pid = cur ? cur->pid : 1;
+            regs->eax = (uint32_t)rust_sys_namespace_dispatch(pid, 95, regs->ebx, regs->ecx, regs->edx);
+            break;
+        }
+
+        case SYS_NS_CLONE: {
+            extern int32_t rust_sys_namespace_dispatch(uint32_t caller_pid, uint64_t syscall_nr, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+            process_t* cur = scheduler_current();
+            uint32_t pid = cur ? cur->pid : 1;
+            regs->eax = (uint32_t)rust_sys_namespace_dispatch(pid, 96, regs->ebx, regs->ecx, regs->edx);
+            break;
+        }
+
+        case SYS_NS_INFO: {
+            extern int32_t rust_sys_namespace_dispatch(uint32_t caller_pid, uint64_t syscall_nr, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+            process_t* cur = scheduler_current();
+            uint32_t pid = cur ? cur->pid : 1;
+            regs->eax = (uint32_t)rust_sys_namespace_dispatch(pid, 97, regs->ebx, regs->ecx, regs->edx);
+            break;
+        }
+
         default:
             kernel_log("[WARN] Unknown syscall number %d\n", (int)regs->eax);
             break;
