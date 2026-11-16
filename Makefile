@@ -296,7 +296,7 @@ $(AP_TRAMPOLINE_BIN): $(AP_TRAMPOLINE_SRC)
 	@mkdir -p $(dir $@)
 	$(ASM) -f bin $< -o $@
 
-$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs kernel/rust/disk_installer.rs kernel/src/mm/vmm.rs kernel/src/mm/fault.rs kernel/src/sched/thread.rs kernel/src/sched/runqueue.rs kernel/src/sched/scheduler.rs kernel/src/drivers/storage/nvme.rs kernel/src/drivers/usb/mod.rs kernel/src/drivers/usb/xhci.rs kernel/src/drivers/usb/hid.rs kernel/src/fs/vfs/mod.rs kernel/src/fs/vfs/dcache.rs kernel/src/fs/vfs/inotify.rs kernel/src/fs/novafs/mod.rs kernel/src/fs/novafs/super.rs kernel/src/fs/novafs/btree.rs kernel/src/fs/novafs/snapshot.rs kernel/src/io/uring.rs kernel/src/mm/pagecache.rs kernel/src/mm/swap.rs kernel/src/compat/posix.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
+$(KERNEL_RUST_OBJ): kernel/rust/lib.rs kernel/rust/pipe.rs kernel/rust/spinlock.rs kernel/rust/virtio_blk.rs kernel/rust/net_irq.rs kernel/rust/acpi.rs kernel/rust/virtio_net.rs kernel/rust/users.rs kernel/rust/sha256.rs kernel/rust/hmac_sha256.rs kernel/rust/pbkdf2.rs kernel/rust/journal.rs kernel/rust/crashdump.rs kernel/rust/apic.rs kernel/rust/tcp.rs kernel/rust/http.rs kernel/rust/pkgsign_core.rs kernel/rust/pkgsign.rs kernel/rust/dynlink.rs kernel/rust/growtable.rs kernel/rust/udp.rs kernel/rust/virtiogpu.rs kernel/rust/virgl.rs kernel/rust/shm.rs kernel/rust/msg.rs kernel/rust/mixer.rs kernel/rust/klog.rs kernel/rust/pkgrepo.rs kernel/rust/driver_locks.rs kernel/rust/atomic_update.rs kernel/rust/disk_installer.rs kernel/src/mm/vmm.rs kernel/src/mm/fault.rs kernel/src/sched/thread.rs kernel/src/sched/runqueue.rs kernel/src/sched/scheduler.rs kernel/src/drivers/storage/nvme.rs kernel/src/drivers/usb/mod.rs kernel/src/drivers/usb/xhci.rs kernel/src/drivers/usb/hid.rs kernel/src/fs/vfs/mod.rs kernel/src/fs/vfs/dcache.rs kernel/src/fs/vfs/inotify.rs kernel/src/fs/novafs/mod.rs kernel/src/fs/novafs/super.rs kernel/src/fs/novafs/btree.rs kernel/src/fs/novafs/snapshot.rs kernel/src/io/uring.rs kernel/src/mm/pagecache.rs kernel/src/mm/swap.rs kernel/src/compat/posix.rs kernel/src/config/mod.rs kernel/src/config/server.rs $(AP_TRAMPOLINE_BIN) $(RUST_CORE_RLIB) $(RUST_COMPILER_BUILTINS_RLIB)
 	@mkdir -p $(dir $@)
 	env RUSTC_BOOTSTRAP=1 $(RUSTC) --edition 2021 -Z unstable-options --target $(RUST_TARGET_JSON) \
 	    --crate-type lib -C panic=abort -C opt-level=2 \
@@ -338,6 +338,16 @@ $(BUILD_DIR)/%.o: %.asm
 
 # Link kernel
 $(KERNEL_BIN): $(OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+
+# Month 3 - Server & Containers: Dedicated Headless Server Kernel Binary
+KERNEL_SERVER_BIN = $(BUILD_DIR)/novaos-server.bin
+
+kernel-server: $(KERNEL_SERVER_BIN)
+	@echo "✅ Dedicated NovaOS Headless Server Kernel built: $(KERNEL_SERVER_BIN)"
+
+$(KERNEL_SERVER_BIN): $(OBJS)
+	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
 # Create ISO
@@ -746,6 +756,13 @@ nova-edit-test:
 nova-bundle-test:
 	@sh tools/tests/run_nova_bundle_tests.sh
 
+# Month 3 - Server & Containers: Headless Server Kernel Profile & NUMA-Aware Memory Tuning
+# suite on the host: headless profile, NUMA multi-node topology, distance matrix calculation,
+# 2MB and 1GB huge page allocation with strict boundary alignment, aggressive TCP buffer auto-tuning
+# (backlog 4096, 16MB max window, BDP tuning), NO_HZ_FULL tickless idle scheduling, and 99.5%+ RAM efficiency.
+server-profile-test:
+	@sh tools/tests/run_server_profile_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -877,4 +894,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot

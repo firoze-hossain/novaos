@@ -111,6 +111,9 @@ pub mod audio;
 #[path = "../src/syscall/mod.rs"]
 pub mod syscall;
 
+#[path = "../src/config/mod.rs"]
+pub mod config;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -355,4 +358,15 @@ pub extern "C" fn rust_hda_read_pcm(buf: *mut u8, len: usize) -> isize {
 #[no_mangle]
 pub extern "C" fn rust_hda_ioctl(cmd: u32, arg: u64) -> isize {
     audio::pcm_playback_ioctl(cmd, arg)
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Headless Server Kernel Profile & NUMA-Aware Memory Tuning
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_server_profile_selftest() -> i32 {
+    if config::server::run_server_profile_selftest() {
+        0
+    } else {
+        1
+    }
 }
