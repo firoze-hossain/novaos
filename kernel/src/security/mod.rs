@@ -3,3 +3,4 @@
 //! NovaOS 2.0: Kernel Security Architecture & Isolation Subsystems
 
 pub mod namespace;
+pub mod cgroups;

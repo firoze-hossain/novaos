@@ -2,3 +2,4 @@
 
 pub mod vfs;
 pub mod novafs;
+pub mod cgroupfs;

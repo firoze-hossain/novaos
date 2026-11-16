@@ -90,6 +90,9 @@ pub mod vfs;
 #[path = "../src/fs/novafs/mod.rs"]
 pub mod novafs;
 
+#[path = "../src/fs/cgroupfs.rs"]
+pub mod cgroupfs;
+
 #[path = "../src/io/uring.rs"]
 pub mod uring;
 
@@ -411,4 +414,40 @@ pub extern "C" fn rust_namespace_on_fork(parent_pid: u32, child_pid: u32, clone_
 pub extern "C" fn rust_namespace_on_exit(host_pid: u32) {
     security::namespace::global_exit_process(host_pid);
 }
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): Control Groups v2 (cgroups v2)
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_cgroups_v2_selftest() -> i32 {
+    if security::cgroups::run_cgroups_v2_selftest() {
+        0
+    } else {
+        1
+    }
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): C-ABI Cgroups v2 on_fork hook
+#[no_mangle]
+pub extern "C" fn rust_cgroup_on_fork(parent_pid: u32, child_pid: u32) -> isize {
+    security::cgroups::global_cgroup_on_fork(parent_pid, child_pid)
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): C-ABI Cgroups v2 on_exit hook
+#[no_mangle]
+pub extern "C" fn rust_cgroup_on_exit(pid: u32) {
+    security::cgroups::global_cgroup_on_exit(pid);
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): C-ABI Cgroups v2 memory charge hook
+#[no_mangle]
+pub extern "C" fn rust_cgroup_charge_memory(pid: u32, bytes: u64, is_anon: bool) -> isize {
+    security::cgroups::global_cgroup_charge_memory(pid, bytes, is_anon)
+}
+
+/// NovaOS 2.0 (Month 3 - Server & Containers): C-ABI Cgroups v2 CPU tick hook
+#[no_mangle]
+pub extern "C" fn rust_cgroup_on_scheduler_tick(pid: u32, current_tick: u64, delta_usec: u64, is_user: bool) -> bool {
+    security::cgroups::global_cgroup_on_scheduler_tick(pid, current_tick, delta_usec, is_user)
+}
+
 

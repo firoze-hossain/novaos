@@ -336,6 +336,16 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Kernel namespaces initialized (PID, Mount, Net, IPC, UTS, User, unshare/setns, CLONE_NEW*)\n",
                ns_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 3 - Server & Containers): Control Groups v2 (cgroups v2) Resource Limiting Subsystem
+     * (kernel/src/security/cgroups/v2.rs and kernel/src/fs/cgroupfs.rs).
+     * Unified hierarchy resource governance: memory limits with high/max watermarks and OOM killing;
+     * CPU bandwidth quotas (CFS bandwidth controller cpu.max); I/O throttling (io.max rbps/wbps/riops/wiops);
+     * and process count limits (pids.max) mounted at /sys/fs/cgroup. */
+    extern int rust_cgroups_v2_selftest(void);
+    int cg_res = rust_cgroups_v2_selftest();
+    kernel_log("[ %s ] Control Groups v2 initialized (unified hierarchy, memory.max OOM, cpu.max CFS, io.max, pids.max at /sys/fs/cgroup)\n",
+               cg_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_
