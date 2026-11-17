@@ -921,7 +921,7 @@ pub fn compute_crc32(data: &[u8]) -> u32 {
 // In-Memory Mock Block Device (for Kernel Self-Test & Zero-Allocation Simulation)
 // -----------------------------------------------------------------------------
 
-pub const MOCK_SECTORS: usize = 256;
+pub const MOCK_SECTORS: usize = 12;
 
 #[derive(Clone, Copy)]
 pub struct MockDisk {
@@ -980,18 +980,8 @@ impl DiskIO for MockDisk {
 // Kernel Boot Self-Test (`rust_raid_storage_selftest`)
 // -----------------------------------------------------------------------------
 
-/// Comprehensive kernel-side self-test validating:
-///   1. 512-byte on-disk RaidSuperblock encode, CRC32 verification, and decode.
-///   2. RAID 0 striping across disks with correct LBA address translation.
-///   3. RAID 1 synchronous write replication and round-robin load-balanced reads.
-///   4. RAID 1 instantaneous fault failover upon disk failure with ZERO data loss.
-///   5. Hot-plug disk detection, auto-spare activation, and background rebuild.
-///   6. RAID 10 multi-drive striped-mirror operations and resilience.
-///   7. Dynamic volume pooling and online capacity expansion.
-pub fn rust_raid_storage_selftest() -> i32 {
-    // -------------------------------------------------------------------------
-    // Check 1: Superblock Encode, Checksum, and Decode
-    // -------------------------------------------------------------------------
+#[inline(never)]
+fn selftest_check_superblock() -> i32 {
     let mut sb = RaidSuperblock::new();
     sb.uuid = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let name_bytes = b"NovaVol-Root";
@@ -1019,10 +1009,11 @@ pub fn rust_raid_storage_selftest() -> i32 {
     if RaidSuperblock::decode(&corrupt_buf).is_ok() {
         return -3; // Must reject corrupted checksum
     }
+    0
+}
 
-    // -------------------------------------------------------------------------
-    // Check 2: RAID 0 Striping Verification
-    // -------------------------------------------------------------------------
+#[inline(never)]
+fn selftest_check_raid0() -> i32 {
     let disk_a = PhysicalDisk::new(1, b"nvme0n1", MOCK_SECTORS as u64, false);
     let disk_b = PhysicalDisk::new(2, b"nvme1n1", MOCK_SECTORS as u64, false);
     let initial_r0 = [disk_a, disk_b];
@@ -1054,10 +1045,11 @@ pub fn rust_raid_storage_selftest() -> i32 {
     if mock_disks_r0[0].data[0][0] != 0x42 || mock_disks_r0[1].data[0][0] != 0xBB {
         return -8;
     }
+    0
+}
 
-    // -------------------------------------------------------------------------
-    // Check 3: RAID 1 Mirroring, Zero-Data-Loss Failover & Round-Robin
-    // -------------------------------------------------------------------------
+#[inline(never)]
+fn selftest_check_raid1() -> i32 {
     let disk_m1 = PhysicalDisk::new(10, b"sda", MOCK_SECTORS as u64, false);
     let disk_m2 = PhysicalDisk::new(20, b"sdb", MOCK_SECTORS as u64, false);
     let initial_r1 = [disk_m1, disk_m2];
@@ -1096,14 +1088,10 @@ pub fn rust_raid_storage_selftest() -> i32 {
         return -13;
     }
 
-    // -------------------------------------------------------------------------
     // Check 4: Fault Failover on Physical Drive Failure
-    // -------------------------------------------------------------------------
-    // Simulate catastrophic hardware failure of disk 0
     mock_disks_r1[0].set_failure(true);
     vol_r1.read_rr_index = 0; // Ensure read begins at failing disk 0 to trigger failover
 
-    // Read must succeed seamlessly from surviving disk 1 without errors
     let mut failover_buf = [0u8; SECTOR_SIZE];
     if vol_r1.read_sector(&mut mock_disks_r1[0..2], 10, &mut failover_buf).is_err() {
         return -14;
@@ -1115,20 +1103,16 @@ pub fn rust_raid_storage_selftest() -> i32 {
         return -16;
     }
 
-    // -------------------------------------------------------------------------
     // Check 5: Hot-Plug Spare Disk & Automatic Background Rebuild
-    // -------------------------------------------------------------------------
     let hot_spare = PhysicalDisk::new(30, b"sdc", MOCK_SECTORS as u64, true);
     if vol_r1.hotplug_disk(hot_spare).is_err() {
         return -17;
     }
 
-    // Volume should automatically transition to Rebuilding
     if vol_r1.state != VolumeState::Rebuilding {
         return -18;
     }
 
-    // Step the rebuild until complete
     let mut steps = 0;
     while !vol_r1.step_rebuild(&mut mock_disks_r1[0..3]) {
         steps += 1;
@@ -1137,19 +1121,19 @@ pub fn rust_raid_storage_selftest() -> i32 {
         }
     }
 
-    // Redundancy restored to Healthy!
     if vol_r1.state != VolumeState::Healthy {
         return -20;
     }
 
-    // Verify rebuilt disk 2 now contains the exact mirrored payload at LBA 10
     if mock_disks_r1[2].data[10][10..14] != [0xDE, 0xAD, 0xBE, 0xEF] {
         return -21;
     }
 
-    // -------------------------------------------------------------------------
-    // Check 6: RAID 10 (Striped Mirrors 1+0) Verification
-    // -------------------------------------------------------------------------
+    0
+}
+
+#[inline(never)]
+fn selftest_check_raid10() -> i32 {
     let d10_1 = PhysicalDisk::new(101, b"d1", MOCK_SECTORS as u64, false);
     let d10_2 = PhysicalDisk::new(102, b"d2", MOCK_SECTORS as u64, false);
     let d10_3 = PhysicalDisk::new(103, b"d3", MOCK_SECTORS as u64, false);
@@ -1173,7 +1157,6 @@ pub fn rust_raid_storage_selftest() -> i32 {
     if vol_r10.write_sector(&mut mock_disks_r10, 0, &r10_data).is_err() {
         return -24;
     }
-    // Verify both mirrors in pair 0 received the write
     if mock_disks_r10[0].data[0][0] != 0x10 || mock_disks_r10[1].data[0][0] != 0x10 {
         return -25;
     }
@@ -1188,15 +1171,45 @@ pub fn rust_raid_storage_selftest() -> i32 {
         return -27;
     }
 
-    // -------------------------------------------------------------------------
-    // Check 7: Dynamic Volume Resizing (Capacity Expansion)
-    // -------------------------------------------------------------------------
+    // Check 7: Dynamic Volume Resizing
     let initial_cap = vol_r10.volume_sectors;
     if vol_r10.extend_volume(512).is_err() {
         return -28;
     }
     if vol_r10.volume_sectors != initial_cap + 512 {
         return -29;
+    }
+
+    0
+}
+
+/// Comprehensive kernel-side self-test validating:
+///   1. 512-byte on-disk RaidSuperblock encode, CRC32 verification, and decode.
+///   2. RAID 0 striping across disks with correct LBA address translation.
+///   3. RAID 1 synchronous write replication and round-robin load-balanced reads.
+///   4. RAID 1 instantaneous fault failover upon disk failure with ZERO data loss.
+///   5. Hot-plug disk detection, auto-spare activation, and background rebuild.
+///   6. RAID 10 multi-drive striped-mirror operations and resilience.
+///   7. Dynamic volume pooling and online capacity expansion.
+pub fn rust_raid_storage_selftest() -> i32 {
+    let res1 = selftest_check_superblock();
+    if res1 != 0 {
+        return res1;
+    }
+
+    let res2 = selftest_check_raid0();
+    if res2 != 0 {
+        return res2;
+    }
+
+    let res3 = selftest_check_raid1();
+    if res3 != 0 {
+        return res3;
+    }
+
+    let res4 = selftest_check_raid10();
+    if res4 != 0 {
+        return res4;
     }
 
     // All 7 check stages passed successfully!
