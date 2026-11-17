@@ -86,7 +86,7 @@ void exec_trust_demo_task(void) {
      * reply" notes of udptest and the ping demos). Nothing after it changes a
      * rule, so the lock costs the others nothing. */
     static const char* const fw_all[] = {"FWTEST.ELF"};
-    int pid_fw = sys_exec_trusted("FWTEST.ELF", (char**)fw_all, 1);
+    int pid_fw = sys_exec_trusted("FWTEST.ELF", (const char**)fw_all, 1);
     int code_fw = (pid_fw >= 0) ? sys_wait(pid_fw) : -1;
     sys_write(pid_fw >= 0 && code_fw == 0
                   ? "[sandbox] PASS: FWTEST.ELF (stateful firewall "
@@ -440,7 +440,7 @@ void exec_trust_demo_task(void) {
          * Proves VFS directory listing, metadata classification, mouse selection,
          * text file preview, move, and delete operations from ring 3. */
         static const char* const files_all[] = {"FILES.ELF", "--selftest"};
-        int pid_files = sys_exec_trusted("FILES.ELF", (char**)files_all, 2);
+        int pid_files = sys_exec_trusted("FILES.ELF", (const char**)files_all, 2);
         int code_files = (pid_files >= 0) ? sys_wait(pid_files) : -1;
         sys_write(pid_files >= 0 && code_files == 0
                       ? "[sandbox] PASS: FILES.ELF --selftest - file browser, "
@@ -453,7 +453,7 @@ void exec_trust_demo_task(void) {
          * writing SYSTEM.CFG, USERS.CFG, and SERVICES.CFG, plus live
          * kernel firewall telemetry and rule table (SYS_FW_INFO, SYS_FW_CTL). */
         static const char* const settings_all[] = {"SETTINGS.ELF", "--selftest"};
-        int pid_settings = sys_exec_trusted("SETTINGS.ELF", (char**)settings_all, 2);
+        int pid_settings = sys_exec_trusted("SETTINGS.ELF", (const char**)settings_all, 2);
         int code_settings = (pid_settings >= 0) ? sys_wait(pid_settings) : -1;
         sys_write(pid_settings >= 0 && code_settings == 0
                       ? "[sandbox] PASS: SETTINGS.ELF --selftest - settings shell, "
@@ -466,7 +466,7 @@ void exec_trust_demo_task(void) {
          * wrapping, scrolling, ANSI escape sequence decoding, interactive line
          * editing, and shell command execution dispatch from ring 3. */
         static const char* const term_all[] = {"TERM.ELF", "--selftest"};
-        int pid_term = sys_exec_trusted("TERM.ELF", (char**)term_all, 2);
+        int pid_term = sys_exec_trusted("TERM.ELF", (const char**)term_all, 2);
         int code_term = (pid_term >= 0) ? sys_wait(pid_term) : -1;
         sys_write(pid_term >= 0 && code_term == 0
                       ? "[sandbox] PASS: TERM.ELF --selftest - in-window terminal "
@@ -478,7 +478,7 @@ void exec_trust_demo_task(void) {
          * Proves multi-line text buffer, line splitting/merging, cursor navigation,
          * typography scaling, file loading/saving roundtrip, and toolbar interaction. */
         static const char* const edit_all[] = {"EDIT.ELF", "--selftest"};
-        int pid_edit = sys_exec_trusted("EDIT.ELF", (char**)edit_all, 2);
+        int pid_edit = sys_exec_trusted("EDIT.ELF", (const char**)edit_all, 2);
         int code_edit = (pid_edit >= 0) ? sys_wait(pid_edit) : -1;
         sys_write(pid_edit >= 0 && code_edit == 0
                       ? "[sandbox] PASS: EDIT.ELF --selftest - text buffer, cursor navigation, "
@@ -491,7 +491,7 @@ void exec_trust_demo_task(void) {
          * install database record management (install/remove), repository catalog search,
          * in-kernel package repository HTTP telemetry (SYS_PKGREPO_CTL), and graphical store presentation. */
         static const char* const store_all[] = {"STORE.ELF", "--selftest"};
-        int pid_store = sys_exec_trusted("STORE.ELF", (char**)store_all, 2);
+        int pid_store = sys_exec_trusted("STORE.ELF", (const char**)store_all, 2);
         int code_store = (pid_store >= 0) ? sys_wait(pid_store) : -1;
         sys_write(pid_store >= 0 && code_store == 0
                       ? "[sandbox] PASS: STORE.ELF --selftest - package manifest parsing, "
@@ -505,7 +505,7 @@ void exec_trust_demo_task(void) {
          * password buffer handling and masking, hero digital clock, session selector,
          * and graphical login presentation on BufferSurface32. */
         static const char* const login_all[] = {"LOGIN.ELF", "--selftest"};
-        int pid_login = sys_exec_trusted("LOGIN.ELF", (char**)login_all, 2);
+        int pid_login = sys_exec_trusted("LOGIN.ELF", (const char**)login_all, 2);
         int code_login = (pid_login >= 0) ? sys_wait(pid_login) : -1;
         sys_write(pid_login >= 0 && code_login == 0
                       ? "[sandbox] PASS: LOGIN.ELF --selftest - user account parsing, "
@@ -613,7 +613,7 @@ void exec_trust_demo_task(void) {
      * capability and only the profile holds it. It runs LAST: the freeze at
      * its end cannot be undone until reboot. */
     static const char* const mac_all[] = {"MACTEST.ELF"};
-    int pid_mac = sys_exec_trusted("MACTEST.ELF", (char**)mac_all, 1);
+    int pid_mac = sys_exec_trusted("MACTEST.ELF", (const char**)mac_all, 1);
     int code_mac = (pid_mac >= 0) ? sys_wait(pid_mac) : -1;
     sys_write(pid_mac >= 0 && code_mac == 0
                   ? "[sandbox] PASS: MACTEST.ELF (mandatory access control "
