@@ -40,6 +40,7 @@ fn print_usage() {
     println!("    exec     Run a command in a running container");
     println!("    images   List local container images");
     println!("    wg       Configure and manage native WireGuard VPN tunnels");
+    println!("    service  Manage systemd-style services & daemons (novad orchestrator)");
     println!("    selftest Run automated verification test suite");
     println!();
     println!("OPTIONS FOR 'run':");
@@ -428,6 +429,9 @@ fn main() {
                     process::exit(1);
                 }
             }
+        }
+        "service" => {
+            novactl::service::handle_service_cmd(&args[2..]);
         }
         unknown => {
             eprintln!("novactl: '{}' is not a novactl command. See 'novactl --help'.", unknown);

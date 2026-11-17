@@ -1,0 +1,25 @@
+[package]
+name = "novad"
+version = "2.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Pure Rust Systemd-Style Service & Daemon Orchestrator (novad) with Dependency Graph & Socket Activation"
+
+[lib]
+name = "novad"
+path = "src/lib.rs"
+
+[[bin]]
+name = "novad"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

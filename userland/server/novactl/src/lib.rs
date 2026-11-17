@@ -17,6 +17,7 @@ pub mod network;
 pub mod oci;
 pub mod storage;
 pub mod wireguard;
+pub mod service;
 
 pub use cgroup::{CgroupController, ContainerMetrics};
 pub use container::{Container, ContainerConfig, ContainerEngine, ContainerStatus};
@@ -254,8 +255,17 @@ pub fn run_novactl_selftest() -> bool {
     assert!(wireguard::execute_wg_command(&["show".to_string(), "wg0".to_string()]).is_ok());
     println!("PASSED");
 
+    // 10. Service Orchestrator (novad) integration
+    print!("[TEST 10/10] Service Orchestrator (novad) CLI Integration... ");
+    let mut svc_mgr = novad::ServiceManager::new();
+    assert!(svc_mgr.boot_target("default.target").is_ok());
+    assert_eq!(svc_mgr.status_unit("novasshd.service").unwrap().state, novad::UnitState::Active);
+    assert!(svc_mgr.stop_unit("novasshd.service").is_ok());
+    assert_eq!(svc_mgr.status_unit("novasshd.service").unwrap().state, novad::UnitState::Inactive);
+    println!("PASSED");
+
     println!("============================================================");
-    println!("  ALL 9/9 NOVACTL CONTAINER & WIREGUARD CHECKS PASSED       ");
+    println!("  ALL 10/10 NOVACTL ENGINE, WIREGUARD & SERVICE CHECKS PASSED ");
     println!("============================================================");
     true
 }

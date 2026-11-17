@@ -1,0 +1,17 @@
+[Unit]
+Description=NovaOS OpenSSH-Compatible SSH-2 Server Daemon
+After=network.target novafw.service
+Requires=network.target
+Wants=novafw.service
+
+[Service]
+Type=simple
+ExecStart=/bin/novasshd -p 22
+Restart=always
+RestartSec=2s
+RestartMaxSec=30s
+WatchdogSec=15s
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

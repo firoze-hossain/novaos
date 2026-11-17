@@ -1,0 +1,11 @@
+[Unit]
+Description=System Logging Socket
+Before=syslog.service
+
+[Socket]
+ListenStream=/run/systemd/journal/stdout
+ListenStream=127.0.0.1:5140
+Service=syslog.service
+
+[Install]
+WantedBy=sockets.target

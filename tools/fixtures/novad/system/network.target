@@ -1,0 +1,7 @@
+[Unit]
+Description=Network Initialization & Filtering Target
+After=novafw.service
+Wants=novafw.service
+
+[Install]
+WantedBy=multi-user.target

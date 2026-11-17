@@ -1,0 +1,12 @@
+[Unit]
+Description=NovaOS Stateful Packet-Filter Firewall & NAT Subsystem
+Before=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/novafw load /etc/novafw.conf
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target

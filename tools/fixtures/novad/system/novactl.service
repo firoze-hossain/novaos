@@ -1,0 +1,16 @@
+[Unit]
+Description=NovaOS Container Runtime Engine Daemon (novactl)
+After=network.target cgroup.target
+Requires=cgroup.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/novactl daemon
+Restart=on-failure
+RestartSec=3s
+RestartMaxSec=60s
+WatchdogSec=30s
+
+[Install]
+WantedBy=multi-user.target

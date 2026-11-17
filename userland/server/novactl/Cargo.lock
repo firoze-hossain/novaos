@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "novactl"
 version = "2.0.0"
+dependencies = [
+ "novad",
+]
+
+[[package]]
+name = "novad"
+version = "2.0.0"
