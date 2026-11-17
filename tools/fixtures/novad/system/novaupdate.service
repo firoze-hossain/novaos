@@ -1,0 +1,17 @@
+[Unit]
+Description=NovaOS Automated Unattended Update Engine & A/B Rollback Service (novaupdate)
+After=network.target novad.service
+Requires=network.target
+Wants=novamon.service
+
+[Service]
+Type=simple
+ExecStart=/bin/novaupdate daemon
+Restart=on-failure
+RestartSec=5s
+RestartMaxSec=60s
+WatchdogSec=60s
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

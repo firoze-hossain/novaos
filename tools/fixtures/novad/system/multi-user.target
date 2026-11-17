@@ -1,4 +1,4 @@
 [Unit]
 Description=NovaOS Multi-User Server Environment Target
 Requires=network.target sockets.target
-Wants=novasshd.service novactl.service novamon.service
+Wants=novasshd.service novactl.service novamon.service novaupdate.service

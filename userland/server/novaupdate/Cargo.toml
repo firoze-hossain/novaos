@@ -1,0 +1,25 @@
+[package]
+name = "novaupdate"
+version = "2.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Automated Unattended Security Updates with Atomic A/B Rollback and Hardware Watchdog for NovaOS"
+
+[lib]
+name = "novaupdate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "novaupdate"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
