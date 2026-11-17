@@ -81,6 +81,9 @@ pub mod scheduler64;
 #[path = "../src/drivers/storage/nvme.rs"]
 pub mod nvme2;
 
+#[path = "../src/drivers/storage/raid.rs"]
+pub mod raid;
+
 #[path = "../src/drivers/usb/mod.rs"]
 pub mod usb;
 
@@ -464,6 +467,14 @@ pub extern "C" fn rust_enterprise_tcp_selftest() -> i32 {
         1
     }
 }
+
+/// NovaOS 2.0 (Month 5 - Enterprise Storage): Enterprise Software RAID (RAID 0/1/10, hot-plug, auto-rebuild, NovaVolume)
+/// self-test callable from kernel boot sequence.
+#[no_mangle]
+pub extern "C" fn rust_raid_storage_selftest() -> i32 {
+    raid::rust_raid_storage_selftest()
+}
+
 
 
 

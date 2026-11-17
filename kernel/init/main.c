@@ -346,6 +346,16 @@ void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     kernel_log("[ %s ] Control Groups v2 initialized (unified hierarchy, memory.max OOM, cpu.max CFS, io.max, pids.max at /sys/fs/cgroup)\n",
                cg_res == 0 ? "OK" : "FAIL");
 
+    /* NovaOS 2.0 (Month 5 - Enterprise Storage): Enterprise Multi-Disk Storage & Software RAID Subsystem
+     * (kernel/src/drivers/storage/raid.rs).
+     * Software RAID 0, RAID 1 mirroring, RAID 10 striped mirrors, and dynamic volume pooling (NovaVolume).
+     * Features hot-plug disk detection, automatic spare activation, background rebuilds, write intent bitmap,
+     * persistent 512-byte RAID superblocks with CRC32 integrity, and online volume capacity expansion. */
+    extern int rust_raid_storage_selftest(void);
+    int raid_res = rust_raid_storage_selftest();
+    kernel_log("[ %s ] Enterprise Software RAID initialized (RAID 0/1/10, hot-plug, auto-rebuild, NovaVolume pooling)\n",
+               raid_res == 0 ? "OK" : "FAIL");
+
     /* Phase 79: a real VESA/VBE linear framebuffer, if GRUB actually
      * negotiated one (kernel/arch/x86/boot/multiboot.asm's own
      * header request) - see kernel/drivers/video/vbe.c's own vbe_

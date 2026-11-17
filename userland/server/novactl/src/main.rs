@@ -41,6 +41,7 @@ fn print_usage() {
     println!("    images   List local container images");
     println!("    wg       Configure and manage native WireGuard VPN tunnels");
     println!("    service  Manage systemd-style services & daemons (novad orchestrator)");
+    println!("    volume   Manage multi-disk storage pools & software RAID (NovaVolume)");
     println!("    selftest Run automated verification test suite");
     println!();
     println!("OPTIONS FOR 'run':");
@@ -432,6 +433,9 @@ fn main() {
         }
         "service" => {
             novactl::service::handle_service_cmd(&args[2..]);
+        }
+        "volume" | "storage" => {
+            novactl::storage::handle_volume_cmd(&args[2..]);
         }
         unknown => {
             eprintln!("novactl: '{}' is not a novactl command. See 'novactl --help'.", unknown);

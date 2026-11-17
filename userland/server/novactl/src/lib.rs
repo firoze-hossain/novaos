@@ -27,7 +27,10 @@ pub use namespace::{
 };
 pub use network::{ContainerNetworkConfig, NetworkManager, PortMapping};
 pub use oci::{OciLinuxResources, OciMount, OciProcess, OciRoot, OciSpec};
-pub use storage::{ImageInfo, StorageManager};
+pub use storage::{
+    DiskHealth, ImageInfo, PhysicalDiskInfo, RaidLevel, StorageManager, VolumeManager,
+    VolumeStatus, VolumeSuperblock,
+};
 
 use std::time::Instant;
 
@@ -256,7 +259,7 @@ pub fn run_novactl_selftest() -> bool {
     println!("PASSED");
 
     // 10. Service Orchestrator (novad) integration
-    print!("[TEST 10/10] Service Orchestrator (novad) CLI Integration... ");
+    print!("[TEST 10/11] Service Orchestrator (novad) CLI Integration... ");
     let mut svc_mgr = novad::ServiceManager::new();
     assert!(svc_mgr.boot_target("default.target").is_ok());
     assert_eq!(svc_mgr.status_unit("novasshd.service").unwrap().state, novad::UnitState::Active);
@@ -264,8 +267,62 @@ pub fn run_novactl_selftest() -> bool {
     assert_eq!(svc_mgr.status_unit("novasshd.service").unwrap().state, novad::UnitState::Inactive);
     println!("PASSED");
 
+    // 11. Enterprise Software RAID & Dynamic Volume Pooling (NovaVolume)
+    print!("[TEST 11/11] Enterprise Software RAID & Dynamic Volume Pooling (NovaVolume)... ");
+    let mut vol_mgr = VolumeManager::new();
+    let r1_vol = vol_mgr.create_volume(
+        "selftest-r1",
+        RaidLevel::Raid1,
+        &["/dev/nvme0n1".to_string(), "/dev/nvme1n1".to_string()],
+        &["/dev/nvme2n1".to_string()],
+        Some(64),
+    ).expect("Failed to create RAID-1 volume");
+
+    assert_eq!(r1_vol.active_members, 2);
+    assert_eq!(r1_vol.total_members, 3);
+    assert_eq!(r1_vol.state, VolumeStatus::Healthy);
+
+    // Online capacity expansion
+    let initial_cap = r1_vol.volume_sectors;
+    let ext_vol = vol_mgr.extend_volume("selftest-r1", 4096).expect("Failed to extend volume");
+    assert_eq!(ext_vol.volume_sectors, initial_cap + 4096);
+    assert!(ext_vol.generation > r1_vol.generation);
+
+    // Drive failure injection -> automatic hot-spare takeover
+    let failed_vol = vol_mgr.fail_disk("selftest-r1", "/dev/nvme0n1").expect("Failed to inject drive failure");
+    assert_eq!(failed_vol.state, VolumeStatus::Rebuilding);
+    assert_eq!(failed_vol.members[0].status, DiskHealth::Failed);
+    assert_eq!(failed_vol.members[2].status, DiskHealth::Rebuilding);
+
+    // Background rebuild progression to 100%
+    let _ = vol_mgr.step_rebuild("selftest-r1");
+    let rebuilt_vol = vol_mgr.step_rebuild("selftest-r1").expect("Failed to step rebuild");
+    assert_eq!(rebuilt_vol.state, VolumeStatus::Healthy);
+    assert_eq!(rebuilt_vol.rebuild_progress, 100.0);
+    assert_eq!(rebuilt_vol.members[2].status, DiskHealth::Online);
+
+    // RAID-10 volume creation
+    let r10_vol = vol_mgr.create_volume(
+        "selftest-r10",
+        RaidLevel::Raid10,
+        &["/dev/sda".to_string(), "/dev/sdb".to_string(), "/dev/sdc".to_string(), "/dev/sdd".to_string()],
+        &[],
+        None,
+    ).expect("Failed to create RAID-10 volume");
+    assert_eq!(r10_vol.active_members, 4);
+    assert_eq!(r10_vol.state, VolumeStatus::Healthy);
+
+    // CLI dispatch verification
+    storage::handle_volume_cmd(&["list".to_string()]);
+    storage::handle_volume_cmd(&["status".to_string(), "selftest-r1".to_string()]);
+
+    // Teardown
+    assert!(vol_mgr.delete_volume("selftest-r1").is_ok());
+    assert!(vol_mgr.delete_volume("selftest-r10").is_ok());
+    println!("PASSED");
+
     println!("============================================================");
-    println!("  ALL 10/10 NOVACTL ENGINE, WIREGUARD & SERVICE CHECKS PASSED ");
+    println!("  ALL 11/11 NOVACTL ENGINE, STORAGE, WIREGUARD & SERVICE CHECKS PASSED ");
     println!("============================================================");
     true
 }
