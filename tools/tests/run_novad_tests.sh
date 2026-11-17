@@ -75,6 +75,7 @@ if command -v cargo >/dev/null 2>&1; then
     LIST_OUT=$("$NOVAD_BIN" list-units)
     echo "$LIST_OUT" | grep -q "novafw.service" || { echo "Error: novafw.service missing from list"; exit 1; }
     echo "$LIST_OUT" | grep -q "novactl.service" || { echo "Error: novactl.service missing from list"; exit 1; }
+    echo "$LIST_OUT" | grep -q "novamon.service" || { echo "Error: novamon.service missing from list"; exit 1; }
 
     # Graceful shutdown
     SHUTDOWN_OUT=$("$NOVAD_BIN" shutdown)

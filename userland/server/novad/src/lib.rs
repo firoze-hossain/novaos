@@ -357,6 +357,7 @@ StartLimitIntervalSec=10s
         "novasshd.service",
         "novafw.service",
         "novactl.service",
+        "novamon.service",
         "network.target",
         "multi-user.target",
         "default.target",
@@ -380,9 +381,17 @@ StartLimitIntervalSec=10s
     let sshd_status = sys_mgr.status_unit("novasshd.service").unwrap();
     let fw_status = sys_mgr.status_unit("novafw.service").unwrap();
     let ctl_status = sys_mgr.status_unit("novactl.service").unwrap();
+    let mon_status = sys_mgr.status_unit("novamon.service").unwrap();
 
-    if sshd_status.state != UnitState::Active || fw_status.state != UnitState::Active || ctl_status.state != UnitState::Active {
-        println!("FAILED: System units not all active after boot: sshd={:?}, fw={:?}, ctl={:?}", sshd_status.state, fw_status.state, ctl_status.state);
+    if sshd_status.state != UnitState::Active
+        || fw_status.state != UnitState::Active
+        || ctl_status.state != UnitState::Active
+        || mon_status.state != UnitState::Active
+    {
+        println!(
+            "FAILED: System units not all active after boot: sshd={:?}, fw={:?}, ctl={:?}, mon={:?}",
+            sshd_status.state, fw_status.state, ctl_status.state, mon_status.state
+        );
         return false;
     }
 

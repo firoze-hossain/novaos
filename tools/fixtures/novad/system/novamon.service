@@ -1,0 +1,17 @@
+[Unit]
+Description=NovaOS Prometheus Telemetry Exporter & Health Metrics Agent (novamon)
+After=network.target novafw.service
+Requires=network.target
+Wants=novafw.service
+
+[Service]
+Type=simple
+ExecStart=/bin/novamon -p 9100
+Restart=always
+RestartSec=2s
+RestartMaxSec=30s
+WatchdogSec=15s
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

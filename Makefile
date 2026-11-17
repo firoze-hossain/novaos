@@ -808,6 +808,13 @@ novasshd-test:
 novad-test:
 	@sh tools/tests/run_novad_tests.sh
 
+# Month 3 - Server & Containers: Prometheus Telemetry Exporter & Health Metrics Agent (novamon)
+# suite on the host: zero-allocation scratch buffer, virtual FS telemetry sampling (/proc/stat, /proc/meminfo,
+# /proc/net/dev, /proc/diskstats, /proc/net/sockstat, /sys/class/thermal), Prometheus 0.0.4 text exposition,
+# and high-throughput HTTP server (/metrics, /health, /).
+novamon-test:
+	@sh tools/tests/run_novamon_tests.sh
+
 # Month 5 - Desktop Experience: Intel High Definition Audio (HDA) Driver & Sound Subsystem
 # suite on the host: CORB/RIRB DMA engine, BDL cyclic stream rings, 24-bit 96kHz multi-channel PCM,
 # codec discovery, widget topology, pin configs, and /dev/snd/pcm0p character device.
@@ -939,4 +946,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot

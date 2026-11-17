@@ -300,7 +300,29 @@ WantedBy=multi-user.target
 "#;
         let _ = self.load_unit_from_str("novactl.service", novactl_unit);
 
-        // 6. syslog.socket & syslog.service (demonstrating socket activation)
+        // 6. novamon.service
+        let novamon_unit = r#"
+[Unit]
+Description=NovaOS Prometheus Telemetry Exporter & Health Metrics Agent (novamon)
+After=network.target novafw.service
+Requires=network.target
+Wants=novafw.service
+
+[Service]
+Type=simple
+ExecStart=/bin/novamon -p 9100
+Restart=always
+RestartSec=2s
+RestartMaxSec=30s
+WatchdogSec=15s
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+"#;
+        let _ = self.load_unit_from_str("novamon.service", novamon_unit);
+
+        // 7. syslog.socket & syslog.service (demonstrating socket activation)
         let syslog_socket = r#"
 [Unit]
 Description=System Logging Socket
@@ -338,12 +360,12 @@ Wants=syslog.socket
 "#;
         let _ = self.load_unit_from_str("sockets.target", sockets_target);
 
-        // 8. multi-user.target
+        // 9. multi-user.target
         let multi_user_target = r#"
 [Unit]
 Description=NovaOS Multi-User Server Environment Target
 Requires=network.target sockets.target
-Wants=novasshd.service novactl.service
+Wants=novasshd.service novactl.service novamon.service
 "#;
         let _ = self.load_unit_from_str("multi-user.target", multi_user_target);
 
