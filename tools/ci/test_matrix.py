@@ -516,6 +516,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="14/14 checks (EDID 1.4, 100-200% DPI scaling, vector icons, compositor multi-monitor)"
     ),
     SubsystemSuiteDef(
+        id="test-cloud-init",
+        name="Cloud-Init & Headless Server Automated Provisioning",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_cloud_init_tests.sh",
+        make_target="test-cloud-init",
+        assertion_desc="14/14 checks (NoCloud/ConfigDrive, Netplan v2, SSH keys, user creation, idempotency)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",

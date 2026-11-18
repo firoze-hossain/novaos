@@ -1,0 +1,14 @@
+[Unit]
+Description=NovaOS Cloud-Init Automated Headless Provisioning Service
+Before=network.target multi-user.target novasshd.service
+After=local-fs.target
+Requires=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/novainit init
+RemainAfterExit=yes
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
