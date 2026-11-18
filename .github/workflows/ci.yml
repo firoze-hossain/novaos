@@ -29,7 +29,7 @@ jobs:
           # confirmed missing here as the actual root cause of a real
           # CI failure (`make disk.img` exiting 127, command not
           # found), not a defensive addition.
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             nasm gcc-multilib xorriso grub-pc-bin grub-common \
             qemu-system-x86 mtools parted e2fsprogs
 
