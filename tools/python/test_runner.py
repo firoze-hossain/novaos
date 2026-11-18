@@ -26,15 +26,18 @@ directly as a CI/Makefile gate.
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD_DIR = REPO_ROOT / "build"
@@ -1416,6 +1419,8 @@ def boot_and_capture(
     nvme_disk_path: Path = DEFAULT_NVME_DISK,
     virgl: bool = False,
     smp: int = 2,
+    working_disk_path: Optional[Path] = None,
+    screendump_path: Optional[Path] = None,
 ) -> None:
     """Boots NovaOS headlessly under QEMU, capturing serial output to
     `log_path` - the same invocation shape as the Makefile's own
@@ -1430,7 +1435,10 @@ def boot_and_capture(
     if log_path.exists():
         log_path.unlink()
 
-    working_disk = BUILD_DIR / "test-disk.img"
+    if working_disk_path is not None:
+        working_disk = working_disk_path
+    else:
+        working_disk = BUILD_DIR / f"test-disk-{disk_path.stem}.img"
     shutil.copyfile(disk_path, working_disk)
 
     ensure_virtio_test_disk(virtio_disk_path)
@@ -1453,6 +1461,17 @@ def boot_and_capture(
                 base_flags[idx + 1] = str(smp)
                 break
 
+    qmp_flags = []
+    qmp_sock_path = None
+    if screendump_path is not None:
+        qmp_sock_path = BUILD_DIR / f"qmp-{log_path.stem}-{int(time.time()*1000)%1000000}.sock"
+        if qmp_sock_path.exists():
+            try:
+                qmp_sock_path.unlink()
+            except OSError:
+                pass
+        qmp_flags = ["-qmp", f"unix:{qmp_sock_path},server,nowait"]
+
     cmd = (
         [qemu_bin]
         + base_flags
@@ -1463,6 +1482,7 @@ def boot_and_capture(
         + USB_FLAGS
         + virtio_flags
         + nvme_flags
+        + qmp_flags
         + ["-cdrom", str(iso_path),
            # virgl executes OpenGL on the host, so it needs a GL-capable
            # display: gtk,gl=on (needs $DISPLAY - tools/tests/
@@ -1489,6 +1509,23 @@ def boot_and_capture(
     deadline = started + timeout_seconds
     all_seen_at = None
     positive = [a for a in ASSERTIONS if not a.negative]
+
+    def dump_screen() -> None:
+        if screendump_path and qmp_sock_path and qmp_sock_path.exists():
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(2.0)
+                s.connect(str(qmp_sock_path))
+                s.recv(1024)
+                s.sendall(json.dumps({"execute": "qmp_capabilities"}).encode("utf-8") + b"\n")
+                s.recv(1024)
+                screendump_path.parent.mkdir(parents=True, exist_ok=True)
+                s.sendall(json.dumps({"execute": "screendump", "arguments": {"filename": str(screendump_path.resolve())}}).encode("utf-8") + b"\n")
+                s.recv(1024)
+                s.close()
+            except Exception:
+                pass
+
     try:
         while proc.poll() is None and time.monotonic() < deadline:
             time.sleep(1)
@@ -1505,6 +1542,8 @@ def boot_and_capture(
                           f"{now - started:.0f}s.")
                     break
     finally:
+        # Capture framebuffer screendump if requested
+        dump_screen()
         # This kernel never exits QEMU itself, so what ends a normal run
         # is either the early exit above or the timeout - neither is a
         # failure by itself. Whether the run actually succeeded is
@@ -1514,6 +1553,11 @@ def boot_and_capture(
         if proc.poll() is None:
             proc.kill()
         proc.wait()
+        if qmp_sock_path and qmp_sock_path.exists():
+            try:
+                qmp_sock_path.unlink()
+            except OSError:
+                pass
 
 
 def run_checks(log_path: Path) -> bool:
@@ -1640,6 +1684,10 @@ def main() -> int:
                          help="number of CPUs for QEMU -smp N (default: 2 or $SMP)")
     parser.add_argument("--profile", choices=["desktop", "server"], default="desktop",
                          help="Edition profile to test (desktop or server, default: %(default)s)")
+    parser.add_argument("--working-disk", type=Path, default=None,
+                         help="path to working copy of disk image (default: build/test-disk-<stem>.img)")
+    parser.add_argument("--screendump", type=Path, default=None,
+                         help="path to save a PPM framebuffer screenshot before QEMU exits")
     parser.add_argument("--virgl", action="store_true",
                          help="Phase 82: boot against a virgl-capable "
                               "virtio-gpu-gl-pci with a GL display and also "
@@ -1658,8 +1706,10 @@ def main() -> int:
 
     if args.boot:
         boot_and_capture(args.iso, args.disk, args.log, args.timeout,
-                          args.virtio_disk, nvme_disk_path=args.nvme_disk,
-                          virgl=args.virgl, smp=args.smp)
+                         args.virtio_disk, nvme_disk_path=args.nvme_disk,
+                         virgl=args.virgl, smp=args.smp,
+                         working_disk_path=args.working_disk,
+                         screendump_path=args.screendump)
 
     ok = run_checks(args.log)
     return 0 if ok else 1

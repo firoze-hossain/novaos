@@ -415,6 +415,12 @@ test-server: $(ISO_FILE) $(DISK_SERVER_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout $(TEST_TIMEOUT) \
 	    --iso $(ISO_FILE) --disk $(DISK_SERVER_IMG) --profile server --smp $(SMP)
 
+# Month 6 - Release Hardening: Automated CI/CD Qualification & Test Matrix Runner
+# Executes parallel headless QEMU instances across Desktop & Server edition builds (600+ validation assertions),
+# captures framebuffers for pixel-diff regression tests, and validates subsystem test suites across all 54 milestones.
+test-matrix: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG)
+	@python3 tools/ci/test_matrix.py --parallel --report build/test-matrix-report.json
+
 # Editions build & partition validation test suite
 test-editions:
 	@sh tools/tests/run_editions_test.sh
@@ -958,4 +964,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security release-signoff release clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security test-matrix release-signoff release clean setup check-prereqs help install-image test-custom-boot
