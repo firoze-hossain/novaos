@@ -45,6 +45,9 @@ pub mod backend;
 pub mod search;
 pub mod view;
 pub mod panels;
+pub mod display;
+
+pub use panels::DisplayPanel;
 
 use backend::{BootSlot, NovadCommand, NovadResponse, SlotHealth, SystemBackend};
 use nova_ui::prelude::{BufferSurface, Point};

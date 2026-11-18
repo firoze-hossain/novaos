@@ -61,22 +61,25 @@ if command -v cargo >/dev/null 2>&1; then
     SSHD_PID=$!
     trap 'kill $SSHD_PID 2>/dev/null || true; rm -f /tmp/novasshd_test.log' EXIT
 
-    # Wait for listener to bind
-    sleep 0.5
-
-    # Connect and read SSH version string
+    # Connect and read SSH version string (with retry loop for parallel CI load)
     BANNER=$(python3 -c "
-import socket
+import socket, time
 s = socket.socket()
 s.settimeout(2.0)
-try:
-    s.connect(('127.0.0.1', $TEST_PORT))
-    data = s.recv(1024)
-    print(data.decode('utf-8', errors='ignore').strip())
-except Exception as e:
-    print('ERROR:', e)
-finally:
-    s.close()
+banner = ''
+for _ in range(30):
+    try:
+        s.connect(('127.0.0.1', $TEST_PORT))
+        data = s.recv(1024)
+        banner = data.decode('utf-8', errors='ignore').strip()
+        break
+    except Exception as e:
+        time.sleep(0.1)
+s.close()
+if banner:
+    print(banner)
+else:
+    print('ERROR: Connection failed after retries')
 ")
 
     kill $SSHD_PID 2>/dev/null || true

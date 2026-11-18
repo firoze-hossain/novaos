@@ -7,8 +7,10 @@ pub mod drm;
 pub mod virgl_cmd;
 pub mod virtio_3d;
 pub mod dmabuf;
+pub mod edid;
 
 pub use drm::{run_drm_kms_selftest, GLOBAL_DRM};
+pub use edid::*;
 pub use virgl_cmd::*;
 pub use virtio_3d::{run_virtio_3d_selftest, GLOBAL_VIRTIO_3D};
 pub use dmabuf::{

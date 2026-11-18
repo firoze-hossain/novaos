@@ -14,6 +14,7 @@ pub mod personalization;
 pub mod apps;
 pub mod accounts;
 pub mod updates;
+pub mod display;
 
 pub use system::SystemPanel;
 pub use network::NetworkPanel;
@@ -21,6 +22,7 @@ pub use personalization::PersonalizationPanel;
 pub use apps::AppsPanel;
 pub use accounts::AccountsPanel;
 pub use updates::UpdatesPanel;
+pub use display::DisplayPanel;
 
 use crate::backend::SystemBackend;
 use crate::types::{PanelCategory, SettingItem, SettingsAction};

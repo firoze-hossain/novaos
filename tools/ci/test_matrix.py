@@ -507,6 +507,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="14/14 checks (novaos-sdk, cargo-nova, templates, packaging, simulator)"
     ),
     SubsystemSuiteDef(
+        id="test-hidpi",
+        name="High-Resolution Display Scaling (HiDPI / Retina Support)",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_hidpi_tests.sh",
+        make_target="test-hidpi",
+        assertion_desc="14/14 checks (EDID 1.4, 100-200% DPI scaling, vector icons, compositor multi-monitor)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",

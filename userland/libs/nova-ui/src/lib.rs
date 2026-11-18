@@ -30,6 +30,7 @@ pub mod reactive;
 pub mod widget;
 pub mod theme;
 pub mod font;
+pub mod dpi;
 
 pub mod prelude {
     pub use crate::layout::{
@@ -57,6 +58,9 @@ pub mod prelude {
     pub use crate::font::{
         create_test_ttf_font, CachedGlyph, FontEngine, FontMetrics, GlyphAtlas, GlyphOutline,
         OutlinePoint, ParsedFont, SubpixelCoverage,
+    };
+    pub use crate::dpi::{
+        render_vector_icon, DisplayMetrics, DpiScale, VectorIcon, BASELINE_DPI,
     };
 }
 
@@ -244,6 +248,25 @@ pub fn run_nova_ui_selftest() -> bool {
     if font_engine.atlas.entries.is_empty() {
         return false;
     }
+
+    // 10. High-Resolution Display Scaling & Razor-Sharp Vector Icons
+    let retina_scale = DpiScale::Scale200;
+    if retina_scale.permille() != 2000 || retina_scale.to_physical(100) != 200 {
+        return false;
+    }
+    let scaled_bounds = retina_scale.scale_rect(Rect::new(10, 10, 24, 24));
+    if scaled_bounds.width != 48 || scaled_bounds.height != 48 {
+        return false;
+    }
+    render_vector_icon(
+        &mut surface,
+        VectorIcon::Checkmark,
+        scaled_bounds,
+        retina_scale,
+        PRIMARY_ACCENT,
+    );
+    // Render text at 200% Retina scale to test high-DPI font rasterization
+    font_engine.render_text(&mut surface, "4K", Point::new(20, 20), 14.0, 2.0, WHITE);
 
     true
 }
