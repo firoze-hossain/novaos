@@ -8,8 +8,8 @@ Download / inspect the updated spreadsheet: [NovaOS_Build_Plan.xlsx](file:///hom
 
 ```mermaid
 pie title NovaOS 2.0 Overall Progress (54 Total Tasks)
-    "Done (45)" : 45
-    "Planned (9)" : 9
+    "Done (46)" : 46
+    "Planned (8)" : 8
 ```
 
 | Track Name | Done | Planned | Total Tasks | % Complete | Status |
@@ -17,8 +17,8 @@ pie title NovaOS 2.0 Overall Progress (54 Total Tasks)
 | **Kernel & Architecture Track** (x86_64 Long Mode, UEFI, Syscall MSR, NVMe, VFS, NovaFS, nova_uring, Page Cache, POSIX ABI, DRM/KMS, VirtIO-GPU 3D, DMA-BUF, HDA) | **16** | **0** | **16** | **100.0%** | **Completed** |
 | **Desktop & UI Track** (Wayland Compositor, Fluent/macOS Shell, Core Apps, .app Bundles) | **16** | **0** | **16** | **100.0%** | **Completed** |
 | **Server Track** (Headless Kernel, cgroups v2, Containers, SSH-2, novad, novamon, RAID, novaupdate) | **12** | **0** | **12** | **100.0%** | **Completed** |
-| **Release & Enterprise Track** (Dual ISOs, CI Matrix, Security Audit, SDK) | **1** | **9** | **10** | **10.0%** | In Progress |
-| **Overall NovaOS 2.0 Project** | **45** | **9** | **54** | **83.33%** | **Active Sprint** |
+| **Release & Enterprise Track** (Dual ISOs, CI Matrix, Security Audit, SDK) | **2** | **8** | **10** | **20.0%** | In Progress |
+| **Overall NovaOS 2.0 Project** | **46** | **8** | **54** | **85.19%** | **Active Sprint** |
 
 ---
 
@@ -31,7 +31,7 @@ pie title NovaOS 2.0 Overall Progress (54 Total Tasks)
 | **Month 3 - Enterprise Server Core, Container Engine (cgroups/namespaces), Native SSH-2 & novamon** | 10 | 0 | 10 | 100.0% |
 | **Month 4 - DRM/KMS Hardware Graphics, VirtIO-GPU 3D & Wayland Compositor Engine** | 7 | 0 | 7 | 100.0% |
 | **Month 5 - Synthesized Desktop Shell & Enterprise Storage (Menu Bar, Dock, Snap, RAID, Updates, Core Apps)** | 14 | 0 | 14 | 100.0% |
-| **Month 6 - Production Hardening, Dual ISOs (Desktop & Server), CI Matrix & GA Launch** | 1 | 17 | 18 | 5.56% |
+| **Month 6 - Production Hardening, Dual ISOs (Desktop & Server), CI Matrix & GA Launch** | 2 | 8 | 10 | 20.0% |
 
 ---
 
@@ -102,12 +102,12 @@ pie title NovaOS 2.0 Overall Progress (54 Total Tasks)
 
 ---
 
-## Track 4: Release & Enterprise Track Progress (1 / 10 Done - 10.0%)
+## Track 4: Release & Enterprise Track Progress (2 / 10 Done - 20.0%)
 
 | Month | Task | Language | Status | Verification & Notes |
 |:---|:---|:---:|:---:|:---|
-| Month 6 - Release Hardening | **Automated CI/CD Qualification & Test Matrix Runner** | Python & Shell | **Done** | Implemented in [`tools/ci/test_matrix.py`](file:///home/firoze/projects/others/novaos/tools/ci/test_matrix.py), dedicated test runner [`tools/tests/run_ci_matrix_tests.sh`](file:///home/firoze/projects/others/novaos/tools/tests/run_ci_matrix_tests.sh), and Makefile target `test-matrix`. Enterprise continuous integration pipeline: (1) Headless Dual-Edition QEMU Matrix: executes Desktop Edition (343 assertions) and Server Edition (271 assertions) concurrently in parallel with isolated disks and serial logging, executing a combined 614 validation assertions (satisfying the 600+ requirement); (2) Framebuffer Capture & Pixel-Diff Visual Regression Engine: pure Python PPM `PixelDiffEngine` capturing live screendumps via QMP monitor socket, analyzing UI structural layout regions (macOS-style top menu bar, Windows 11 Fluent dark workspace canvas, centered dock), computing pixel delta, mismatch %, RMS color error, and generating visual diff maps; (3) Compositor Snap Layout Oracle: verifies damage rectangle dirty tile clipping with 0.000% leakage outside bounding box; (4) Subsystem Qualification Matrix: executes 21 milestone test suites covering security audit, software RAID, A/B updates, novad, novasshd, novamon, novafw, wireguard, TCP cubic/bbr, cgroups, namespaces, and compositor; (5) Enterprise Reporting: emits formatted ANSI terminal dashboards, structured JSON qualification reports (`--report`), and JUnit XML output. Tested via `tools/tests/run_ci_matrix_tests.sh` (15/15 checks passed 100%) and `make test-matrix`. |
-| Month 6 - Release Hardening | **Dual-Edition Release Packaging (Desktop ISO & Server ISO)** | Shell & Python | Planned | Create production-grade automated release packaging pipelines for both target editions: novaos-desktop-2.0.iso and novaos-server-2.0.iso with GPT hybrid boot and cryptographic signing. |
+| Month 6 - Release Hardening | **Automated CI/CD Qualification & Test Matrix Runner** | Python & Shell | **Done** | Implemented in [`tools/ci/test_matrix.py`](file:///home/firoze/projects/others/novaos/tools/ci/test_matrix.py), dedicated test runner [`tools/tests/run_ci_matrix_tests.sh`](file:///home/firoze/projects/others/novaos/tools/tests/run_ci_matrix_tests.sh), and Makefile target `test-matrix`. Enterprise continuous integration pipeline: (1) Headless Dual-Edition QEMU Matrix: executes Desktop Edition (343 assertions) and Server Edition (271 assertions) concurrently in parallel with isolated disks and serial logging, executing a combined 614 validation assertions (satisfying the 600+ requirement); (2) Framebuffer Capture & Pixel-Diff Visual Regression Engine: pure Python PPM `PixelDiffEngine` capturing live screendumps via QMP monitor socket, analyzing UI structural layout regions (macOS-style top menu bar, Windows 11 Fluent dark workspace canvas, centered dock), computing pixel delta, mismatch %, RMS color error, and generating visual diff maps; (3) Compositor Snap Layout Oracle: verifies damage rectangle dirty tile clipping with 0.000% leakage outside bounding box; (4) Subsystem Qualification Matrix: executes 22 milestone test suites covering security audit, software RAID, A/B updates, novad, novasshd, novamon, novafw, wireguard, TCP cubic/bbr, cgroups, namespaces, and compositor; (5) Enterprise Reporting: emits formatted ANSI terminal dashboards, structured JSON qualification reports (`--report`), and JUnit XML output. Tested via `tools/tests/run_ci_matrix_tests.sh` (15/15 checks passed 100%) and `make test-matrix`. |
+| Month 6 - Release Hardening | **Dual-Edition Release Packaging (Desktop ISO & Server ISO)** | Rust & Shell | **Done** | Implemented in automated pipeline script [`tools/release/build_release_images.sh`](file:///home/firoze/projects/others/novaos/tools/release/build_release_images.sh), pure Rust release packaging and inspection engine [`tools/release/`](file:///home/firoze/projects/others/novaos/tools/release/) ([`main.rs`](file:///home/firoze/projects/others/novaos/tools/release/src/main.rs), [`crc32.rs`](file:///home/firoze/projects/others/novaos/tools/release/src/crc32.rs), [`Cargo.toml`](file:///home/firoze/projects/others/novaos/tools/release/Cargo.toml)), qualification suite [`tools/tests/run_release_packaging_test.sh`](file:///home/firoze/projects/others/novaos/tools/tests/run_release_packaging_test.sh), and Makefile target `release-2.0`. Production release packaging pipeline: (1) `novaos-desktop-2.0.iso` (19MB): Hybrid UEFI/BIOS bootable installer containing the full Wayland compositor, Fluent/macOS shell, desktop apps, and dual-boot El Torito catalog (BIOS 0x88 + UEFI 0xEF); (2) `novaos-server-2.0.iso` (18MB): Optimized headless server image with serial console redirection (`console=ttyS0,115200`), novad orchestrator, novasshd, WireGuard, novafw, novamon, and cloud-init bootstrap; (3) Partitioned GPT Hybrid Raw Disk Images (`novaos-desktop-2.0.img` and `novaos-server-2.0.img`, 136MB each): GPT partition table with EFI System Partition (ESP), NovaOS System Partition (FAT32), ext2 root, Write-Ahead Journal, and Crash Dump partition; (4) Cryptographic Signing & Checksums: SHA-256 digest matrix (`SHA256SUMS`) and individual digests, enterprise GPG detached signatures (`SHA256SUMS.asc`, `*.sig`), and exported release public key (`novaos-release-2.0-key.asc`); (5) Release Manifest: `release_manifest.json` with structured metadata, formats, editions, sizes, and SHA-256 digests. Tested via `make test-release-packaging` (23/23 checks passed 100%) and `make release-2.0`. |
 | Month 6 - Release Hardening | **Enterprise Security Audit & Common Criteria / FIPS-140 Hardening** | Rust & C | Planned | Cross-track security audit across all kernel syscalls, capability boundaries, memory zeroization, stack canaries, KASLR, and non-root privilege drop verification. |
 | Month 6 - Release Hardening | **Developer SDK & Userland Application Framework (novaos-sdk)** | Rust | Planned | Release official NovaOS Developer SDK with project templates (`cargo new --template nova-app`), bindings for `nova-ui`, IPC event handling, and `.app` packaging. |
 | Month 6 - Release Hardening | **High-Resolution Display Scaling (HiDPI / Retina Support)** | Rust | Planned | Dynamic display scaling (100%, 125%, 150%, 200%) across desktop rendering pipeline, EDID detection, and vector font/icon scaling. |

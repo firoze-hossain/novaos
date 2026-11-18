@@ -97,6 +97,10 @@ compile_commands.json
 # ---- Phase 69: tools/pkgsign's own cargo build output - a normal
 # host-side Rust binary's target/ directory, not a source artifact ----
 tools/pkgsign/target/
+tools/release/target/
+release/**/keys/
+*.kbx
+trustdb.gpg
 
 # ---- Env / secrets (never commit) ----
 .env
