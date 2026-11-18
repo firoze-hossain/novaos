@@ -1,0 +1,14 @@
+[package]
+name = "nova-app-template"
+version = "0.1.0"
+edition = "2021"
+authors = ["NovaOS Developer"]
+description = "Starter Graphical Application for NovaOS 2.0"
+
+[dependencies]
+novaos-sdk = { path = "../../novaos-sdk" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"

@@ -1,0 +1,17 @@
+{
+  "bundle_id": "com.novaos.template.gui",
+  "display_name": "Nova App Template",
+  "version": "0.1.0",
+  "executable": "nova-app-template",
+  "category": "Utilities",
+  "icon": "Assets/icon.png",
+  "permissions": [
+    "ui",
+    "file_read"
+  ],
+  "window": {
+    "width": 640,
+    "height": 480,
+    "resizable": true
+  }
+}

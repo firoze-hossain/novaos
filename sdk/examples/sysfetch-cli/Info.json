@@ -1,0 +1,8 @@
+{
+  "bundle_id": "com.novaos.cli.sysfetch",
+  "display_name": "sysfetch",
+  "version": "2.0.0",
+  "executable": "sysfetch",
+  "category": "System",
+  "type": "cli"
+}

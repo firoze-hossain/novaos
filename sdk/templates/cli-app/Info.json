@@ -1,0 +1,8 @@
+{
+  "bundle_id": "com.novaos.template.cli",
+  "display_name": "Nova CLI Template",
+  "version": "0.1.0",
+  "executable": "nova-cli-template",
+  "category": "Development",
+  "type": "cli"
+}

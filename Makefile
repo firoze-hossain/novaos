@@ -450,6 +450,12 @@ release-2.0: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG) $(KERNEL_SERVER_BIN)
 test-release-packaging:
 	@bash tools/tests/run_release_packaging_test.sh
 
+# Month 6 - Release Hardening: Developer SDK & Userland Application Framework (novaos-sdk)
+test-sdk:
+	@sh tools/tests/run_sdk_tests.sh
+
+sdk-test: test-sdk
+
 # Phase 95: Dedicated 4-core SMP scaling validation test target.
 test-smp4: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout 600 \
@@ -979,4 +985,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security test-security-v2 security-v2-test test-matrix release-signoff release release-2.0 test-release-packaging clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security test-security-v2 security-v2-test test-matrix release-signoff release release-2.0 test-release-packaging test-sdk sdk-test clean setup check-prereqs help install-image test-custom-boot

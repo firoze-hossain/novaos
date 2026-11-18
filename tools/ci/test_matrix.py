@@ -498,6 +498,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="13/13 checks (CC EAL4+, FIPS 140-3 KAT, zeroize, constant-time, SSP canary, KASLR, non-root daemons)"
     ),
     SubsystemSuiteDef(
+        id="test-sdk",
+        name="Developer SDK & Userland Application Framework (novaos-sdk)",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_sdk_tests.sh",
+        make_target="test-sdk",
+        assertion_desc="14/14 checks (novaos-sdk, cargo-nova, templates, packaging, simulator)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",

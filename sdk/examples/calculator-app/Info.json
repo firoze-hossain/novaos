@@ -1,0 +1,16 @@
+{
+  "bundle_id": "com.novaos.calculator",
+  "display_name": "Calculator",
+  "version": "2.0.0",
+  "executable": "calculator",
+  "category": "Utilities",
+  "icon": "Assets/icon.png",
+  "permissions": [
+    "ui"
+  ],
+  "window": {
+    "width": 360,
+    "height": 480,
+    "resizable": false
+  }
+}
