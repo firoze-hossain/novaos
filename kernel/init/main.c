@@ -1809,6 +1809,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
                    "root privilege gates, user pointer bounds, MAC enforcement): result=%d\n",
                    audit_res == 0 ? "OK" : "FAIL", audit_res);
 
+        /* Month 6 - Release Hardening: Enterprise Security Audit v2.0 (Common Criteria EAL4, FIPS-140-3 KAT) */
+        extern int rust_security_audit_v2_selftest(void);
+        int audit_v2_res = rust_security_audit_v2_selftest();
+        kernel_log("[ %s ] Enterprise Security Audit v2.0 (Common Criteria EAL4, FIPS-140-3 KAT, constant-time, zeroize, KASLR, stack canary, daemon privilege drop): result=%d\n",
+                   audit_v2_res == 0 ? "OK" : "FAIL", audit_v2_res);
+
         /* Month 6 / Phase 99: On-disk partitioning and formatting engine self-test */
         extern int rust_disk_installer_selftest(void);
         int installer_res = rust_disk_installer_selftest();

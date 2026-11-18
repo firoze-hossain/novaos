@@ -4,3 +4,4 @@
 
 pub mod namespace;
 pub mod cgroups;
+pub mod audit;

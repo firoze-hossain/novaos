@@ -489,6 +489,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="10/10 kernel security checks (bounds, MAC, root gates, credential zeroing)"
     ),
     SubsystemSuiteDef(
+        id="test-security-v2",
+        name="Enterprise Security Audit & Common Criteria / FIPS-140 Hardening",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_security_v2_test.sh",
+        make_target="test-security-v2",
+        assertion_desc="13/13 checks (CC EAL4+, FIPS 140-3 KAT, zeroize, constant-time, SSP canary, KASLR, non-root daemons)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",

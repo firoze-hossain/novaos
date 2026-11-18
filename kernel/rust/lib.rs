@@ -475,6 +475,17 @@ pub extern "C" fn rust_raid_storage_selftest() -> i32 {
     raid::rust_raid_storage_selftest()
 }
 
+/// NovaOS 2.0 (Month 6 - Release Hardening): Enterprise Security Audit & Common Criteria / FIPS-140 Hardening
+/// Self-test callable from kernel boot sequence and host test harness.
+#[no_mangle]
+pub extern "C" fn rust_security_audit_v2_selftest() -> i32 {
+    if security::audit::run_security_audit_selftest() {
+        0
+    } else {
+        1
+    }
+}
+
 
 
 
