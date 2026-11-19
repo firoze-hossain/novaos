@@ -525,6 +525,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="14/14 checks (NoCloud/ConfigDrive, Netplan v2, SSH keys, user creation, idempotency)"
     ),
     SubsystemSuiteDef(
+        id="test-installer",
+        name="Production Graphical Installer & OOBE (nova-installer)",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_nova_installer_tests.sh",
+        make_target="test-installer",
+        assertion_desc="14/14 checks (GPT partitioning, NovaFS rootfs, PBKDF2, timezone, desktop preview, showcase)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",
