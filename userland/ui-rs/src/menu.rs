@@ -300,10 +300,14 @@ pub fn draw_menubar_surface<S: Surface + ?Sized>(
     let star_size = if rect.h >= 20 { 12 } else { 8 };
     let star_x = rect.x + 8;
     let star_y = rect.y + (rect.h - star_size) / 2;
+    let cx = star_x + star_size / 2;
+    let cy = star_y + star_size / 2;
+    let r = star_size / 2;
 
-    s.fill_rect(Rect::new(star_x + 3, star_y, star_size - 6, star_size), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x, star_y + 3, star_size, star_size - 6), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x + 2, star_y + 2, star_size - 4, star_size - 4), WHITE);
+    s.fill_rect(Rect::new(cx - 1, cy - r, 3, r * 2 + 1), Color::rgb(56, 189, 248));
+    s.fill_rect(Rect::new(cx - r, cy - 1, r * 2 + 1, 3), Color::rgb(56, 189, 248));
+    s.fill_rect(Rect::new(cx - 1, cy - 2, 3, 5), WHITE);
+    s.fill_rect(Rect::new(cx - 2, cy - 1, 5, 3), WHITE);
 
     // 2. Active Application Name in bold / distinct styling
     let app_sz = font.measure_str(menubar.app_name);

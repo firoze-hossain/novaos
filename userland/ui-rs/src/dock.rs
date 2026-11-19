@@ -209,20 +209,33 @@ pub fn draw_dock_surface<S: Surface + ?Sized>(
     let font = if taskbar_rect.h >= 24 { Font::regular() } else { Font::small() };
     let line_h = font.line_height();
 
-    // 2. Windows 11 Fluent 4-Square Start Badge on far left
+    // 2. Custom NovaOS Celestial Supernova Start Badge on far left
     let start_w = if taskbar_rect.h >= 24 { 36 } else { 24 };
     let start_rect = Rect::new(taskbar_rect.x + 4, taskbar_rect.y + 3, start_w, taskbar_rect.h - 6);
-    draw_rounded_rect(s, start_rect, RADIUS_XS, palette.surface_raised);
-    draw_rect_outline(s, start_rect, 1, palette.border_focused);
+    draw_rounded_rect(s, start_rect, RADIUS_XS, Color::rgb(18, 25, 44));
+    draw_rect_outline(s, start_rect, 1, Color::rgba(56, 189, 248, 160));
 
-    let star_size = if taskbar_rect.h >= 24 { 12 } else { 8 };
-    let star_x = start_rect.x + (start_rect.w - star_size) / 2;
-    let star_y = start_rect.y + (start_rect.h - star_size) / 2;
-    let tile_w = (star_size - 2) / 2;
-    s.fill_rect(Rect::new(star_x, star_y, tile_w, tile_w), Color::rgb(0, 164, 239));
-    s.fill_rect(Rect::new(star_x + tile_w + 2, star_y, tile_w, tile_w), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x, star_y + tile_w + 2, tile_w, tile_w), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x + tile_w + 2, star_y + tile_w + 2, tile_w, tile_w), Color::rgb(0, 164, 239));
+    // Radiant NovaOS 4-point celestial star logo
+    let cx = start_rect.x + start_rect.w / 2;
+    let cy = start_rect.y + start_rect.h / 2;
+    let r = if start_rect.h >= 24 { 7 } else { 5 };
+
+    // Outer cyan rays
+    s.fill_rect(Rect::new(cx - 1, cy - r, 3, r * 2 + 1), Color::rgb(56, 189, 248));
+    s.fill_rect(Rect::new(cx - r, cy - 1, r * 2 + 1, 3), Color::rgb(56, 189, 248));
+
+    // Brilliant white core diamond
+    s.fill_rect(Rect::new(cx - 1, cy - 2, 3, 5), WHITE);
+    s.fill_rect(Rect::new(cx - 2, cy - 1, 5, 3), WHITE);
+    s.fill_rect(Rect::new(cx, cy - r + 1, 1, (r * 2) - 1), WHITE);
+    s.fill_rect(Rect::new(cx - r + 1, cy, (r * 2) - 1, 1), WHITE);
+
+    // 4 micro-satellite glimmers
+    let d = (r * 6) / 10;
+    s.put_pixel(cx - d, cy - d, Color::rgb(125, 211, 252));
+    s.put_pixel(cx + d, cy - d, Color::rgb(125, 211, 252));
+    s.put_pixel(cx - d, cy + d, Color::rgb(125, 211, 252));
+    s.put_pixel(cx + d, cy + d, Color::rgb(125, 211, 252));
 
     // 3. Dock Items (pinned apps & running windows)
     let start_offset_x = start_w + 12;

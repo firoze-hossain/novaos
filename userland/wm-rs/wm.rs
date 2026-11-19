@@ -240,13 +240,242 @@ pub struct DesktopIconSpec {
 }
 
 pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 6] = [
-    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",  app_id: 4, icon_type: 4 },
+    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",  app_id: 1, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",        app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",     app_id: 1, icon_type: 1 },
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",     app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel", app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",     app_id: 3, icon_type: 3 },
 ];
+
+pub const TERM_MAX_LINES: usize = 28;
+pub const TERM_LINE_LEN: usize = 96;
+pub const TERM_INPUT_LEN: usize = 128;
+
+#[derive(Clone, Copy)]
+pub struct TermLine {
+    pub text: [u8; TERM_LINE_LEN],
+    pub len: usize,
+    pub color: Color,
+}
+
+impl TermLine {
+    pub const fn empty() -> Self {
+        TermLine {
+            text: [0; TERM_LINE_LEN],
+            len: 0,
+            color: Color::WHITE,
+        }
+    }
+
+    pub fn from_str(s: &str, color: Color) -> Self {
+        let mut line = TermLine::empty();
+        line.color = color;
+        let bytes = s.as_bytes();
+        let copy_len = bytes.len().min(TERM_LINE_LEN);
+        let mut i = 0;
+        while i < copy_len {
+            line.text[i] = bytes[i];
+            i += 1;
+        }
+        line.len = copy_len;
+        line
+    }
+}
+
+pub struct WmTerminal {
+    pub lines: [TermLine; TERM_MAX_LINES],
+    pub line_count: usize,
+    pub input_buf: [u8; TERM_INPUT_LEN],
+    pub input_len: usize,
+    pub cursor_idx: usize,
+    pub blink_tick: u32,
+}
+
+impl WmTerminal {
+    pub fn new() -> Self {
+        let mut term = WmTerminal {
+            lines: [TermLine::empty(); TERM_MAX_LINES],
+            line_count: 0,
+            input_buf: [0; TERM_INPUT_LEN],
+            input_len: 0,
+            cursor_idx: 0,
+            blink_tick: 0,
+        };
+        term.push_line("NovaOS Terminal (NovaOS 2.0 x86_64 Enterprise)", Color::rgb(88, 166, 255));
+        term.push_line("Type 'help' for commands, or explore: neofetch, ls, uname -a", Color::rgb(139, 148, 158));
+        term.push_line("", Color::WHITE);
+        term
+    }
+
+    pub fn push_line(&mut self, text: &str, color: Color) {
+        if self.line_count >= TERM_MAX_LINES {
+            for i in 0..TERM_MAX_LINES - 1 {
+                self.lines[i] = self.lines[i + 1];
+            }
+            self.lines[TERM_MAX_LINES - 1] = TermLine::from_str(text, color);
+        } else {
+            self.lines[self.line_count] = TermLine::from_str(text, color);
+            self.line_count += 1;
+        }
+    }
+
+    pub fn handle_key(&mut self, key: i32) {
+        match key {
+            10 | 13 => {
+                self.execute_command();
+            }
+            8 | 127 => {
+                if self.cursor_idx > 0 && self.input_len > 0 {
+                    for i in (self.cursor_idx - 1)..(self.input_len - 1) {
+                        self.input_buf[i] = self.input_buf[i + 1];
+                    }
+                    self.input_len -= 1;
+                    self.cursor_idx -= 1;
+                }
+            }
+            0x103 => {
+                if self.cursor_idx > 0 {
+                    self.cursor_idx -= 1;
+                }
+            }
+            0x104 => {
+                if self.cursor_idx < self.input_len {
+                    self.cursor_idx += 1;
+                }
+            }
+            32..=126 => {
+                if self.input_len < TERM_INPUT_LEN - 1 {
+                    for i in (self.cursor_idx..self.input_len).rev() {
+                        self.input_buf[i + 1] = self.input_buf[i];
+                    }
+                    self.input_buf[self.cursor_idx] = key as u8;
+                    self.input_len += 1;
+                    self.cursor_idx += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn execute_command(&mut self) {
+        let mut cmd_buf = [0u8; TERM_INPUT_LEN];
+        let len = self.input_len.min(TERM_INPUT_LEN);
+        cmd_buf[..len].copy_from_slice(&self.input_buf[..len]);
+        self.input_len = 0;
+        self.cursor_idx = 0;
+
+        let input_str = core::str::from_utf8(&cmd_buf[..len]).unwrap_or("");
+        let trimmed = input_str.trim();
+
+        // Echo prompt + entered command to terminal output
+        let mut echo_buf = [0u8; 128];
+        let pfx = b"admin@novaos:~$ ";
+        let pfx_len = pfx.len();
+        echo_buf[..pfx_len].copy_from_slice(pfx);
+        let cmd_bytes = trimmed.as_bytes();
+        let copy_cmd = cmd_bytes.len().min(128 - pfx_len);
+        echo_buf[pfx_len..pfx_len + copy_cmd].copy_from_slice(&cmd_bytes[..copy_cmd]);
+        let echo_str = core::str::from_utf8(&echo_buf[..pfx_len + copy_cmd]).unwrap_or("admin@novaos:~$ ");
+        self.push_line(echo_str, Color::rgb(220, 230, 242));
+
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let cmd = parts.next().unwrap_or("");
+        let rest = if trimmed.len() > cmd.len() { trimmed[cmd.len()..].trim() } else { "" };
+
+        match cmd {
+            "help" => {
+                self.push_line("NovaOS Shell v2.0 - Available Commands:", Color::rgb(88, 166, 255));
+                self.push_line("  help       - Show this built-in command reference", Color::rgb(220, 230, 242));
+                self.push_line("  neofetch   - Display system hardware, OS & memory specs", Color::rgb(220, 230, 242));
+                self.push_line("  uname -a   - Print kernel & CPU Long Mode architecture", Color::rgb(220, 230, 242));
+                self.push_line("  ls [dir]   - List files in /root or specified directory", Color::rgb(220, 230, 242));
+                self.push_line("  cat <file> - Display file contents (e.g. cat HELLO.TXT)", Color::rgb(220, 230, 242));
+                self.push_line("  whoami     - Display active logged-in user credentials", Color::rgb(220, 230, 242));
+                self.push_line("  date       - Print system wall-clock date and timestamp", Color::rgb(220, 230, 242));
+                self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
+                self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
+                self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
+            }
+            "neofetch" | "fetch" => {
+                self.push_line("   /\\_/\\     OS: NovaOS 2.0.0-enterprise x86_64", Color::rgb(88, 166, 255));
+                self.push_line("  ( o.o )    Kernel: NovaOS SMP Long Mode (Dual 32/64-bit ABI)", Color::rgb(139, 92, 246));
+                self.push_line("   > ^ <     Host: QEMU Virtual Machine | Uptime: 0h 18m", Color::rgb(56, 189, 248));
+                self.push_line("             Arch: x86_64 (Intel/AMD Long Mode)", Color::rgb(63, 185, 80));
+                self.push_line("             Display: 1024x768 32bpp XRGB Framebuffer", Color::rgb(210, 153, 34));
+                self.push_line("             Compositor: NovaCompositor (Fluent + Aqua + GNOME)", Color::rgb(240, 246, 252));
+                self.push_line("             Memory: 384 MB / 4096 MB (9%)", Color::rgb(88, 166, 255));
+            }
+            "uname" => {
+                if rest == "-a" || rest.contains("-a") {
+                    self.push_line("NovaOS 2.0.0-enterprise x86_64 pc-novaos (SMP 64-bit Long Mode)", Color::rgb(63, 185, 80));
+                } else {
+                    self.push_line("NovaOS", Color::rgb(63, 185, 80));
+                }
+            }
+            "ls" => {
+                self.push_line("HELLO.TXT    (68 B)      Document", Color::rgb(88, 166, 255));
+                self.push_line("FILES.ELF    (40 KB)     Executable", Color::rgb(63, 185, 80));
+                self.push_line("TERM.ELF     (48 KB)     Executable", Color::rgb(63, 185, 80));
+                self.push_line("SETTINGS.ELF (52 KB)     Executable", Color::rgb(63, 185, 80));
+                self.push_line("SYSTEM.CFG   (512 B)     Config", Color::rgb(210, 153, 34));
+                self.push_line("ACCESS.CFG   (256 B)     Config", Color::rgb(210, 153, 34));
+            }
+            "whoami" => {
+                self.push_line("admin (uid=0 gid=0 groups=0(wheel), 1(audio), 2(video))", Color::rgb(63, 185, 80));
+            }
+            "date" => {
+                self.push_line("Thu Nov 19 20:30:00 UTC 2026", Color::rgb(240, 246, 252));
+            }
+            "echo" => {
+                self.push_line(rest, Color::rgb(240, 246, 252));
+            }
+            "cat" => {
+                if rest == "HELLO.TXT" || rest.ends_with("HELLO.TXT") {
+                    self.push_line("Welcome to NovaOS 2.0 Enterprise Edition!", Color::rgb(63, 185, 80));
+                    self.push_line("A modern, safe, high-performance operating system written in Rust and C.", Color::rgb(220, 230, 242));
+                } else if rest.is_empty() {
+                    self.push_line("cat: missing filename. Usage: cat <file>", Color::rgb(248, 81, 73));
+                } else {
+                    let mut buf = [0u8; 96];
+                    let p1 = b"cat: ";
+                    buf[..5].copy_from_slice(p1);
+                    let r_bytes = rest.as_bytes();
+                    let rlen = r_bytes.len().min(30);
+                    buf[5..5 + rlen].copy_from_slice(&r_bytes[..rlen]);
+                    let p2 = b": No such file";
+                    buf[5 + rlen..5 + rlen + p2.len()].copy_from_slice(p2);
+                    let s = core::str::from_utf8(&buf[..5 + rlen + p2.len()]).unwrap_or("cat: not found");
+                    self.push_line(s, Color::rgb(248, 81, 73));
+                }
+            }
+            "clear" => {
+                self.line_count = 0;
+            }
+            "about" | "ver" | "version" => {
+                self.push_line("NovaOS v2.0 GA (General Availability)", Color::rgb(88, 166, 255));
+                self.push_line("Combining Windows 11 Fluent, macOS Aqua & Ubuntu GNOME UI.", Color::rgb(220, 230, 242));
+            }
+            _ => {
+                let mut err = [0u8; 96];
+                let p1 = b"novash: command not found: ";
+                err[..p1.len()].copy_from_slice(p1);
+                let c_bytes = cmd.as_bytes();
+                let clen = c_bytes.len().min(40);
+                err[p1.len()..p1.len() + clen].copy_from_slice(&c_bytes[..clen]);
+                let p2 = b". Type 'help' for list.";
+                let total = (p1.len() + clen + p2.len()).min(96);
+                err[p1.len() + clen..total].copy_from_slice(&p2[..total - (p1.len() + clen)]);
+                let err_str = core::str::from_utf8(&err[..total]).unwrap_or("novash: command not found");
+                self.push_line(err_str, Color::rgb(248, 81, 73));
+            }
+        }
+    }
+}
 
 pub struct Wm {
     pub screen_w: i32,
@@ -277,6 +506,7 @@ pub struct Wm {
     pub start_menu_open: bool,
     pub hovered_start_item: Option<usize>,
     pub hovered_desktop_icon: Option<usize>,
+    pub term: WmTerminal,
 }
 
 impl Wm {
@@ -327,6 +557,7 @@ impl Wm {
             start_menu_open: false,
             hovered_start_item: None,
             hovered_desktop_icon: None,
+            term: WmTerminal::new(),
         }
     }
 
@@ -387,6 +618,7 @@ impl Wm {
             start_menu_open: false,
             hovered_start_item: None,
             hovered_desktop_icon: None,
+            term: WmTerminal::new(),
         }
     }
 
@@ -782,8 +1014,8 @@ impl Wm {
 
     /// Returns the bounding rectangle for the interactive Start Menu popup.
     pub fn start_menu_rect(&self) -> Rect {
-        let sm_w = if self.screen_w >= 800 { 360 } else { 260 };
-        let sm_h = if self.desktop_h >= 500 { 380 } else { (self.desktop_h - 20).max(120) };
+        let sm_w = if self.screen_w >= 800 { 380 } else { 280 };
+        let sm_h = if self.desktop_h >= 500 { 390 } else { (self.desktop_h - 20).max(120) };
         let sm_x = 12;
         let sm_y = (self.desktop_h - sm_h - 6).max(self.menubar_h);
         Rect::new(sm_x, sm_y, sm_w, sm_h)
@@ -800,8 +1032,18 @@ impl Wm {
         let col = (idx % 2) as i32;
         let row = (idx / 2) as i32;
         let card_x = sm.x + pad + col * (col_w + 10);
-        let card_y = sm.y + 104 + row * 50;
-        Some(Rect::new(card_x, card_y, col_w, 44))
+        let card_y = sm.y + 104 + row * 52;
+        Some(Rect::new(card_x, card_y, col_w, 46))
+    }
+
+    /// Routes keyboard events to the focused top window (e.g. Console terminal).
+    pub fn on_key(&mut self, key: i32) {
+        if key <= 0 {
+            return;
+        }
+        if self.active_window() == Some(0) && self.windows[0].is_open && !self.windows[0].is_minimized {
+            self.term.handle_key(key);
+        }
     }
 
     /// Hit-tests a pointer location against Start Menu application cards.
@@ -824,13 +1066,13 @@ impl Wm {
         if idx >= DESKTOP_SHORTCUTS.len() || self.desktop_h < 400 {
             return None;
         }
-        let x = 20;
+        let x = 18;
         let start_y = if self.menubar_h > 0 { self.menubar_h + 16 } else { 16 };
-        let y = start_y + (idx as i32 * 76);
-        if y + 68 > self.desktop_h - 10 {
+        let y = start_y + (idx as i32 * 78);
+        if y + 70 > self.desktop_h - 10 {
             return None;
         }
-        Some(Rect::new(x, y, 76, 68))
+        Some(Rect::new(x, y, 78, 70))
     }
 
     /// Hit-tests pointer coordinates against desktop shortcut icons.
@@ -1249,12 +1491,8 @@ impl Wm {
                     return;
                 }
                 // Check if power buttons were clicked
-                let sep_y = sm.y + sm.h - 48;
-                let foot_y = sep_y + 10;
-                let btn_w = 48;
-                let pwr_x = sm.right() - 16 - btn_w;
-                let lck_x = pwr_x - (btn_w + 6) * 2;
-                if py >= foot_y && py <= foot_y + 26 && px >= lck_x && px < sm.right() - 16 {
+                let foot_y = sm.y + sm.h - 40;
+                if py >= foot_y && py <= foot_y + 24 && px >= sm.x + sm.w - 160 && px < sm.x + sm.w - 12 {
                     self.start_menu_open = false;
                     return;
                 }
@@ -1491,7 +1729,7 @@ impl Wm {
 
                 // Render client application view on high-res
                 if w.label == 1 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
-                    draw_term_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                    draw_term_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.term, &palette);
                 } else if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 3 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
@@ -1770,19 +2008,19 @@ impl Wm {
         ui::font::draw_text_font(s, sm.x + 18, sec_y, "PINNED APPLICATIONS", Color::rgba(255, 255, 255, 120), &font_sm);
 
         // 6. 6 App Cards (2 columns x 3 rows)
-        let apps: [(&str, &str, u8, Color); 6] = [
-            ("Terminal", "NovaTerm CLI", 1, Color::rgb(30, 41, 59)),
-            ("Files", "Root Storage", 2, Color::rgb(217, 119, 6)),
-            ("Scratchpad", "Code Editor", 3, Color::rgb(14, 165, 233)),
-            ("App Store", "Nova Packages", 4, Color::rgb(124, 58, 237)),
-            ("Settings", "Control Panel", 5, Color::rgb(71, 85, 105)),
-            ("Diagnostics", "System Status", 4, Color::rgb(16, 185, 129)),
+        let apps: [(&str, &str, u8); 6] = [
+            ("Terminal", "NovaTerm CLI", 1),
+            ("Files", "Root Storage", 2),
+            ("Scratchpad", "Code Editor", 3),
+            ("App Store", "Nova Packages", 4),
+            ("Settings", "Control Panel", 5),
+            ("Diagnostics", "This PC Stats", 0),
         ];
 
         for i in 0..6 {
             if let Some(card_rect) = self.start_menu_item_rect(i) {
                 let is_hov = self.hovered_start_item == Some(i);
-                let (title, desc, icon_lbl, icon_col) = apps[i];
+                let (title, desc, icon_type) = apps[i];
 
                 if is_hov {
                     ui::draw::draw_rounded_rect(s, card_rect, 6, Color::rgba(255, 255, 255, 28));
@@ -1792,99 +2030,268 @@ impl Wm {
                     ui::draw::draw_rect_outline(s, card_rect, 1, Color::rgba(255, 255, 255, 20));
                 }
 
-                // App Icon
+                // Realistic App Icon
                 let ic_x = card_rect.x + 6;
-                let ic_y = card_rect.y + (card_rect.h - 24) / 2;
-                ui::draw::draw_rounded_rect(s, Rect::new(ic_x, ic_y, 24, 24), 4, icon_col);
-                draw_app_icon(s, ic_x + 6, ic_y + 6, icon_lbl, palette);
+                let ic_y = card_rect.y + (card_rect.h - 26) / 2;
+                draw_realistic_app_icon(s, ic_x, ic_y, 26, icon_type, palette);
 
                 // App Title and Subtitle
-                let tx_x = ic_x + 30;
+                let tx_x = ic_x + 32;
                 ui::font::draw_text_font(s, tx_x, card_rect.y + 6, title, Color::WHITE, &font_sm);
                 ui::font::draw_text_font(s, tx_x, card_rect.y + 22, desc, palette.text_muted, &font_sm);
             }
         }
 
-        // 7. Footer bar with OS badge and Power controls
-        let foot_y = sm.y + sm.h - 44;
-        s.fill_rect(Rect::new(sm.x + 12, foot_y - 4, sm.w - 24, 1), Color::rgba(255, 255, 255, 24));
+        // 7. Footer bar with OS badge and Power controls (spaced with generous margins)
+        let foot_y = sm.y + sm.h - 40;
+        s.fill_rect(Rect::new(sm.x + 12, foot_y - 6, sm.w - 24, 1), Color::rgba(255, 255, 255, 24));
 
-        // OS badge
-        ui::draw::draw_rounded_rect(s, Rect::new(sm.x + 16, foot_y + 4, 8, 8), 4, Color::rgb(34, 197, 94));
-        ui::font::draw_text_font(s, sm.x + 30, foot_y + 4, "NovaOS 2.0 (GA)", Color::WHITE, &font_sm);
+        // OS badge: "● NovaOS 2.0 GA"
+        ui::draw::draw_rounded_rect(s, Rect::new(sm.x + 16, foot_y + 6, 8, 8), 4, Color::rgb(34, 197, 94));
+        ui::font::draw_text_font(s, sm.x + 28, foot_y + 4, "NovaOS 2.0 GA", Color::WHITE, &font_sm);
 
         // Power actions: [Restart] [Power]
-        let pwr_x = sm.x + sm.w - 56;
-        ui::draw::draw_rounded_rect(s, Rect::new(pwr_x, foot_y, 42, 20), 4, Color::rgba(239, 68, 68, 160));
-        ui::font::draw_text_font(s, pwr_x + 6, foot_y + 4, "Power", Color::WHITE, &font_sm);
+        let pwr_w = 58;
+        let pwr_x = sm.x + sm.w - 16 - pwr_w;
+        ui::draw::draw_rounded_rect(s, Rect::new(pwr_x, foot_y, pwr_w, 22), 4, Color::rgba(239, 68, 68, 180));
+        ui::draw::draw_rect_outline(s, Rect::new(pwr_x, foot_y, pwr_w, 22), 1, Color::rgba(255, 255, 255, 50));
+        ui::font::draw_text_font(s, pwr_x + 10, foot_y + 4, "Power", Color::WHITE, &font_sm);
 
-        let rst_x = pwr_x - 52;
-        ui::draw::draw_rounded_rect(s, Rect::new(rst_x, foot_y, 46, 20), 4, Color::rgba(255, 255, 255, 20));
-        ui::font::draw_text_font(s, rst_x + 6, foot_y + 4, "Restart", Color::WHITE, &font_sm);
+        let rst_w = 66;
+        let rst_x = pwr_x - 10 - rst_w;
+        ui::draw::draw_rounded_rect(s, Rect::new(rst_x, foot_y, rst_w, 22), 4, Color::rgba(71, 85, 105, 180));
+        ui::draw::draw_rect_outline(s, Rect::new(rst_x, foot_y, rst_w, 22), 1, Color::rgba(255, 255, 255, 40));
+        ui::font::draw_text_font(s, rst_x + 8, foot_y + 4, "Restart", Color::WHITE, &font_sm);
     }
 }
 
 fn draw_modern_desktop_wallpaper<S: Surface + ?Sized>(s: &mut S, w: i32, h: i32) {
-    // Sliced vertical gradient: deep dark slate/navy (#0b1120) to midnight dark violet (#0f0d1b)
-    let step = 4;
+    // 1. High-precision continuous vertical celestial gradient
+    // From deep cosmic midnight navy (#090D1A) to twilight sapphire-violet (#130F26)
+    let step = 2; // 2px slices for ultra-smooth transition without contour rings
     let num_slices = (h + step - 1) / step;
     for i in 0..num_slices {
         let y = i * step;
         let slice_h = step.min(h - y);
         let t = (y * 255) / h.max(1);
-        let r = (12 * (255 - t) + 8 * t) / 255;
-        let g = (18 * (255 - t) + 12 * t) / 255;
-        let b = (34 * (255 - t) + 26 * t) / 255;
+
+        // Interpolate colors smoothly across the screen height
+        let r = (9 * (255 - t) + 19 * t) / 255;
+        let g = (13 * (255 - t) + 15 * t) / 255;
+        let b = (26 * (255 - t) + 38 * t) / 255;
         s.fill_rect(Rect::new(0, y, w, slice_h), Color::rgb(r as u8, g as u8, b as u8));
     }
 
-    // Modern Aurora Waves: glowing ambient light orbs blending macOS Sonoma & Windows 11 Bloom
-    // Orb 1: Upper-right Cyan/Sky glow
-    let cx1 = (w * 65) / 100;
-    let cy1 = (h * 32) / 100;
-    let r1 = (w.min(h) * 38) / 100;
-    for layer in 0..5 {
-        let radius = r1 - layer * (r1 / 6);
-        let alpha = (8 + layer * 6) as u8;
-        let color = Color::rgba(14, 165, 233, alpha);
-        ui::draw::draw_rounded_rect(
-            s,
-            Rect::new(cx1 - radius, cy1 - (radius * 7) / 10, radius * 2, (radius * 14) / 10),
-            radius / 2,
-            color,
-        );
+    // 2. Wide smooth atmospheric aurora sweeps across mid-screen
+    // Seamless horizontal color bands blending cyan and royal violet without contour rings
+    let sweep_center = (h * 55) / 100;
+    let sweep_span = (h * 35) / 100;
+    let sweep_step = 4;
+    let sweep_slices = (sweep_span * 2) / sweep_step;
+
+    for i in 0..sweep_slices {
+        let y = sweep_center - sweep_span + (i * sweep_step);
+        if y < 0 || y >= h {
+            continue;
+        }
+        let dist = (y - sweep_center).abs();
+        let falloff = ((sweep_span - dist).max(0) * 255) / sweep_span.max(1);
+        let alpha = ((falloff * 24) / 255) as u8;
+
+        if alpha > 0 {
+            let cyan_w = (w * 65) / 100;
+            let purp_w = w - cyan_w;
+            s.fill_rect(Rect::new(0, y, purp_w, sweep_step), Color::rgba(139, 92, 246, (alpha * 8) / 10));
+            s.fill_rect(Rect::new(purp_w, y, cyan_w, sweep_step), Color::rgba(14, 165, 233, alpha));
+        }
     }
 
-    // Orb 2: Lower-center Purple/Violet aurora
-    let cx2 = (w * 42) / 100;
-    let cy2 = (h * 68) / 100;
-    let r2 = (w.min(h) * 44) / 100;
-    for layer in 0..5 {
-        let radius = r2 - layer * (r2 / 6);
-        let alpha = (7 + layer * 5) as u8;
-        let color = Color::rgba(139, 92, 246, alpha);
-        ui::draw::draw_rounded_rect(
-            s,
-            Rect::new(cx2 - radius, cy2 - (radius * 6) / 10, radius * 2, (radius * 12) / 10),
-            radius / 2,
-            color,
-        );
-    }
+    // 3. Twinkling celestial diamond stars scattered across deep space
+    const STARS: [(i32, i32, u8); 18] = [
+        (85, 45, 2),  (160, 110, 1), (280, 70, 2),  (420, 140, 1),
+        (540, 50, 3), (670, 95, 2),  (780, 60, 1),  (890, 130, 2),
+        (960, 75, 2), (120, 220, 1), (340, 260, 2), (730, 240, 1),
+        (850, 280, 2),(920, 210, 1), (210, 380, 1), (820, 410, 2),
+        (150, 480, 1),(880, 490, 1),
+    ];
 
-    // Orb 3: Subtle central warm magenta accent (Ubuntu touch)
-    let cx3 = (w * 52) / 100;
-    let cy3 = (h * 50) / 100;
-    let r3 = (w.min(h) * 26) / 100;
-    for layer in 0..4 {
-        let radius = r3 - layer * (r3 / 5);
-        let alpha = (6 + layer * 4) as u8;
-        let color = Color::rgba(236, 72, 153, alpha);
-        ui::draw::draw_rounded_rect(
-            s,
-            Rect::new(cx3 - radius, cy3 - (radius * 5) / 10, radius * 2, radius),
-            radius / 2,
-            color,
-        );
+    for &(sx, sy, brightness) in STARS.iter() {
+        let actual_x = (sx * w) / 1024;
+        let actual_y = (sy * h) / 768;
+        match brightness {
+            3 => {
+                s.fill_rect(Rect::new(actual_x - 1, actual_y - 2, 3, 5), Color::rgba(255, 255, 255, 200));
+                s.fill_rect(Rect::new(actual_x - 2, actual_y - 1, 5, 3), Color::rgba(255, 255, 255, 200));
+                s.put_pixel(actual_x, actual_y, Color::WHITE);
+            }
+            2 => {
+                s.put_pixel(actual_x, actual_y, Color::WHITE);
+                s.put_pixel(actual_x - 1, actual_y, Color::rgba(125, 211, 252, 160));
+                s.put_pixel(actual_x + 1, actual_y, Color::rgba(125, 211, 252, 160));
+                s.put_pixel(actual_x, actual_y - 1, Color::rgba(125, 211, 252, 160));
+                s.put_pixel(actual_x, actual_y + 1, Color::rgba(125, 211, 252, 160));
+            }
+            _ => {
+                s.put_pixel(actual_x, actual_y, Color::rgba(226, 232, 240, 150));
+            }
+        }
+    }
+}
+
+fn draw_realistic_app_icon<S: Surface + ?Sized>(
+    s: &mut S,
+    x: i32,
+    y: i32,
+    size: i32,
+    icon_type: u8,
+    palette: &ThemePalette,
+) {
+    match icon_type {
+        0 => {
+            // 0: This PC (Sleek modern workstation monitor with stand and glowing screen)
+            let mon_w = (size * 80) / 100;
+            let mon_h = (size * 52) / 100;
+            let mon_x = x + (size - mon_w) / 2;
+            let mon_y = y + 2;
+
+            ui::draw::draw_rounded_rect(s, Rect::new(mon_x, mon_y, mon_w, mon_h), 3, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(mon_x, mon_y, mon_w, mon_h), 1, Color::rgb(71, 85, 105));
+
+            let scr_inset = 2;
+            let scr_rect = Rect::new(mon_x + scr_inset, mon_y + scr_inset, mon_w - scr_inset * 2, mon_h - scr_inset * 2 - 2);
+            s.fill_rect(scr_rect, Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(scr_rect.x, scr_rect.y + scr_rect.h / 2, scr_rect.w, scr_rect.h / 2), Color::rgb(59, 130, 246));
+            s.put_pixel(mon_x + mon_w / 2, mon_y + mon_h - 2, Color::rgb(34, 197, 94));
+
+            let neck_w = (size * 18) / 100;
+            let neck_h = (size * 22) / 100;
+            let neck_x = x + (size - neck_w) / 2;
+            let neck_y = mon_y + mon_h;
+            s.fill_rect(Rect::new(neck_x, neck_y, neck_w, neck_h), Color::rgb(203, 213, 225));
+
+            let base_w = (size * 55) / 100;
+            let base_h = 3;
+            let base_x = x + (size - base_w) / 2;
+            let base_y = neck_y + neck_h - 1;
+            ui::draw::draw_rounded_rect(s, Rect::new(base_x, base_y, base_w, base_h), 1, Color::rgb(226, 232, 240));
+        }
+        1 => {
+            // 1: Nova Terminal (Dark obsidian console with 3 mini traffic lights and emerald prompt >_)
+            let term_w = (size * 82) / 100;
+            let term_h = (size * 78) / 100;
+            let term_x = x + (size - term_w) / 2;
+            let term_y = y + (size - term_h) / 2;
+
+            ui::draw::draw_rounded_rect(s, Rect::new(term_x, term_y, term_w, term_h), 4, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(term_x, term_y, term_w, term_h), 1, Color::rgb(56, 189, 248));
+
+            let bar_h = (term_h * 24) / 100;
+            s.fill_rect(Rect::new(term_x + 1, term_y + 1, term_w - 2, bar_h), Color::rgb(30, 41, 59));
+            s.put_pixel(term_x + 4, term_y + bar_h / 2 + 1, Color::rgb(239, 68, 68));
+            s.put_pixel(term_x + 8, term_y + bar_h / 2 + 1, Color::rgb(234, 179, 8));
+            s.put_pixel(term_x + 12, term_y + bar_h / 2 + 1, Color::rgb(34, 197, 94));
+
+            let px = term_x + 6;
+            let py = term_y + bar_h + 4;
+            s.fill_rect(Rect::new(px, py, 2, 2), Color::rgb(34, 197, 94));
+            s.fill_rect(Rect::new(px + 2, py + 2, 2, 2), Color::rgb(34, 197, 94));
+            s.fill_rect(Rect::new(px, py + 4, 2, 2), Color::rgb(34, 197, 94));
+            s.fill_rect(Rect::new(px + 6, py + 5, 4, 2), Color::rgb(240, 246, 252));
+        }
+        2 => {
+            // 2: Files / Folder (Golden amber folder with tab and white document peeking out)
+            let fld_w = (size * 84) / 100;
+            let fld_h = (size * 70) / 100;
+            let fld_x = x + (size - fld_w) / 2;
+            let fld_y = y + (size - fld_h) / 2 + 2;
+
+            let tab_w = (fld_w * 45) / 100;
+            let tab_h = 4;
+            ui::draw::draw_rounded_rect(s, Rect::new(fld_x + 2, fld_y - tab_h + 1, tab_w, tab_h + 2), 2, Color::rgb(217, 119, 6));
+            ui::draw::draw_rounded_rect(s, Rect::new(fld_x, fld_y, fld_w, fld_h), 3, Color::rgb(217, 119, 6));
+
+            let doc_w = (fld_w * 65) / 100;
+            let doc_h = (fld_h * 50) / 100;
+            let doc_x = fld_x + (fld_w - doc_w) / 2;
+            let doc_y = fld_y - 2;
+            s.fill_rect(Rect::new(doc_x, doc_y, doc_w, doc_h), Color::WHITE);
+            s.fill_rect(Rect::new(doc_x + 2, doc_y + 3, doc_w - 4, 1), Color::rgb(59, 130, 246));
+            s.fill_rect(Rect::new(doc_x + 2, doc_y + 6, doc_w - 6, 1), Color::rgb(148, 163, 184));
+
+            let flap_h = (fld_h * 68) / 100;
+            let flap_y = fld_y + fld_h - flap_h;
+            ui::draw::draw_rounded_rect(s, Rect::new(fld_x, flap_y, fld_w, flap_h), 3, Color::rgb(245, 158, 11));
+            ui::draw::draw_rect_outline(s, Rect::new(fld_x, flap_y, fld_w, flap_h), 1, Color::rgb(251, 191, 36));
+        }
+        3 => {
+            // 3: README / Scratchpad (Crisp document with dog-ear fold and colored text lines)
+            let doc_w = (size * 68) / 100;
+            let doc_h = (size * 82) / 100;
+            let doc_x = x + (size - doc_w) / 2;
+            let doc_y = y + (size - doc_h) / 2;
+
+            ui::draw::draw_rounded_rect(s, Rect::new(doc_x, doc_y, doc_w, doc_h), 2, Color::WHITE);
+            ui::draw::draw_rect_outline(s, Rect::new(doc_x, doc_y, doc_w, doc_h), 1, Color::rgb(203, 213, 225));
+
+            let fold = (doc_w * 28) / 100;
+            s.fill_rect(Rect::new(doc_x + doc_w - fold, doc_y, fold, fold), Color::rgb(226, 232, 240));
+            s.fill_rect(Rect::new(doc_x + doc_w - fold, doc_y + fold, fold, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(doc_x + doc_w - fold, doc_y, 1, fold), Color::rgb(148, 163, 184));
+
+            s.fill_rect(Rect::new(doc_x + 3, doc_y + 4, doc_w - fold - 4, 3), Color::rgb(14, 165, 233));
+
+            let l_pad = 4;
+            s.fill_rect(Rect::new(doc_x + l_pad, doc_y + 11, doc_w - l_pad * 2, 2), Color::rgb(99, 102, 241));
+            s.fill_rect(Rect::new(doc_x + l_pad, doc_y + 16, doc_w - l_pad * 2 - 4, 2), Color::rgb(16, 185, 129));
+            s.fill_rect(Rect::new(doc_x + l_pad, doc_y + 21, doc_w - l_pad * 2 - 2, 2), Color::rgb(217, 119, 6));
+            s.fill_rect(Rect::new(doc_x + l_pad, doc_y + 26, (doc_w * 40) / 100, 2), Color::rgb(148, 163, 184));
+        }
+        4 => {
+            // 4: Software Store / App Packages (Royal purple store parcel with gold star badge)
+            let pkg_w = (size * 78) / 100;
+            let pkg_h = (size * 75) / 100;
+            let pkg_x = x + (size - pkg_w) / 2;
+            let pkg_y = y + (size - pkg_h) / 2 + 2;
+
+            let hdl_w = (pkg_w * 45) / 100;
+            let hdl_h = 5;
+            let hdl_x = pkg_x + (pkg_w - hdl_w) / 2;
+            ui::draw::draw_rect_outline(s, Rect::new(hdl_x, pkg_y - hdl_h + 1, hdl_w, hdl_h + 2), 1, Color::WHITE);
+
+            ui::draw::draw_rounded_rect(s, Rect::new(pkg_x, pkg_y, pkg_w, pkg_h), 3, Color::rgb(126, 34, 206));
+            ui::draw::draw_rect_outline(s, Rect::new(pkg_x, pkg_y, pkg_w, pkg_h), 1, Color::rgb(168, 85, 247));
+
+            let star_cx = pkg_x + pkg_w / 2;
+            let star_cy = pkg_y + pkg_h / 2 + 1;
+            s.fill_rect(Rect::new(star_cx - 1, star_cy - 4, 3, 9), Color::rgb(250, 204, 21));
+            s.fill_rect(Rect::new(star_cx - 4, star_cy - 1, 9, 3), Color::rgb(250, 204, 21));
+            s.put_pixel(star_cx, star_cy, Color::WHITE);
+        }
+        5 => {
+            // 5: Settings / Control Panel (Dual precision interlocking metallic gears)
+            let gear_sz = (size * 80) / 100;
+            let gx = x + (size - gear_sz) / 2;
+            let gy = y + (size - gear_sz) / 2;
+
+            let r1 = (gear_sz * 60) / 100;
+            let cx1 = gx + r1 / 2 + 2;
+            let cy1 = gy + r1 / 2 + 2;
+            s.fill_rect(Rect::new(cx1 - 2, cy1 - r1 / 2 - 2, 5, r1 + 4), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(cx1 - r1 / 2 - 2, cy1 - 2, r1 + 4, 5), Color::rgb(148, 163, 184));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx1 - r1 / 2, cy1 - r1 / 2, r1, r1), r1 / 2, Color::rgb(100, 116, 139));
+            s.fill_rect(Rect::new(cx1 - 2, cy1 - 2, 4, 4), Color::rgb(15, 23, 42));
+
+            let r2 = (gear_sz * 45) / 100;
+            let cx2 = gx + gear_sz - r2 / 2 - 1;
+            let cy2 = gy + gear_sz - r2 / 2 - 1;
+            s.fill_rect(Rect::new(cx2 - 1, cy2 - r2 / 2 - 1, 3, r2 + 2), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(cx2 - r2 / 2 - 1, cy2 - 1, r2 + 2, 3), Color::rgb(203, 213, 225));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx2 - r2 / 2, cy2 - r2 / 2, r2, r2), r2 / 2, Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(cx2 - 1, cy2 - 1, 3, 3), Color::rgb(59, 130, 246));
+        }
+        _ => {
+            draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
+        }
     }
 }
 
@@ -1896,40 +2303,27 @@ fn draw_desktop_icons<S: Surface + ?Sized>(
 ) {
     let font = Font::small();
     for (i, spec) in DESKTOP_SHORTCUTS.iter().enumerate() {
-        let x = 20;
+        let x = 18;
         let start_y = if menubar_h > 0 { menubar_h + 16 } else { 16 };
-        let y = start_y + (i as i32 * 76);
-        let rect = Rect::new(x, y, 76, 68);
+        let y = start_y + (i as i32 * 78);
+        let rect = Rect::new(x, y, 78, 70);
 
         let is_hovered = hovered_icon == Some(i);
         if is_hovered {
-            ui::draw::draw_rounded_rect(s, rect, 6, Color::rgba(255, 255, 255, 28));
-            ui::draw::draw_rect_outline(s, rect, 1, Color::rgba(255, 255, 255, 50));
+            ui::draw::draw_rounded_rect(s, rect, 8, Color::rgba(255, 255, 255, 32));
+            ui::draw::draw_rect_outline(s, rect, 1, Color::rgba(255, 255, 255, 65));
         }
 
-        // Icon tile (32x32)
-        let tile_x = x + (rect.w - 32) / 2;
-        let tile_y = y + 6;
-        let tile_rect = Rect::new(tile_x, tile_y, 32, 32);
+        // Draw realistic 36x36 icon in top portion of card
+        let icon_sz = 36;
+        let icon_x = x + (rect.w - icon_sz) / 2;
+        let icon_y = y + 4;
+        draw_realistic_app_icon(s, icon_x, icon_y, icon_sz, spec.icon_type, palette);
 
-        let (tile_col, icon_label) = match spec.icon_type {
-            1 => (Color::rgb(30, 41, 59), 1),
-            2 => (Color::rgb(217, 119, 6), 2),
-            3 => (Color::rgb(14, 165, 233), 3),
-            4 => (Color::rgb(124, 58, 237), 4),
-            5 => (Color::rgb(71, 85, 105), 5),
-            _ => (Color::rgb(37, 99, 235), 4),
-        };
-
-        ui::draw::draw_rounded_rect(s, tile_rect, 6, tile_col);
-        ui::draw::draw_rect_outline(s, tile_rect, 1, Color::rgba(255, 255, 255, 40));
-        draw_app_icon(s, tile_x + 10, tile_y + 10, icon_label, palette);
-
-        // Label text below tile
+        // Label text below icon with crisp drop shadow
         let label_w = font.measure_str(spec.label).w;
         let text_x = x + ((rect.w - label_w) / 2).max(2);
-        let text_y = tile_y + 36;
-        // Subtle drop shadow for desktop icon text readability over wallpaper
+        let text_y = icon_y + icon_sz + 4;
         ui::font::draw_text_font(s, text_x + 1, text_y + 1, spec.label, Color::BLACK, &font);
         ui::font::draw_text_font(s, text_x, text_y, spec.label, Color::WHITE, &font);
     }
@@ -2169,7 +2563,7 @@ fn draw_settings_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palet
 }
 
 /// Renders the in-window terminal emulator client view inside Window 0 / Console Shell.
-fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette: &ThemePalette) {
+fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, term: &WmTerminal, _palette: &ThemePalette) {
     let font_mono = Font::mono();
     let font_small = Font::small();
 
@@ -2188,39 +2582,31 @@ fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette:
     let st_sz = font_small.measure_str(right_status);
     ui::font::draw_text_font(s, client.right() - st_sz.w - 12, client.y + 3, right_status, Color::rgb(88, 166, 255), &font_small);
 
-    // 3. Terminal text lines
+    // 3. Render terminal output lines from term.lines
     let mut y = client.y + hdr_h + 6;
     let line_h = 16;
     let pad_x = client.x + 8;
+    let max_display_lines = ((client.bottom() - y - line_h - 4) / line_h).max(1) as usize;
 
-    // Line 1: Shell welcome
-    if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "NovaOS Terminal (NovaOS 2.0 x86_64 Enterprise)", Color::rgb(88, 166, 255), &font_mono);
-        y += line_h;
-    }
+    let start_idx = if term.line_count > max_display_lines {
+        term.line_count - max_display_lines
+    } else {
+        0
+    };
 
-    // Line 2: uname -a output
-    if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "$ uname -a", Color::rgb(139, 148, 158), &font_mono);
-        y += line_h;
-    }
-    if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "NovaOS 2.0.0-enterprise x86_64 pc-novaos (SMP 64-bit Long Mode)", Color::rgb(63, 185, 80), &font_mono);
-        y += line_h;
-    }
-
-    // Line 3: ls output
-    if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "$ ls /bin", Color::rgb(139, 148, 158), &font_mono);
-        y += line_h;
-    }
-    if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "FILES.ELF   SETTINGS.ELF   TERM.ELF", Color::rgb(240, 246, 252), &font_mono);
+    for i in start_idx..term.line_count {
+        if y + line_h >= client.bottom() - 10 {
+            break;
+        }
+        let line = &term.lines[i];
+        if let Ok(line_str) = core::str::from_utf8(&line.text[..line.len]) {
+            ui::font::draw_text_font(s, pad_x, y, line_str, line.color, &font_mono);
+        }
         y += line_h;
     }
 
-    // Line 4: Active prompt and cursor
-    if y + line_h < client.bottom() - 10 {
+    // 4. Render active prompt line and real-time typed input!
+    if y + line_h < client.bottom() {
         let user_str = "admin@novaos";
         let u_sz = font_mono.measure_str(user_str);
         ui::font::draw_text_font(s, pad_x, y, user_str, Color::rgb(63, 185, 80), &font_mono);
@@ -2230,21 +2616,29 @@ fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette:
 
         let path_str = "~";
         let p_sz = font_mono.measure_str(path_str);
-        ui::font::draw_text_font(s, colon_x + 8, y, path_str, Color::rgb(88, 166, 255), &font_mono);
+        ui::font::draw_text_font(s, colon_x + 6, y, path_str, Color::rgb(210, 153, 34), &font_mono);
 
-        let dollar_x = colon_x + 8 + p_sz.w;
-        ui::font::draw_text_font(s, dollar_x, y, "$ ", Color::rgb(240, 246, 252), &font_mono);
+        let prompt_str = "$ ";
+        let pr_sz = font_mono.measure_str(prompt_str);
+        let prompt_end_x = colon_x + 6 + p_sz.w;
+        ui::font::draw_text_font(s, prompt_end_x, y, prompt_str, Color::rgb(240, 246, 252), &font_mono);
 
-        let cmd_str = "help";
-        let c_sz = font_mono.measure_str(cmd_str);
-        ui::font::draw_text_font(s, dollar_x + 16, y, cmd_str, Color::rgb(240, 246, 252), &font_mono);
+        let input_x = prompt_end_x + pr_sz.w;
+        // User typed characters from input_buf
+        if let Ok(input_str) = core::str::from_utf8(&term.input_buf[..term.input_len]) {
+            ui::font::draw_text_font(s, input_x, y, input_str, Color::rgb(240, 246, 252), &font_mono);
+        }
 
-        // Blinking / solid block cursor
-        let cursor_x = dollar_x + 16 + c_sz.w + 2;
-        s.fill_rect(Rect::new(cursor_x, y + 2, 8, line_h - 4), Color::rgb(88, 166, 255));
+        // Compute cursor position
+        let before_cursor_str = core::str::from_utf8(&term.input_buf[..term.cursor_idx]).unwrap_or("");
+        let cur_offset = font_mono.measure_str(before_cursor_str).w;
+        let cursor_x = input_x + cur_offset;
+
+        // Solid cyan blinking block cursor
+        s.fill_rect(Rect::new(cursor_x + 1, y + 2, 8, line_h - 4), Color::rgb(88, 166, 255));
     }
 
-    // 4. Subtle vertical scrollbar on right
+    // 5. Subtle vertical scrollbar on right
     let bar_x = client.right() - 6;
     let bar_h = client.h - hdr_h - 4;
     s.fill_rect(Rect::new(bar_x, client.y + hdr_h + 2, 4, bar_h), Color::rgba(255, 255, 255, 12));
@@ -3076,8 +3470,11 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
 
     loop {
         let key = unsafe { ffi::sys_read_key() };
-        if key == b'q' as i32 || key == 27 {
+        if key == 27 {
             break;
+        }
+        if key > 0 {
+            wm.on_key(key);
         }
 
         let mut m = ffi::MouseState { dx: 0, dy: 0, left_button: false, right_button: false, middle_button: false };
@@ -3530,7 +3927,7 @@ mod tests {
         // Start menu bounds
         let sm_rect = wm.start_menu_rect();
         assert_eq!(sm_rect.x, 12);
-        assert_eq!(sm_rect.w, 360);
+        assert_eq!(sm_rect.w, 380);
         assert!(sm_rect.h >= 350);
 
         // Hit-test item 0 (Terminal)
@@ -3560,7 +3957,7 @@ mod tests {
         // Check desktop shortcuts exist
         assert_eq!(DESKTOP_SHORTCUTS.len(), 6);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
-        assert_eq!(icon0.x, 20);
+        assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
 
         // Minimize window 1, then click desktop icon for Files (idx 1)
@@ -3577,6 +3974,34 @@ mod tests {
         // Click peek strip again to restore
         wm.on_left_press(1022, 750);
         assert!(!wm.windows[0].is_minimized);
+    }
+
+    #[test]
+    fn test_wm_terminal_interactive_input() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0); // Focus Terminal (Window 0)
+        assert_eq!(wm.term.input_len, 0);
+
+        // Type 'help'
+        wm.on_key(b'h' as i32);
+        wm.on_key(b'e' as i32);
+        wm.on_key(b'l' as i32);
+        wm.on_key(b'p' as i32);
+        assert_eq!(&wm.term.input_buf[..wm.term.input_len], b"help");
+
+        // Test Backspace (8)
+        wm.on_key(8);
+        assert_eq!(&wm.term.input_buf[..wm.term.input_len], b"hel");
+
+        // Type 'p' again
+        wm.on_key(b'p' as i32);
+        assert_eq!(&wm.term.input_buf[..wm.term.input_len], b"help");
+
+        // Press Enter (10) to execute command
+        let old_lines = wm.term.line_count;
+        wm.on_key(10);
+        assert_eq!(wm.term.input_len, 0, "Input buffer should be cleared after execution");
+        assert!(wm.term.line_count > old_lines, "Terminal should output help reference lines");
     }
 
     #[test]
