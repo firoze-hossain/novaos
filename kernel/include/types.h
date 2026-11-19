@@ -23,6 +23,8 @@ typedef enum { false = 0, true = 1 } bool;
 
 // Size type
 typedef unsigned int size_t;
+typedef uint32_t     uintptr_t;
+typedef int32_t      intptr_t;
 
 // NULL pointer
 #define NULL ((void*)0)

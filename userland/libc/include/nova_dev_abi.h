@@ -1,7 +1,9 @@
 #ifndef _NOVA_DEV_ABI_H
 #define _NOVA_DEV_ABI_H
 
+#ifndef TYPES_H
 #include <stdint.h>
+#endif
 
 /* Month 5 / Phase 92: Device Manager & Hardware Query ABI (SYS_DEV_INFO 83) */
 #define NOVA_SYS_DEV_INFO 83

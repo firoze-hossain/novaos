@@ -457,8 +457,14 @@ static void save_text_font_once(void) {
     }
 }
 
+static bool g_skip_hw_switch = false;
+
+void vbe_set_skip_hw_switch(bool skip) {
+    g_skip_hw_switch = skip;
+}
+
 void vbe_enter_graphics(void) {
-    if (!g_available) {
+    if (!g_available || g_skip_hw_switch) {
         return;
     }
     /* Normally already done by vbe_init(); repeated here (it is a no-op
@@ -469,7 +475,7 @@ void vbe_enter_graphics(void) {
 }
 
 void vbe_exit_graphics(void) {
-    if (!g_available) {
+    if (!g_available || g_skip_hw_switch) {
         return;
     }
     dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);

@@ -27,6 +27,6 @@ echo  - RTL8139 10/100 PCI Network + TFTP Server
 echo  - Standard VGA Display (1024x768x32 direct VBE framebuffer)
 echo ========================================================================
 
-start "NovaOS Desktop Edition" "%QEMU%" -M pc,smm=off -m 512M -smp 2 -cdrom novaos.iso -boot order=d -drive file=disk.img,format=raw,if=ide,index=0,media=disk -netdev user,id=net0,tftp=tools/fixtures/tftproot -device rtl8139,netdev=net0,mac=52:54:00:12:34:56 -audiodev dsound,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 -device AC97,audiodev=snd0 -vga std
+start "NovaOS Desktop Edition" "%QEMU%" -M pc,smm=off -m 512M -smp 2 -cdrom novaos.iso -boot order=d -drive file=disk.img,format=raw,if=ide,index=0,media=disk -netdev user,id=net0,tftp=tools/fixtures/tftproot -device rtl8139,netdev=net0,mac=52:54:00:12:34:56 -audiodev dsound,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 -device AC97,audiodev=snd0 -display gtk,zoom-to-fit=on -vga std
 
 echo NovaOS QEMU window launched successfully.

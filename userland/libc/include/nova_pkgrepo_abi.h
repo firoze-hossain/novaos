@@ -9,7 +9,9 @@
 #ifndef _NOVA_PKGREPO_ABI_H
 #define _NOVA_PKGREPO_ABI_H
 
+#ifndef TYPES_H
 #include <stdint.h>
+#endif
 
 #define NOVA_SYS_PKGREPO_CTL 78
 

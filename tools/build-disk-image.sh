@@ -210,21 +210,45 @@ done
 # the last mkpart call this script can ever add - see this script's
 # own header comment on MAX_PARTITIONS. ---
 dd if=/dev/zero of="$DISK_IMG" bs=1M count=$TOTAL_MB status=none
-parted -s "$DISK_IMG" mklabel msdos >/dev/null 2>&1
-parted -s "$DISK_IMG" mkpart primary fat32 1MiB $((PART1_MB + 1))MiB >/dev/null 2>&1
-parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + 1))MiB $((PART1_MB + PART2_MB + 1))MiB >/dev/null 2>&1
-parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + 1))MiB >/dev/null 2>&1
-parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + PART3_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))MiB >/dev/null 2>&1
+if command -v parted >/dev/null 2>&1; then
+    parted -s "$DISK_IMG" mklabel msdos >/dev/null 2>&1
+    parted -s "$DISK_IMG" mkpart primary fat32 1MiB $((PART1_MB + 1))MiB >/dev/null 2>&1
+    parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + 1))MiB $((PART1_MB + PART2_MB + 1))MiB >/dev/null 2>&1
+    parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + 1))MiB >/dev/null 2>&1
+    parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))MiB >/dev/null 2>&1
 
-# 2048 sectors (1MiB) is parted's standard alignment for the first
-# partition; each subsequent partition starts wherever the previous
-# one ends, which parted also aligns to a clean sector boundary. Read
-# the real offsets back rather than assuming, in case parted's
-# alignment choice ever changes.
-PART1_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 1/ {gsub("s","",$2); print $2}')
-PART2_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 2/ {gsub("s","",$2); print $2}')
-PART3_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 3/ {gsub("s","",$2); print $2}')
-PART4_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 4/ {gsub("s","",$2); print $2}')
+    PART1_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 1/ {gsub("s","",$2); print $2}')
+    PART2_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 2/ {gsub("s","",$2); print $2}')
+    PART3_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 3/ {gsub("s","",$2); print $2}')
+    PART4_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 4/ {gsub("s","",$2); print $2}')
+else
+    # Fallback for systems where parted is unavailable (e.g. macOS native Homebrew):
+    # Construct exact 1MiB-aligned MBR partition table with python3.
+    PART1_START=2048
+    PART1_COUNT=$((PART1_MB * 2048))
+    PART2_START=$((PART1_START + PART1_COUNT))
+    PART2_COUNT=$((PART2_MB * 2048))
+    PART3_START=$((PART2_START + PART2_COUNT))
+    PART3_COUNT=$((PART3_MB * 2048))
+    PART4_START=$((PART3_START + PART3_COUNT))
+    PART4_COUNT=$((PART4_MB * 2048))
+
+    python3 -c "
+import struct
+with open('$DISK_IMG', 'r+b') as f:
+    f.seek(446)
+    # Entry 1: FAT32 LBA (0x0C)
+    f.write(struct.pack('<BBBBBBBBII', 0x80, 0, 0, 0, 0x0C, 0, 0, 0, $PART1_START, $PART1_COUNT))
+    # Entry 2: Linux ext2 (0x83)
+    f.write(struct.pack('<BBBBBBBBII', 0x00, 0, 0, 0, 0x83, 0, 0, 0, $PART2_START, $PART2_COUNT))
+    # Entry 3: Journal (0x83)
+    f.write(struct.pack('<BBBBBBBBII', 0x00, 0, 0, 0, 0x83, 0, 0, 0, $PART3_START, $PART3_COUNT))
+    # Entry 4: Crash dump (0x83)
+    f.write(struct.pack('<BBBBBBBBII', 0x00, 0, 0, 0, 0x83, 0, 0, 0, $PART4_START, $PART4_COUNT))
+    f.seek(510)
+    f.write(b'\x55\xaa')
+"
+fi
 
 dd if="$TMP/part1.img" of="$DISK_IMG" bs=512 seek="$PART1_START" conv=notrunc status=none
 dd if="$TMP/part2.img" of="$DISK_IMG" bs=512 seek="$PART2_START" conv=notrunc status=none

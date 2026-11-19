@@ -56,6 +56,12 @@ uint32_t vbe_get_bpp(void);
  * if vbe_available(); vga_graphics_enter() is the real caller. */
 void vbe_enter_graphics(void);
 
+/* Controls whether vbe_enter_graphics / vbe_exit_graphics actually toggle
+ * the hardware Bochs DISPI register. Used during boot conformance tests
+ * (e.g. GFXTEST.ELF) to prevent rapid CRT video mode toggles from shrinking
+ * the host QEMU Cocoa window. */
+void vbe_set_skip_hw_switch(bool skip);
+
 /* The reverse: disables the framebuffer display and restores VGA
  * text mode (vga_graphics_exit() is the real caller) - the console
  * becomes visible again exactly as before `gui` was entered. */

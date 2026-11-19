@@ -1,7 +1,9 @@
 #ifndef _NOVA_PROC_ABI_H
 #define _NOVA_PROC_ABI_H
 
+#ifndef TYPES_H
 #include <stdint.h>
+#endif
 
 /* Month 5: Activity & Performance Monitor ABI (SYS_PROC_INFO 84) */
 #define NOVA_SYS_PROC_INFO 84

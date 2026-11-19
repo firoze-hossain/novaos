@@ -278,6 +278,17 @@ server by default. Drop your own `.PKG` files into
 `tools/fixtures/tftproot/` (or point `tftp get FILE SERVER_IP` at a
 real TFTP server elsewhere) to try fetching something else.
 
+### Display Scaling & Auto-Adjustable High-DPI Windows (macOS, Linux, Windows)
+
+On high-resolution displays (such as macOS Retina displays, 4K monitors, or high-DPI laptops), standard VGA text mode (720x400) and legacy graphics modes (320x200 or 640x480) can appear physically tiny if fixed to 1x pixels.
+
+The Makefile now automatically passes OS-specific display scaling flags:
+- **macOS (`-display cocoa`)**: Uses the native Cocoa display backend. Note that passing `zoom-to-fit=on` on Cocoa triggers an upstream QEMU bug where the window collapses into a 1-pixel sliver when the guest rapidly switches resolutions during boot (`GFXTEST.ELF` testing VBE modes). Leaving `zoom-to-fit` off prevents this collapse and ensures the window automatically expands to a large, clear 1024x768 view when entering Desktop graphical mode.
+  - **Full Screen Toggle**: Press `Cmd + Ctrl + F` or choose **View -> Full Screen** in the macOS menu bar.
+  - **Launch directly in Full Screen**: Run `make run FULLSCREEN=1`.
+- **Linux (`-display gtk,zoom-to-fit=on` / `-display sdl`)**: Automatically detects GTK or SDL and enables window resizing and display scaling.
+- **Windows (`run-novaos.bat`)**: Launches QEMU with `-display gtk,zoom-to-fit=on` for resizable window scaling on high-DPI Windows screens.
+
 ### About graphics mode and the mouse (Phase 7+)
 
 `gui` switches the display to VGA Mode 13h (320x200, 256 colors) using

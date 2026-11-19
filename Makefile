@@ -28,10 +28,15 @@ ifeq ($(UNAME_S),Darwin)
         PREFIX :=
     endif
     QEMU = qemu-system-i386
-    GRUB_MKRESCUE = grub-mkrescue
+    GRUB_MKRESCUE ?= $(shell which grub-mkrescue 2>/dev/null || which i686-elf-grub-mkrescue 2>/dev/null || which x86_64-elf-grub-mkrescue 2>/dev/null || echo grub-mkrescue)
     # Mac-specific flags
     CFLAGS_EXTRA = -Wno-builtin-declaration-mismatch
     LDFLAGS_EXTRA =
+    # macOS display: Cocoa backend with zoom-to-fit allows smooth mouse drag-resizing.
+    # The macOS launcher script automatically sizes the window to comfortable 1024x640 (Image 2)
+    # on Retina screens upon launch. Boot-time test resolution toggles are safely bypassed in the kernel.
+    DISPLAY_FLAGS ?= -display cocoa,zoom-to-fit=on
+    QEMU_RUN_WRAPPER = ./tools/run-novaos-macos.sh
 else ifeq ($(UNAME_S),Linux)
     # Linux settings
     CC = gcc
@@ -41,8 +46,21 @@ else ifeq ($(UNAME_S),Linux)
     GRUB_MKRESCUE = grub-mkrescue
     CFLAGS_EXTRA =
     LDFLAGS_EXTRA =
+    QEMU_RUN_WRAPPER =
+    # Linux display: GTK with zoom-to-fit auto-scales on high-DPI screens, fallback to SDL or default.
+    ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on -version >/dev/null 2>&1 && echo ok),ok)
+        DISPLAY_FLAGS ?= -display gtk,zoom-to-fit=on
+    else ifeq ($(shell $(QEMU) -display sdl -version >/dev/null 2>&1 && echo ok),ok)
+        DISPLAY_FLAGS ?= -display sdl
+    else
+        DISPLAY_FLAGS ?=
+    endif
 else
     $(error Unsupported OS: $(UNAME_S))
+endif
+
+ifeq ($(FULLSCREEN),1)
+    DISPLAY_FLAGS += -full-screen
 endif
 
 # Common flags
@@ -380,15 +398,15 @@ server-image: $(DISK_SERVER_IMG)
 
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU_RUN_WRAPPER) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) $(DISPLAY_FLAGS) -vga std
 
 # Run Server Edition in QEMU (interactive)
 run-server: $(ISO_FILE) $(DISK_SERVER_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_SERVER_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -vga std
+	$(QEMU_RUN_WRAPPER) $(QEMU) -cdrom $(ISO_FILE) $(DISK_SERVER_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) $(DISPLAY_FLAGS) -vga std
 
 # Debug with GDB
 debug: $(ISO_FILE) $(DISK_IMG)
-	$(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) -s -S -vga std &
+	$(QEMU_RUN_WRAPPER) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) $(DISPLAY_FLAGS) -s -S -vga std &
 	sleep 1
 	gdb -ex "target remote localhost:1234" \
 	    -ex "symbol-file $(KERNEL_BIN)" \
