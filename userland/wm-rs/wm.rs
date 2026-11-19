@@ -248,6 +248,353 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 6] = [
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",     app_id: 3, icon_type: 3 },
 ];
 
+// --- International Timezone & Wall-Clock Calendar Subsystem ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimezoneSpec {
+    pub code: &'static str,
+    pub name: &'static str,
+    pub city_country: &'static str,
+    pub offset_minutes: i32,
+}
+
+pub const TIMEZONES: [TimezoneSpec; 22] = [
+    TimezoneSpec { code: "BST", name: "Asia/Dhaka", city_country: "Dhaka, Bangladesh", offset_minutes: 360 }, // UTC+6:00 (Default)
+    TimezoneSpec { code: "IST", name: "Asia/Kolkata", city_country: "New Delhi, India", offset_minutes: 330 }, // UTC+5:30
+    TimezoneSpec { code: "GST", name: "Asia/Dubai", city_country: "Dubai, UAE", offset_minutes: 240 }, // UTC+4:00
+    TimezoneSpec { code: "PKT", name: "Asia/Karachi", city_country: "Karachi, Pakistan", offset_minutes: 300 }, // UTC+5:00
+    TimezoneSpec { code: "SGT", name: "Asia/Singapore", city_country: "Singapore", offset_minutes: 480 }, // UTC+8:00
+    TimezoneSpec { code: "JST", name: "Asia/Tokyo", city_country: "Tokyo, Japan", offset_minutes: 540 }, // UTC+9:00
+    TimezoneSpec { code: "AEST", name: "Australia/Sydney", city_country: "Sydney, Australia", offset_minutes: 600 }, // UTC+10:00
+    TimezoneSpec { code: "NZST", name: "Pacific/Auckland", city_country: "Auckland, New Zealand", offset_minutes: 720 }, // UTC+12:00
+    TimezoneSpec { code: "UTC", name: "UTC", city_country: "Universal Coordinated Time", offset_minutes: 0 }, // UTC+0:00
+    TimezoneSpec { code: "GMT", name: "Europe/London", city_country: "London, UK", offset_minutes: 0 }, // UTC+0:00
+    TimezoneSpec { code: "CET", name: "Europe/Paris", city_country: "Paris, France", offset_minutes: 60 }, // UTC+1:00
+    TimezoneSpec { code: "CET", name: "Europe/Berlin", city_country: "Berlin, Germany", offset_minutes: 60 }, // UTC+1:00
+    TimezoneSpec { code: "MSK", name: "Europe/Moscow", city_country: "Moscow, Russia", offset_minutes: 180 }, // UTC+3:00
+    TimezoneSpec { code: "AST", name: "Asia/Riyadh", city_country: "Riyadh, Saudi Arabia", offset_minutes: 180 }, // UTC+3:00
+    TimezoneSpec { code: "EET", name: "Africa/Cairo", city_country: "Cairo, Egypt", offset_minutes: 120 }, // UTC+2:00
+    TimezoneSpec { code: "SAST", name: "Africa/Johannesburg", city_country: "Johannesburg, S. Africa", offset_minutes: 120 }, // UTC+2:00
+    TimezoneSpec { code: "BRT", name: "America/Sao_Paulo", city_country: "Sao Paulo, Brazil", offset_minutes: -180 }, // UTC-3:00
+    TimezoneSpec { code: "EST", name: "America/New_York", city_country: "New York, USA", offset_minutes: -300 }, // UTC-5:00
+    TimezoneSpec { code: "CST", name: "America/Chicago", city_country: "Chicago, USA", offset_minutes: -360 }, // UTC-6:00
+    TimezoneSpec { code: "MST", name: "America/Denver", city_country: "Denver, USA", offset_minutes: -420 }, // UTC-7:00
+    TimezoneSpec { code: "PST", name: "America/Los_Angeles", city_country: "Los Angeles, USA", offset_minutes: -480 }, // UTC-8:00
+    TimezoneSpec { code: "HST", name: "Pacific/Honolulu", city_country: "Honolulu, Hawaii", offset_minutes: -600 }, // UTC-10:00
+];
+
+pub fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+pub fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 => 31,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        3 => 31,
+        4 => 30,
+        5 => 31,
+        6 => 30,
+        7 => 31,
+        8 => 31,
+        9 => 30,
+        10 => 31,
+        11 => 30,
+        12 => 31,
+        _ => 30,
+    }
+}
+
+pub fn day_of_week(year: u16, month: u8, day: u8) -> u8 {
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let mut y = year as i32;
+    if month < 3 {
+        y -= 1;
+    }
+    let m = (month.saturating_sub(1) as usize).min(11);
+    let dow = (y + y / 4 - y / 100 + y / 400 + t[m] + day as i32) % 7;
+    if dow < 0 {
+        ((dow + 7) % 7) as u8
+    } else {
+        dow as u8
+    }
+}
+
+pub const MONTH_NAMES_SHORT: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+];
+
+pub const MONTH_NAMES_FULL: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+];
+
+pub const DAY_NAMES_SHORT: [&str; 7] = [
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+];
+
+pub const DAY_NAMES_FULL: [&str; 7] = [
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DateTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub day_of_week: u8,
+}
+
+pub fn calculate_datetime(base: ffi::RtcTime, offset_minutes: i32, offset_days: i32) -> DateTime {
+    let base_year = if base.year >= 2020 && base.year <= 2099 { base.year } else { 2026 };
+    let base_month = if base.month >= 1 && base.month <= 12 { base.month } else { 11 };
+    let base_day = if base.day >= 1 && base.day <= 31 { base.day } else { 19 };
+    let base_hour = if base.hour <= 23 { base.hour } else { 14 };
+    let base_min = if base.minute <= 59 { base.minute } else { 45 };
+    let base_sec = if base.second <= 59 { base.second } else { 0 };
+
+    let mut total_mins = (base_hour as i32) * 60 + (base_min as i32) + offset_minutes;
+    let mut day_delta = offset_days;
+
+    while total_mins < 0 {
+        total_mins += 1440;
+        day_delta -= 1;
+    }
+    while total_mins >= 1440 {
+        total_mins -= 1440;
+        day_delta += 1;
+    }
+
+    let final_hour = (total_mins / 60) as u8;
+    let final_min = (total_mins % 60) as u8;
+
+    let mut cur_y = base_year;
+    let mut cur_m = base_month;
+    let mut cur_d = (base_day as i32) + day_delta;
+
+    while cur_d > days_in_month(cur_y, cur_m) as i32 {
+        cur_d -= days_in_month(cur_y, cur_m) as i32;
+        cur_m += 1;
+        if cur_m > 12 {
+            cur_m = 1;
+            cur_y = cur_y.saturating_add(1);
+        }
+    }
+    while cur_d < 1 {
+        cur_m = if cur_m == 1 { 12 } else { cur_m - 1 };
+        if cur_m == 12 {
+            cur_y = cur_y.saturating_sub(1);
+        }
+        cur_d += days_in_month(cur_y, cur_m) as i32;
+    }
+
+    let final_day = (cur_d as u8).max(1);
+    let dow = day_of_week(cur_y, cur_m, final_day);
+
+    DateTime {
+        year: cur_y,
+        month: cur_m,
+        day: final_day,
+        hour: final_hour,
+        minute: final_min,
+        second: base_sec,
+        day_of_week: dow,
+    }
+}
+
+pub fn format_u32(val: u32, buf: &mut [u8], offset: &mut usize) {
+    if val == 0 {
+        if *offset < buf.len() {
+            buf[*offset] = b'0';
+            *offset += 1;
+        }
+        return;
+    }
+    let mut temp = [b'0'; 10];
+    let mut v = val;
+    let mut digits = 0;
+    while v > 0 && digits < 10 {
+        temp[9 - digits] = b'0' + (v % 10) as u8;
+        v /= 10;
+        digits += 1;
+    }
+    let start = 10 - digits;
+    for i in start..10 {
+        if *offset < buf.len() {
+            buf[*offset] = temp[i];
+            *offset += 1;
+        }
+    }
+}
+
+pub fn format_u32_padded(val: u32, width: usize, buf: &mut [u8], offset: &mut usize) {
+    let mut temp = [b'0'; 10];
+    let mut v = val;
+    let mut digits = 0;
+    if v == 0 {
+        digits = 1;
+    } else {
+        while v > 0 && digits < 10 {
+            temp[9 - digits] = b'0' + (v % 10) as u8;
+            v /= 10;
+            digits += 1;
+        }
+    }
+    let pad = if width > digits { width - digits } else { 0 };
+    for _ in 0..pad {
+        if *offset < buf.len() {
+            buf[*offset] = b'0';
+            *offset += 1;
+        }
+    }
+    let start = 10 - digits;
+    for i in start..10 {
+        if *offset < buf.len() {
+            buf[*offset] = temp[i];
+            *offset += 1;
+        }
+    }
+}
+
+pub fn append_str(s: &str, buf: &mut [u8], offset: &mut usize) {
+    let b = s.as_bytes();
+    for &ch in b {
+        if *offset < buf.len() {
+            buf[*offset] = ch;
+            *offset += 1;
+        }
+    }
+}
+
+pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    if h.len() < n.len() {
+        return false;
+    }
+    for i in 0..=h.len() - n.len() {
+        let mut matches = true;
+        for j in 0..n.len() {
+            if h[i + j].to_ascii_lowercase() != n[j].to_ascii_lowercase() {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn format_clock<'a>(
+    dt: &DateTime,
+    is_24h: bool,
+    show_seconds: bool,
+    buf: &'a mut [u8],
+) -> &'a str {
+    let mut off = 0;
+    if is_24h {
+        format_u32_padded(dt.hour as u32, 2, buf, &mut off);
+        append_str(":", buf, &mut off);
+        format_u32_padded(dt.minute as u32, 2, buf, &mut off);
+        if show_seconds {
+            append_str(":", buf, &mut off);
+            format_u32_padded(dt.second as u32, 2, buf, &mut off);
+        }
+    } else {
+        let (h12, ampm) = if dt.hour == 0 {
+            (12, "AM")
+        } else if dt.hour < 12 {
+            (dt.hour, "AM")
+        } else if dt.hour == 12 {
+            (12, "PM")
+        } else {
+            (dt.hour - 12, "PM")
+        };
+        format_u32(h12 as u32, buf, &mut off);
+        append_str(":", buf, &mut off);
+        format_u32_padded(dt.minute as u32, 2, buf, &mut off);
+        if show_seconds {
+            append_str(":", buf, &mut off);
+            format_u32_padded(dt.second as u32, 2, buf, &mut off);
+        }
+        append_str(" ", buf, &mut off);
+        append_str(ampm, buf, &mut off);
+    }
+    core::str::from_utf8(&buf[..off]).unwrap_or("12:00 PM")
+}
+
+pub fn format_full_date<'a>(dt: &DateTime, buf: &'a mut [u8]) -> &'a str {
+    let mut off = 0;
+    let dow_name = DAY_NAMES_FULL[dt.day_of_week as usize % 7];
+    let mon_name = MONTH_NAMES_FULL[dt.month.saturating_sub(1) as usize % 12];
+    append_str(dow_name, buf, &mut off);
+    append_str(", ", buf, &mut off);
+    format_u32(dt.day as u32, buf, &mut off);
+    append_str(" ", buf, &mut off);
+    append_str(mon_name, buf, &mut off);
+    append_str(" ", buf, &mut off);
+    format_u32(dt.year as u32, buf, &mut off);
+    core::str::from_utf8(&buf[..off]).unwrap_or("")
+}
+
+pub fn format_short_date<'a>(dt: &DateTime, buf: &'a mut [u8]) -> &'a str {
+    let mut off = 0;
+    let dow_name = DAY_NAMES_SHORT[dt.day_of_week as usize % 7];
+    let mon_name = MONTH_NAMES_SHORT[dt.month.saturating_sub(1) as usize % 12];
+    append_str(dow_name, buf, &mut off);
+    append_str(" ", buf, &mut off);
+    append_str(mon_name, buf, &mut off);
+    append_str(" ", buf, &mut off);
+    format_u32(dt.day as u32, buf, &mut off);
+    core::str::from_utf8(&buf[..off]).unwrap_or("")
+}
+
+pub fn format_tz_summary<'a>(tz: &TimezoneSpec, buf: &'a mut [u8]) -> &'a str {
+    let mut off = 0;
+    append_str(tz.city_country, buf, &mut off);
+    append_str(" (UTC", buf, &mut off);
+    let sign = if tz.offset_minutes >= 0 { "+" } else { "-" };
+    append_str(sign, buf, &mut off);
+    let off_h = tz.offset_minutes.abs() / 60;
+    let off_m = tz.offset_minutes.abs() % 60;
+    format_u32(off_h as u32, buf, &mut off);
+    if off_m != 0 {
+        append_str(":", buf, &mut off);
+        format_u32_padded(off_m as u32, 2, buf, &mut off);
+    }
+    append_str(")", buf, &mut off);
+    core::str::from_utf8(&buf[..off]).unwrap_or("")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeConfig {
+    pub timezone_idx: usize,
+    pub is_24h: bool,
+    pub show_seconds: bool,
+    pub manual_offset_minutes: i32,
+    pub manual_offset_days: i32,
+}
+
+impl Default for TimeConfig {
+    fn default() -> Self {
+        TimeConfig {
+            timezone_idx: 0, // Asia/Dhaka (UTC+6) default
+            is_24h: false,   // 12H AM/PM default
+            show_seconds: false,
+            manual_offset_minutes: 0,
+            manual_offset_days: 0,
+        }
+    }
+}
+
 pub const TERM_MAX_LINES: usize = 28;
 pub const TERM_LINE_LEN: usize = 96;
 pub const TERM_INPUT_LEN: usize = 128;
@@ -321,9 +668,15 @@ impl WmTerminal {
     }
 
     pub fn handle_key(&mut self, key: i32) {
+        let mut default_cfg = TimeConfig::default();
+        let default_rtc = ffi::RtcTime::default();
+        self.handle_key_with_context(key, &mut default_cfg, default_rtc);
+    }
+
+    pub fn handle_key_with_context(&mut self, key: i32, time_cfg: &mut TimeConfig, raw_rtc: ffi::RtcTime) {
         match key {
             10 | 13 => {
-                self.execute_command();
+                self.execute_command_with_context(time_cfg, raw_rtc);
             }
             8 | 127 => {
                 if self.cursor_idx > 0 && self.input_len > 0 {
@@ -359,6 +712,12 @@ impl WmTerminal {
     }
 
     pub fn execute_command(&mut self) {
+        let mut default_cfg = TimeConfig::default();
+        let default_rtc = ffi::RtcTime::default();
+        self.execute_command_with_context(&mut default_cfg, default_rtc);
+    }
+
+    pub fn execute_command_with_context(&mut self, time_cfg: &mut TimeConfig, raw_rtc: ffi::RtcTime) {
         let mut cmd_buf = [0u8; TERM_INPUT_LEN];
         let len = self.input_len.min(TERM_INPUT_LEN);
         cmd_buf[..len].copy_from_slice(&self.input_buf[..len]);
@@ -396,7 +755,7 @@ impl WmTerminal {
                 self.push_line("  ls [dir]   - List files in /root or specified directory", Color::rgb(220, 230, 242));
                 self.push_line("  cat <file> - Display file contents (e.g. cat HELLO.TXT)", Color::rgb(220, 230, 242));
                 self.push_line("  whoami     - Display active logged-in user credentials", Color::rgb(220, 230, 242));
-                self.push_line("  date       - Print system wall-clock date and timestamp", Color::rgb(220, 230, 242));
+                self.push_line("  date       - Print date/time (flags: --tz, --24h, --12h, -u, --sync)", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -429,7 +788,158 @@ impl WmTerminal {
                 self.push_line("admin (uid=0 gid=0 groups=0(wheel), 1(audio), 2(video))", Color::rgb(63, 185, 80));
             }
             "date" => {
-                self.push_line("Thu Nov 19 20:30:00 UTC 2026", Color::rgb(240, 246, 252));
+                if rest.is_empty() {
+                    let tz = &TIMEZONES[time_cfg.timezone_idx % TIMEZONES.len()];
+                    let dt = calculate_datetime(raw_rtc, tz.offset_minutes + time_cfg.manual_offset_minutes, time_cfg.manual_offset_days);
+                    let mut out = [0u8; 96];
+                    let mut off = 0;
+                    append_str(DAY_NAMES_SHORT[dt.day_of_week as usize % 7], &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    append_str(MONTH_NAMES_SHORT[dt.month.saturating_sub(1) as usize % 12], &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    format_u32_padded(dt.day as u32, 2, &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    format_u32_padded(dt.hour as u32, 2, &mut out, &mut off);
+                    append_str(":", &mut out, &mut off);
+                    format_u32_padded(dt.minute as u32, 2, &mut out, &mut off);
+                    append_str(":", &mut out, &mut off);
+                    format_u32_padded(dt.second as u32, 2, &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    append_str(tz.code, &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    format_u32_padded(dt.year as u32, 4, &mut out, &mut off);
+                    append_str(" (UTC", &mut out, &mut off);
+                    let sign = if tz.offset_minutes >= 0 { "+" } else { "-" };
+                    append_str(sign, &mut out, &mut off);
+                    let off_h = tz.offset_minutes.abs() / 60;
+                    let off_m = tz.offset_minutes.abs() % 60;
+                    format_u32_padded(off_h as u32, 2, &mut out, &mut off);
+                    append_str(":", &mut out, &mut off);
+                    format_u32_padded(off_m as u32, 2, &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    append_str(tz.name, &mut out, &mut off);
+                    append_str(")", &mut out, &mut off);
+                    let s = core::str::from_utf8(&out[..off]).unwrap_or("");
+                    self.push_line(s, Color::rgb(240, 246, 252));
+                } else if rest == "-u" || rest == "--utc" {
+                    let dt = calculate_datetime(raw_rtc, 0, 0);
+                    let mut out = [0u8; 96];
+                    let mut off = 0;
+                    append_str(DAY_NAMES_SHORT[dt.day_of_week as usize % 7], &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    append_str(MONTH_NAMES_SHORT[dt.month.saturating_sub(1) as usize % 12], &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    format_u32_padded(dt.day as u32, 2, &mut out, &mut off);
+                    append_str(" ", &mut out, &mut off);
+                    format_u32_padded(dt.hour as u32, 2, &mut out, &mut off);
+                    append_str(":", &mut out, &mut off);
+                    format_u32_padded(dt.minute as u32, 2, &mut out, &mut off);
+                    append_str(":", &mut out, &mut off);
+                    format_u32_padded(dt.second as u32, 2, &mut out, &mut off);
+                    append_str(" UTC ", &mut out, &mut off);
+                    format_u32_padded(dt.year as u32, 4, &mut out, &mut off);
+                    let s = core::str::from_utf8(&out[..off]).unwrap_or("");
+                    self.push_line(s, Color::rgb(240, 246, 252));
+                } else if rest == "--24h" {
+                    time_cfg.is_24h = true;
+                    self.push_line("[OK] Switched system clock to 24-hour mode (HH:MM).", Color::rgb(63, 185, 80));
+                } else if rest == "--12h" {
+                    time_cfg.is_24h = false;
+                    self.push_line("[OK] Switched system clock to 12-hour mode (hh:mm AM/PM).", Color::rgb(63, 185, 80));
+                } else if rest == "--sync" {
+                    time_cfg.manual_offset_minutes = 0;
+                    time_cfg.manual_offset_days = 0;
+                    self.push_line("[OK] System time synchronized with hardware CMOS RTC.", Color::rgb(63, 185, 80));
+                } else if rest.starts_with("--tz") {
+                    let arg = rest[4..].trim();
+                    if arg.is_empty() || arg == "list" {
+                        self.push_line("NovaOS World Timezones (22 International Regions):", Color::rgb(88, 166, 255));
+                        for (idx, tz) in TIMEZONES.iter().enumerate() {
+                            let mut buf = [0u8; 96];
+                            let mut off = 0;
+                            append_str("  [", &mut buf, &mut off);
+                            format_u32(idx as u32, &mut buf, &mut off);
+                            append_str("] ", &mut buf, &mut off);
+                            append_str(tz.name, &mut buf, &mut off);
+                            append_str(" (", &mut buf, &mut off);
+                            append_str(tz.code, &mut buf, &mut off);
+                            append_str(", UTC", &mut buf, &mut off);
+                            let sign = if tz.offset_minutes >= 0 { "+" } else { "-" };
+                            append_str(sign, &mut buf, &mut off);
+                            format_u32((tz.offset_minutes.abs() / 60) as u32, &mut buf, &mut off);
+                            let off_m = tz.offset_minutes.abs() % 60;
+                            if off_m != 0 {
+                                append_str(":", &mut buf, &mut off);
+                                format_u32_padded(off_m as u32, 2, &mut buf, &mut off);
+                            }
+                            append_str(") - ", &mut buf, &mut off);
+                            append_str(tz.city_country, &mut buf, &mut off);
+                            if idx == 0 {
+                                append_str(" [Default]", &mut buf, &mut off);
+                            }
+                            let s = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                            let col = if idx == time_cfg.timezone_idx {
+                                Color::rgb(56, 189, 248)
+                            } else {
+                                Color::rgb(220, 230, 242)
+                            };
+                            self.push_line(s, col);
+                        }
+                        self.push_line("Run 'date --tz <name>' to switch timezone.", Color::rgb(139, 148, 158));
+                    } else {
+                        let mut found = None;
+                        for (idx, tz) in TIMEZONES.iter().enumerate() {
+                            if contains_ignore_ascii_case(tz.name, arg)
+                                || contains_ignore_ascii_case(tz.city_country, arg)
+                                || contains_ignore_ascii_case(tz.code, arg)
+                            {
+                                found = Some(idx);
+                                break;
+                            }
+                        }
+                        if let Some(idx) = found {
+                            time_cfg.timezone_idx = idx;
+                            let tz = &TIMEZONES[idx];
+                            let mut buf = [0u8; 96];
+                            let mut off = 0;
+                            append_str("[OK] Timezone set to ", &mut buf, &mut off);
+                            append_str(tz.name, &mut buf, &mut off);
+                            append_str(" (", &mut buf, &mut off);
+                            append_str(tz.code, &mut buf, &mut off);
+                            append_str(") - ", &mut buf, &mut off);
+                            append_str(tz.city_country, &mut buf, &mut off);
+                            let s = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                            self.push_line(s, Color::rgb(63, 185, 80));
+                        } else {
+                            let mut buf = [0u8; 96];
+                            let mut off = 0;
+                            append_str("Error: timezone '", &mut buf, &mut off);
+                            let rlen = arg.as_bytes().len().min(30);
+                            append_str(&arg[..rlen], &mut buf, &mut off);
+                            append_str("' not found. Run 'date --tz list' for all timezones.", &mut buf, &mut off);
+                            let s = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                            self.push_line(s, Color::rgb(248, 81, 73));
+                        }
+                    }
+                } else if rest == "--help" || rest == "-h" {
+                    self.push_line("Usage: date [OPTIONS]", Color::rgb(88, 166, 255));
+                    self.push_line("  date              Display wall-clock date and time in active timezone", Color::rgb(220, 230, 242));
+                    self.push_line("  date -u, --utc    Display time in Coordinated Universal Time (UTC)", Color::rgb(220, 230, 242));
+                    self.push_line("  date --24h        Switch clock display to 24-hour mode (HH:MM)", Color::rgb(220, 230, 242));
+                    self.push_line("  date --12h        Switch clock display to 12-hour mode (hh:mm AM/PM)", Color::rgb(220, 230, 242));
+                    self.push_line("  date --tz list    List all 22 supported international timezones", Color::rgb(220, 230, 242));
+                    self.push_line("  date --tz <name>  Switch timezone (e.g. date --tz tokyo)", Color::rgb(220, 230, 242));
+                    self.push_line("  date --sync       Reset manual offset and sync with CMOS RTC", Color::rgb(220, 230, 242));
+                } else {
+                    let mut buf = [0u8; 96];
+                    let mut off = 0;
+                    append_str("date: unrecognized option '", &mut buf, &mut off);
+                    let rlen = rest.as_bytes().len().min(30);
+                    append_str(&rest[..rlen], &mut buf, &mut off);
+                    append_str("'. Try 'date --help'.", &mut buf, &mut off);
+                    let s = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                    self.push_line(s, Color::rgb(248, 81, 73));
+                }
             }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
@@ -507,6 +1017,9 @@ pub struct Wm {
     pub hovered_start_item: Option<usize>,
     pub hovered_desktop_icon: Option<usize>,
     pub term: WmTerminal,
+    pub time_cfg: TimeConfig,
+    pub raw_rtc: ffi::RtcTime,
+    pub calendar_open: bool,
 }
 
 impl Wm {
@@ -558,6 +1071,9 @@ impl Wm {
             hovered_start_item: None,
             hovered_desktop_icon: None,
             term: WmTerminal::new(),
+            time_cfg: TimeConfig::default(),
+            raw_rtc: ffi::RtcTime::default(),
+            calendar_open: false,
         }
     }
 
@@ -619,6 +1135,9 @@ impl Wm {
             hovered_start_item: None,
             hovered_desktop_icon: None,
             term: WmTerminal::new(),
+            time_cfg: TimeConfig::default(),
+            raw_rtc: ffi::RtcTime::default(),
+            calendar_open: false,
         }
     }
 
@@ -1042,8 +1561,42 @@ impl Wm {
             return;
         }
         if self.active_window() == Some(0) && self.windows[0].is_open && !self.windows[0].is_minimized {
-            self.term.handle_key(key);
+            self.term.handle_key_with_context(key, &mut self.time_cfg, self.raw_rtc);
         }
+    }
+
+    /// Reads CMOS RTC hardware time from kernel and updates raw_rtc.
+    pub fn sync_rtc(&mut self) {
+        let mut rtc = ffi::RtcTime::default();
+        let rc = unsafe { ffi::sys_rtc_read(&mut rtc) };
+        if rc == 0 && rtc.year >= 2020 {
+            self.raw_rtc = rtc;
+        } else if self.raw_rtc.year < 2020 {
+            self.raw_rtc = ffi::RtcTime {
+                year: 2026,
+                month: 11,
+                day: 19,
+                hour: 14,
+                minute: 45,
+                second: 0,
+            };
+        }
+    }
+
+    /// Returns the current dynamic date and time computed with active timezone and manual offset.
+    pub fn current_datetime(&self) -> DateTime {
+        let tz = &TIMEZONES[self.time_cfg.timezone_idx % TIMEZONES.len()];
+        let total_offset = tz.offset_minutes + self.time_cfg.manual_offset_minutes;
+        calculate_datetime(self.raw_rtc, total_offset, self.time_cfg.manual_offset_days)
+    }
+
+    /// Returns the bounding rectangle for the Calendar and International Time Hub flyout.
+    pub fn calendar_rect(&self) -> Rect {
+        let w = 320;
+        let h = 330;
+        let x = (self.screen_w - w - 8).max(4);
+        let y = (self.desktop_h - h - 8).max(self.menubar_h + 4);
+        Rect::new(x, y, w, h)
     }
 
     /// Hit-tests a pointer location against Start Menu application cards.
@@ -1473,6 +2026,112 @@ impl Wm {
     }
 
     pub fn on_left_press(&mut self, px: i32, py: i32) {
+        // -1. If Calendar & International Time Hub is open:
+        if self.calendar_open {
+            let cr = self.calendar_rect();
+            if point_in_rect(px, py, cr.x, cr.y, cr.w, cr.h) {
+                // 1. 12H / 24H Mode Toggle Button
+                let btn_mode = Rect::new(cr.x + cr.w - 86, cr.y + 12, 72, 20);
+                if point_in_rect(px, py, btn_mode.x, btn_mode.y, btn_mode.w, btn_mode.h) {
+                    self.time_cfg.is_24h = !self.time_cfg.is_24h;
+                    return;
+                }
+
+                // 2. Sync RTC Button
+                let btn_sync = Rect::new(cr.x + cr.w - 86, cr.y + 36, 72, 18);
+                if point_in_rect(px, py, btn_sync.x, btn_sync.y, btn_sync.w, btn_sync.h) {
+                    self.time_cfg.manual_offset_minutes = 0;
+                    self.time_cfg.manual_offset_days = 0;
+                    self.sync_rtc();
+                    return;
+                }
+
+                // 3. Timezone Prev [<] / Next [>] Buttons
+                let btn_tz_prev = Rect::new(cr.x + 14, cr.y + 64, 24, 24);
+                if point_in_rect(px, py, btn_tz_prev.x, btn_tz_prev.y, btn_tz_prev.w, btn_tz_prev.h) {
+                    if self.time_cfg.timezone_idx == 0 {
+                        self.time_cfg.timezone_idx = TIMEZONES.len() - 1;
+                    } else {
+                        self.time_cfg.timezone_idx -= 1;
+                    }
+                    return;
+                }
+
+                let btn_tz_next = Rect::new(cr.x + cr.w - 38, cr.y + 64, 24, 24);
+                if point_in_rect(px, py, btn_tz_next.x, btn_tz_next.y, btn_tz_next.w, btn_tz_next.h) {
+                    self.time_cfg.timezone_idx = (self.time_cfg.timezone_idx + 1) % TIMEZONES.len();
+                    return;
+                }
+
+                // 4. Calendar Day Cells
+                let dt = self.current_datetime();
+                let first_dow = day_of_week(dt.year, dt.month, 1);
+                let days_this_month = days_in_month(dt.year, dt.month);
+                let col_w = 41;
+                let grid_x = cr.x + 16;
+                let cell_y0 = cr.y + 124 + 18;
+                for row in 0..6 {
+                    for col in 0..7 {
+                        let cx = grid_x + (col as i32) * col_w;
+                        let cy = cell_y0 + (row as i32) * 22;
+                        if px >= cx && px < cx + col_w && py >= cy && py < cy + 22 {
+                            let idx = row * 7 + col;
+                            if idx >= first_dow as usize && idx < first_dow as usize + days_this_month as usize {
+                                let clicked_day = (idx - first_dow as usize + 1) as u8;
+                                let diff = (clicked_day as i32) - (dt.day as i32);
+                                self.time_cfg.manual_offset_days += diff;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // 5. Manual Time & Date Adjust Controls
+                let ctrl_y = cr.y + 294;
+                let btn_h_min = Rect::new(cr.x + 48, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_h_min.x, btn_h_min.y, btn_h_min.w, btn_h_min.h) {
+                    self.time_cfg.manual_offset_minutes -= 60;
+                    return;
+                }
+                let btn_h_pls = Rect::new(cr.x + 72, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_h_pls.x, btn_h_pls.y, btn_h_pls.w, btn_h_pls.h) {
+                    self.time_cfg.manual_offset_minutes += 60;
+                    return;
+                }
+
+                let btn_m_min = Rect::new(cr.x + 134, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_m_min.x, btn_m_min.y, btn_m_min.w, btn_m_min.h) {
+                    self.time_cfg.manual_offset_minutes -= 1;
+                    return;
+                }
+                let btn_m_pls = Rect::new(cr.x + 158, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_m_pls.x, btn_m_pls.y, btn_m_pls.w, btn_m_pls.h) {
+                    self.time_cfg.manual_offset_minutes += 1;
+                    return;
+                }
+
+                let btn_d_min = Rect::new(cr.x + 220, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_d_min.x, btn_d_min.y, btn_d_min.w, btn_d_min.h) {
+                    self.time_cfg.manual_offset_days -= 1;
+                    return;
+                }
+                let btn_d_pls = Rect::new(cr.x + 244, ctrl_y, 20, 20);
+                if point_in_rect(px, py, btn_d_pls.x, btn_d_pls.y, btn_d_pls.w, btn_d_pls.h) {
+                    self.time_cfg.manual_offset_days += 1;
+                    return;
+                }
+
+                return;
+            } else {
+                self.calendar_open = false;
+                if (self.menubar_h > 0 && py < self.menubar_h && px >= self.screen_w - 140)
+                    || (py >= self.desktop_h && px >= self.screen_w - 140 && px < self.screen_w - 6)
+                {
+                    return;
+                }
+            }
+        }
+
         // 0. If Start Menu is open:
         if self.start_menu_open {
             let sm = self.start_menu_rect();
@@ -1544,6 +2203,10 @@ impl Wm {
                 self.start_menu_open = !self.start_menu_open;
                 return;
             }
+            if px >= self.screen_w - 140 {
+                self.calendar_open = !self.calendar_open;
+                return;
+            }
             if let Some(menu_idx) = self.menubar_item_at(px, py) {
                 self.active_menu = Some(menu_idx);
             }
@@ -1560,6 +2223,11 @@ impl Wm {
             // Windows 11 "Show Desktop" peek strip on far right edge
             if px >= self.screen_w - 6 {
                 self.toggle_show_desktop();
+                return;
+            }
+            // Taskbar clock on right edge
+            if px >= self.screen_w - 140 {
+                self.calendar_open = !self.calendar_open;
                 return;
             }
             if let Some(idx) = self.taskbar_button_at(px, py) {
@@ -1874,6 +2542,11 @@ impl Wm {
             }
         }
 
+        // Format dynamic wall-clock string according to active timezone and 12h/24h mode
+        let mut clock_buf = [0u8; 32];
+        let dt = self.current_datetime();
+        let clock_str = format_clock(&dt, self.time_cfg.is_24h, false, &mut clock_buf);
+
         // 3. Taskbar / Dock
         if self.taskbar_h >= 24 {
             let dock_items = self.dock_items();
@@ -1891,7 +2564,7 @@ impl Wm {
                 taskbar_rect,
                 &valid_items[..valid_count],
                 self.hovered_dock_item,
-                "12:45 PM",
+                clock_str,
                 &palette,
             );
         } else {
@@ -1940,7 +2613,7 @@ impl Wm {
                 &menubar,
                 self.active_menu,
                 self.hovered_menu,
-                "12:45 PM",
+                clock_str,
                 &palette,
             );
         }
@@ -1965,6 +2638,11 @@ impl Wm {
         // 5b. Start Menu Popup Overlay
         if self.start_menu_open {
             self.draw_start_menu(surface, &palette);
+        }
+
+        // 5c. Calendar & International Time Hub Overlay
+        if self.calendar_open {
+            self.draw_calendar_flyout(surface, &palette);
         }
 
         // 6. Mouse cursor
@@ -2062,6 +2740,170 @@ impl Wm {
         ui::draw::draw_rounded_rect(s, Rect::new(rst_x, foot_y, rst_w, 22), 4, Color::rgba(71, 85, 105, 180));
         ui::draw::draw_rect_outline(s, Rect::new(rst_x, foot_y, rst_w, 22), 1, Color::rgba(255, 255, 255, 40));
         ui::font::draw_text_font(s, rst_x + 8, foot_y + 4, "Restart", Color::WHITE, &font_sm);
+    }
+
+    /// Renders the NovaOS Calendar & International Time Hub flyout panel.
+    pub fn draw_calendar_flyout<S: Surface + ?Sized>(&self, s: &mut S, palette: &ThemePalette) {
+        let cr = self.calendar_rect();
+        let font_bold = Font::regular().scaled(self.access_cfg.font_scale);
+        let font_sm = Font::small().scaled(self.access_cfg.font_scale);
+
+        // 1. Drop shadow (frosted floating window)
+        s.fill_rect(Rect::new(cr.x + 4, cr.y + 4, cr.w, cr.h), Color::rgba(0, 0, 0, 80));
+        s.fill_rect(Rect::new(cr.x + 2, cr.y + 2, cr.w, cr.h), Color::rgba(0, 0, 0, 50));
+
+        // 2. Acrylic / Frosted glass background & subtle glass border
+        ui::draw::draw_rounded_rect(s, cr, 10, Color::rgba(22, 27, 42, 244));
+        ui::draw::draw_rect_outline(s, cr, 1, Color::rgba(255, 255, 255, 45));
+
+        let dt = self.current_datetime();
+
+        // 3. Digital Clock in Header (e.g. "08:45:30 PM" or "20:45:30")
+        let mut clock_buf = [0u8; 32];
+        let clock_str = format_clock(&dt, self.time_cfg.is_24h, true, &mut clock_buf);
+        ui::font::draw_text_font(s, cr.x + 16, cr.y + 14, clock_str, Color::rgb(0, 212, 255), &font_bold);
+
+        // 4. 12H / 24H Toggle Button (Pill badge)
+        let btn_mode = Rect::new(cr.x + cr.w - 86, cr.y + 12, 72, 20);
+        ui::draw::draw_rounded_rect(s, btn_mode, 4, Color::rgba(255, 255, 255, 25));
+        ui::draw::draw_rect_outline(s, btn_mode, 1, Color::rgba(255, 255, 255, 40));
+        let mode_str = if self.time_cfg.is_24h { "24H Mode" } else { "12H Mode" };
+        ui::font::draw_text_font(s, btn_mode.x + 8, btn_mode.y + 4, mode_str, palette.text_primary, &font_sm);
+
+        // 5. Full Date String (e.g. "Thursday, 19 November 2026")
+        let mut date_buf = [0u8; 64];
+        let date_str = format_full_date(&dt, &mut date_buf);
+        ui::font::draw_text_font(s, cr.x + 16, cr.y + 36, date_str, palette.text_muted, &font_sm);
+
+        // 6. Sync RTC Button
+        let btn_sync = Rect::new(cr.x + cr.w - 86, cr.y + 36, 72, 18);
+        ui::draw::draw_rounded_rect(s, btn_sync, 4, Color::rgb(35, 134, 54));
+        ui::draw::draw_rect_outline(s, btn_sync, 1, Color::rgb(63, 185, 80));
+        ui::font::draw_text_font(s, btn_sync.x + 8, btn_sync.y + 3, "Sync RTC", Color::WHITE, &font_sm);
+
+        // Divider
+        s.fill_rect(Rect::new(cr.x + 14, cr.y + 58, cr.w - 28, 1), Color::rgba(255, 255, 255, 25));
+
+        // 7. Timezone Selector Strip
+        let tz = &TIMEZONES[self.time_cfg.timezone_idx % TIMEZONES.len()];
+        // Prev Button [<]
+        let btn_tz_prev = Rect::new(cr.x + 14, cr.y + 64, 24, 24);
+        ui::draw::draw_rounded_rect(s, btn_tz_prev, 4, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_tz_prev.x + 8, btn_tz_prev.y + 5, "<", palette.text_primary, &font_bold);
+
+        // Next Button [>]
+        let btn_tz_next = Rect::new(cr.x + cr.w - 38, cr.y + 64, 24, 24);
+        ui::draw::draw_rounded_rect(s, btn_tz_next, 4, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_tz_next.x + 8, btn_tz_next.y + 5, ">", palette.text_primary, &font_bold);
+
+        // Timezone Details in Center
+        ui::font::draw_text_font(s, cr.x + 44, cr.y + 64, tz.name, Color::rgb(88, 166, 255), &font_bold);
+        let mut tz_buf = [0u8; 64];
+        let tz_summary = format_tz_summary(tz, &mut tz_buf);
+        ui::font::draw_text_font(s, cr.x + 44, cr.y + 78, tz_summary, palette.text_muted, &font_sm);
+
+        // Divider
+        s.fill_rect(Rect::new(cr.x + 14, cr.y + 96, cr.w - 28, 1), Color::rgba(255, 255, 255, 25));
+
+        // 8. Monthly Calendar Header (e.g. "November 2026")
+        let mut my_buf = [0u8; 32];
+        let mut my_off = 0;
+        append_str(MONTH_NAMES_FULL[dt.month.saturating_sub(1) as usize % 12], &mut my_buf, &mut my_off);
+        append_str(" ", &mut my_buf, &mut my_off);
+        format_u32(dt.year as u32, &mut my_buf, &mut my_off);
+        let my_str = core::str::from_utf8(&my_buf[..my_off]).unwrap_or("");
+        ui::font::draw_text_font(s, cr.x + 16, cr.y + 104, my_str, palette.text_primary, &font_bold);
+
+        // 9. Day of Week Column Headers (Su Mo Tu We Th Fr Sa)
+        let col_w = 41;
+        let grid_x = cr.x + 16;
+        let grid_y = cr.y + 124;
+        let dow_headers = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        for (c, &name) in dow_headers.iter().enumerate() {
+            ui::font::draw_text_font(s, grid_x + (c as i32) * col_w + 10, grid_y, name, palette.text_muted, &font_sm);
+        }
+
+        // 10. Calendar Grid Cells
+        let first_dow = day_of_week(dt.year, dt.month, 1);
+        let days_this_month = days_in_month(dt.year, dt.month);
+        let prev_month = if dt.month == 1 { 12 } else { dt.month - 1 };
+        let prev_year = if dt.month == 1 { dt.year - 1 } else { dt.year };
+        let days_prev_month = days_in_month(prev_year, prev_month);
+
+        let cell_y0 = grid_y + 18;
+        for row in 0..6 {
+            for col in 0..7 {
+                let idx = row * 7 + col;
+                let cx = grid_x + (col as i32) * col_w;
+                let cy = cell_y0 + (row as i32) * 22;
+
+                if idx < first_dow as usize {
+                    // Previous month day
+                    let d = days_prev_month - (first_dow as usize - 1 - idx) as u8;
+                    let mut dbuf = [0u8; 8];
+                    let mut doff = 0;
+                    format_u32(d as u32, &mut dbuf, &mut doff);
+                    let s_val = core::str::from_utf8(&dbuf[..doff]).unwrap_or("");
+                    ui::font::draw_text_font(s, cx + 10, cy + 2, s_val, Color::rgb(80, 88, 98), &font_sm);
+                } else if idx < first_dow as usize + days_this_month as usize {
+                    // Current month day
+                    let d = (idx - first_dow as usize + 1) as u8;
+                    let mut dbuf = [0u8; 8];
+                    let mut doff = 0;
+                    format_u32(d as u32, &mut dbuf, &mut doff);
+                    let s_val = core::str::from_utf8(&dbuf[..doff]).unwrap_or("");
+
+                    if d == dt.day {
+                        // Today highlight badge (electric cyan rounded box)
+                        let badge = Rect::new(cx + 4, cy, 28, 20);
+                        ui::draw::draw_rounded_rect(s, badge, 5, Color::rgb(0, 180, 216));
+                        ui::font::draw_text_font(s, cx + if d < 10 { 12 } else { 8 }, cy + 3, s_val, Color::WHITE, &font_bold);
+                    } else {
+                        ui::font::draw_text_font(s, cx + if d < 10 { 12 } else { 8 }, cy + 3, s_val, palette.text_primary, &font_sm);
+                    }
+                } else {
+                    // Next month day
+                    let d = (idx - (first_dow as usize + days_this_month as usize) + 1) as u8;
+                    let mut dbuf = [0u8; 8];
+                    let mut doff = 0;
+                    format_u32(d as u32, &mut dbuf, &mut doff);
+                    let s_val = core::str::from_utf8(&dbuf[..doff]).unwrap_or("");
+                    ui::font::draw_text_font(s, cx + 10, cy + 2, s_val, Color::rgb(80, 88, 98), &font_sm);
+                }
+            }
+        }
+
+        // Divider
+        s.fill_rect(Rect::new(cr.x + 14, cr.y + 284, cr.w - 28, 1), Color::rgba(255, 255, 255, 25));
+
+        // 11. Manual Time & Date Adjust Controls Bar
+        let ctrl_y = cr.y + 294;
+        // Hour: [-] [+]
+        ui::font::draw_text_font(s, cr.x + 16, ctrl_y + 4, "Hour", palette.text_muted, &font_sm);
+        let btn_h_min = Rect::new(cr.x + 48, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_h_min, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_h_min.x + 6, btn_h_min.y + 3, "-", palette.text_primary, &font_bold);
+        let btn_h_pls = Rect::new(cr.x + 72, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_h_pls, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_h_pls.x + 5, btn_h_pls.y + 3, "+", palette.text_primary, &font_bold);
+
+        // Min: [-] [+]
+        ui::font::draw_text_font(s, cr.x + 106, ctrl_y + 4, "Min", palette.text_muted, &font_sm);
+        let btn_m_min = Rect::new(cr.x + 134, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_m_min, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_m_min.x + 6, btn_m_min.y + 3, "-", palette.text_primary, &font_bold);
+        let btn_m_pls = Rect::new(cr.x + 158, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_m_pls, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_m_pls.x + 5, btn_m_pls.y + 3, "+", palette.text_primary, &font_bold);
+
+        // Day: [-] [+]
+        ui::font::draw_text_font(s, cr.x + 192, ctrl_y + 4, "Day", palette.text_muted, &font_sm);
+        let btn_d_min = Rect::new(cr.x + 220, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_d_min, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_d_min.x + 6, btn_d_min.y + 3, "-", palette.text_primary, &font_bold);
+        let btn_d_pls = Rect::new(cr.x + 244, ctrl_y, 20, 20);
+        ui::draw::draw_rounded_rect(s, btn_d_pls, 3, Color::rgba(255, 255, 255, 25));
+        ui::font::draw_text_font(s, btn_d_pls.x + 5, btn_d_pls.y + 3, "+", palette.text_primary, &font_bold);
     }
 }
 
@@ -3467,8 +4309,15 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         wm.windows[0].pre_snap = (wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h);
     }
     wm.raise(0);
+    wm.sync_rtc();
 
+    let mut frame_count: u32 = 0;
     loop {
+        frame_count = frame_count.wrapping_add(1);
+        if frame_count % 30 == 0 {
+            wm.sync_rtc();
+        }
+
         let key = unsafe { ffi::sys_read_key() };
         if key == 27 {
             break;
@@ -4017,5 +4866,180 @@ mod tests {
         assert_ne!(p_top, 0);
         assert_ne!(p_mid, 0);
         assert_ne!(p_top, p_mid, "Wallpaper should be a smooth gradient / aurora bloom");
+    }
+
+    #[test]
+    fn test_wm_timezone_and_date_calculation() {
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2026));
+        assert!(is_leap_year(2000));
+        assert!(!is_leap_year(1900));
+
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2026, 11), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+
+        // Nov 19 2026 is Thursday (dow = 4)
+        assert_eq!(day_of_week(2026, 11, 19), 4);
+        // Jan 1 2026 is Thursday (dow = 4)
+        assert_eq!(day_of_week(2026, 1, 1), 4);
+
+        let base_rtc = ffi::RtcTime {
+            year: 2026,
+            month: 11,
+            day: 19,
+            hour: 14,
+            minute: 45,
+            second: 30,
+        };
+
+        // Asia/Dhaka (+360 min -> UTC+6:00): 14:45 + 6h = 20:45 on Nov 19
+        let dt_dhaka = calculate_datetime(base_rtc, 360, 0);
+        assert_eq!(dt_dhaka.year, 2026);
+        assert_eq!(dt_dhaka.month, 11);
+        assert_eq!(dt_dhaka.day, 19);
+        assert_eq!(dt_dhaka.hour, 20);
+        assert_eq!(dt_dhaka.minute, 45);
+        assert_eq!(dt_dhaka.second, 30);
+        assert_eq!(dt_dhaka.day_of_week, 4);
+
+        // America/New_York (-300 min -> UTC-5:00): 14:45 - 5h = 09:45 on Nov 19
+        let dt_ny = calculate_datetime(base_rtc, -300, 0);
+        assert_eq!(dt_ny.hour, 9);
+        assert_eq!(dt_ny.minute, 45);
+        assert_eq!(dt_ny.day, 19);
+
+        // Day rollover forward: 23:30 + 120 min = 01:30 next day (Nov 20)
+        let rtc_late = ffi::RtcTime {
+            year: 2026,
+            month: 11,
+            day: 19,
+            hour: 23,
+            minute: 30,
+            second: 0,
+        };
+        let dt_rollover_fwd = calculate_datetime(rtc_late, 120, 0);
+        assert_eq!(dt_rollover_fwd.day, 20);
+        assert_eq!(dt_rollover_fwd.hour, 1);
+        assert_eq!(dt_rollover_fwd.minute, 30);
+
+        // Day rollover backward: 01:15 - 180 min = 22:15 previous day (Nov 18)
+        let rtc_early = ffi::RtcTime {
+            year: 2026,
+            month: 11,
+            day: 19,
+            hour: 1,
+            minute: 15,
+            second: 0,
+        };
+        let dt_rollover_back = calculate_datetime(rtc_early, -180, 0);
+        assert_eq!(dt_rollover_back.day, 18);
+        assert_eq!(dt_rollover_back.hour, 22);
+        assert_eq!(dt_rollover_back.minute, 15);
+    }
+
+    #[test]
+    fn test_wm_clock_format_12h_24h() {
+        let dt = DateTime {
+            year: 2026,
+            month: 11,
+            day: 19,
+            hour: 20,
+            minute: 45,
+            second: 30,
+            day_of_week: 4,
+        };
+
+        let mut buf = [0u8; 32];
+        let str_12h = format_clock(&dt, false, false, &mut buf);
+        assert_eq!(str_12h, "8:45 PM");
+
+        let mut buf2 = [0u8; 32];
+        let str_24h = format_clock(&dt, true, false, &mut buf2);
+        assert_eq!(str_24h, "20:45");
+
+        let mut buf3 = [0u8; 32];
+        let str_12h_sec = format_clock(&dt, false, true, &mut buf3);
+        assert_eq!(str_12h_sec, "8:45:30 PM");
+
+        let mut buf4 = [0u8; 64];
+        let date_full = format_full_date(&dt, &mut buf4);
+        assert_eq!(date_full, "Thursday, 19 November 2026");
+    }
+
+    #[test]
+    fn test_wm_calendar_and_timezone_flyout_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.sync_rtc();
+        assert!(!wm.calendar_open);
+
+        // 1. Click taskbar clock to open calendar
+        wm.on_left_press(1024 - 40, 750);
+        assert!(wm.calendar_open, "Clicking taskbar clock should open calendar flyout");
+
+        let cr = wm.calendar_rect();
+        assert_eq!(cr.w, 320);
+
+        // 2. Toggle 12H / 24H button inside calendar
+        assert!(!wm.time_cfg.is_24h);
+        let btn_mode = Rect::new(cr.x + cr.w - 86, cr.y + 12, 72, 20);
+        wm.on_left_press(btn_mode.x + 10, btn_mode.y + 5);
+        assert!(wm.time_cfg.is_24h, "Clicking mode button should toggle 24H mode");
+
+        // 3. Click timezone next [>] button
+        assert_eq!(wm.time_cfg.timezone_idx, 0); // Asia/Dhaka default
+        let btn_tz_next = Rect::new(cr.x + cr.w - 38, cr.y + 64, 24, 24);
+        wm.on_left_press(btn_tz_next.x + 5, btn_tz_next.y + 5);
+        assert_eq!(wm.time_cfg.timezone_idx, 1, "Clicking next TZ button should switch to Asia/Kolkata");
+
+        // 4. Click timezone prev [<] button
+        let btn_tz_prev = Rect::new(cr.x + 14, cr.y + 64, 24, 24);
+        wm.on_left_press(btn_tz_prev.x + 5, btn_tz_prev.y + 5);
+        assert_eq!(wm.time_cfg.timezone_idx, 0, "Clicking prev TZ button should return to Asia/Dhaka");
+
+        // 5. Click hour [+] manual button
+        let ctrl_y = cr.y + 294;
+        let btn_h_pls = Rect::new(cr.x + 72, ctrl_y, 20, 20);
+        wm.on_left_press(btn_h_pls.x + 5, btn_h_pls.y + 5);
+        assert_eq!(wm.time_cfg.manual_offset_minutes, 60, "Clicking + Hour should add 60 minutes");
+
+        // 6. Click Sync RTC button to reset manual offset
+        let btn_sync = Rect::new(cr.x + cr.w - 86, cr.y + 36, 72, 18);
+        wm.on_left_press(btn_sync.x + 10, btn_sync.y + 5);
+        assert_eq!(wm.time_cfg.manual_offset_minutes, 0, "Sync RTC should reset manual offset");
+
+        // 7. Click outside calendar to dismiss
+        wm.on_left_press(100, 100);
+        assert!(!wm.calendar_open, "Clicking outside should dismiss calendar");
+    }
+
+    #[test]
+    fn test_wm_terminal_date_command() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.raise(0);
+        wm.sync_rtc();
+
+        // 1. Run 'date'
+        for b in b"date" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let last_line = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(last_line.contains("BST") || last_line.contains("Asia/Dhaka") || last_line.contains("2026"));
+
+        // 2. Run 'date --24h'
+        for b in b"date --24h" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        assert!(wm.time_cfg.is_24h, "date --24h should enable 24-hour mode");
+
+        // 3. Run 'date --tz tokyo'
+        for b in b"date --tz tokyo" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        assert_eq!(TIMEZONES[wm.time_cfg.timezone_idx].name, "Asia/Tokyo");
     }
 }

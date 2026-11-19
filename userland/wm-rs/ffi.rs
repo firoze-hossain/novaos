@@ -69,6 +69,18 @@ pub struct NovaFbReadback {
     pub flags: u32,
 }
 
+/// Matches kernel/drivers/rtc/rtc.h's rtc_time_t.
+#[repr(C)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RtcTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+
 pub const NOVA_FB_BACKEND_ANY: u32 = 0;
 pub const NOVA_FB_BACKEND_VBE: u32 = 1;
 pub const NOVA_FB_BACKEND_VIRTIOGPU: u32 = 2;
@@ -116,6 +128,9 @@ extern "C" {
     pub fn sys_gfx_put_pixel(x: i32, y: i32, color: u8);
     pub fn sys_gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: u8);
 
+    // --- Real-Time Clock ---
+    pub fn sys_rtc_read(out: *mut RtcTime) -> i32;
+
     // --- VFS File Syscalls ---
     pub fn sys_open(filename: *const u8) -> i32;
     pub fn sys_read(handle: i32, buf: *mut u8, max_len: i32) -> i32;
@@ -152,6 +167,20 @@ pub unsafe fn sys_gfx_exit() {}
 pub unsafe fn sys_gfx_put_pixel(_x: i32, _y: i32, _color: u8) {}
 #[cfg(test)]
 pub unsafe fn sys_gfx_fill_rect(_x: i32, _y: i32, _w: i32, _h: i32, _color: u8) {}
+#[cfg(test)]
+pub unsafe fn sys_rtc_read(out: *mut RtcTime) -> i32 {
+    if !out.is_null() {
+        *out = RtcTime {
+            year: 2026,
+            month: 11,
+            day: 19,
+            hour: 14,
+            minute: 45,
+            second: 30,
+        };
+    }
+    0
+}
 #[cfg(test)]
 pub unsafe fn sys_open(_filename: *const u8) -> i32 { -1 }
 #[cfg(test)]
