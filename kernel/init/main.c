@@ -1815,6 +1815,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
         kernel_log("[ %s ] Enterprise Security Audit v2.0 (Common Criteria EAL4, FIPS-140-3 KAT, constant-time, zeroize, KASLR, stack canary, daemon privilege drop): result=%d\n",
                    audit_v2_res == 0 ? "OK" : "FAIL", audit_v2_res);
 
+        /* Month 6 - Release Hardening: System Recovery Environment & Snapshot Rollback Mode */
+        extern int rust_recovery_kernel_selftest(void);
+        int recovery_res = rust_recovery_kernel_selftest();
+        kernel_log("[ %s ] System Recovery & Snapshot Rollback Mode (emergency boot hook, fallback detection, GPT repair, NovaFS snapshot rollback): result=%d\n",
+                   recovery_res == 0 ? "OK" : "FAIL", recovery_res);
+
         /* Month 6 / Phase 99: On-disk partitioning and formatting engine self-test */
         extern int rust_disk_installer_selftest(void);
         int installer_res = rust_disk_installer_selftest();

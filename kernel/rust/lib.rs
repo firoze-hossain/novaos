@@ -126,6 +126,9 @@ pub mod security;
 #[path = "../src/net/mod.rs"]
 pub mod net;
 
+#[path = "../src/boot/recovery.rs"]
+pub mod recovery;
+
 use core::panic::PanicInfo;
 
 extern "C" {
@@ -485,6 +488,18 @@ pub extern "C" fn rust_security_audit_v2_selftest() -> i32 {
         1
     }
 }
+
+/// NovaOS 2.0 (Month 6 - Release Hardening): System Recovery Environment & Snapshot Rollback Mode
+/// Self-test callable from kernel boot sequence and host test harness.
+#[no_mangle]
+pub extern "C" fn rust_recovery_kernel_selftest() -> i32 {
+    if recovery::run_recovery_kernel_selftest() {
+        0
+    } else {
+        1
+    }
+}
+
 
 
 

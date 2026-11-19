@@ -534,6 +534,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="14/14 checks (GPT partitioning, NovaFS rootfs, PBKDF2, timezone, desktop preview, showcase)"
     ),
     SubsystemSuiteDef(
+        id="test-recovery",
+        name="System Recovery Environment & Snapshot Rollback Mode",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_recovery_tests.sh",
+        make_target="test-recovery",
+        assertion_desc="18/18 checks (Kernel recovery hook, GPT/MBR repair, NovaFS snapshot rollback, PBKDF2 reset, GUI/CLI)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",
