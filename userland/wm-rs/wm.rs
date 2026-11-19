@@ -239,13 +239,14 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 6] = [
-    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",  app_id: 1, icon_type: 0 },
-    DesktopIconSpec { label: "Files",       sublabel: "/root",        app_id: 2, icon_type: 2 },
-    DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",     app_id: 1, icon_type: 1 },
-    DesktopIconSpec { label: "App Store",   sublabel: "Packages",     app_id: 4, icon_type: 4 },
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 7] = [
+    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",   app_id: 1, icon_type: 0 },
+    DesktopIconSpec { label: "Files",       sublabel: "/root",         app_id: 2, icon_type: 2 },
+    DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",      app_id: 1, icon_type: 1 },
+    DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks",app_id: 6, icon_type: 6 },
+    DesktopIconSpec { label: "App Store",   sublabel: "Packages",      app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel", app_id: 5, icon_type: 5 },
-    DesktopIconSpec { label: "README.txt",  sublabel: "Document",     app_id: 3, icon_type: 3 },
+    DesktopIconSpec { label: "README.txt",  sublabel: "Document",      app_id: 3, icon_type: 3 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -595,6 +596,380 @@ impl Default for TimeConfig {
     }
 }
 
+// --- NovaOS Desktop Calendar & Schedule Application Subsystem ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WmViewMode {
+    Month,
+    Week,
+    Day,
+    Agenda,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WmCategory {
+    Work,
+    Personal,
+    NovaOS,
+    Holidays,
+    Reminders,
+}
+
+impl WmCategory {
+    pub fn name(&self) -> &'static str {
+        match self {
+            WmCategory::Work => "Work",
+            WmCategory::Personal => "Personal",
+            WmCategory::NovaOS => "NovaOS",
+            WmCategory::Holidays => "Holidays",
+            WmCategory::Reminders => "Remind",
+        }
+    }
+
+    pub fn color_rgb(&self) -> (u8, u8, u8) {
+        match self {
+            WmCategory::Work => (239, 68, 68),      // Coral Red
+            WmCategory::Personal => (16, 185, 129),  // Emerald Green
+            WmCategory::NovaOS => (139, 92, 246),    // Royal Purple
+            WmCategory::Holidays => (245, 158, 11),  // Amber Gold
+            WmCategory::Reminders => (14, 165, 233), // Sky Blue
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        let (r, g, b) = self.color_rgb();
+        Color::rgb(r, g, b)
+    }
+
+    pub fn bit_mask(&self) -> u8 {
+        match self {
+            WmCategory::Work => 1,
+            WmCategory::Personal => 2,
+            WmCategory::NovaOS => 4,
+            WmCategory::Holidays => 8,
+            WmCategory::Reminders => 16,
+        }
+    }
+}
+
+pub const WM_MAX_CALENDAR_EVENTS: usize = 16;
+
+#[derive(Clone, Copy, Debug)]
+pub struct WmCalendarEvent {
+    pub id: u16,
+    pub title: &'static str,
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub time_start: &'static str,
+    pub time_end: &'static str,
+    pub category: WmCategory,
+    pub location: &'static str,
+    pub note: &'static str,
+}
+
+pub struct WmCalendarApp {
+    pub view_year: u16,
+    pub view_month: u8,
+    pub selected_day: u8,
+    pub today_year: u16,
+    pub today_month: u8,
+    pub today_day: u8,
+    pub view_mode: WmViewMode,
+    pub filter_mask: u8,
+    pub events: [WmCalendarEvent; WM_MAX_CALENDAR_EVENTS],
+    pub event_count: usize,
+    pub next_event_id: u16,
+    pub status_msg: &'static str,
+}
+
+impl WmCalendarApp {
+    pub fn new() -> Self {
+        WmCalendarApp {
+            view_year: 2026,
+            view_month: 11,
+            selected_day: 19,
+            today_year: 2026,
+            today_month: 11,
+            today_day: 19,
+            view_mode: WmViewMode::Month,
+            filter_mask: 0x1F, // all 5 categories enabled
+            events: [
+                WmCalendarEvent {
+                    id: 1,
+                    title: "NovaOS 2.0 GA Release Launch",
+                    year: 2026,
+                    month: 11,
+                    day: 19,
+                    time_start: "02:00 PM",
+                    time_end: "04:00 PM",
+                    category: WmCategory::NovaOS,
+                    location: "Main Auditorium",
+                    note: "Official GA release signing and production launch.",
+                },
+                WmCalendarEvent {
+                    id: 2,
+                    title: "Daily Architecture Standup",
+                    year: 2026,
+                    month: 11,
+                    day: 19,
+                    time_start: "09:30 AM",
+                    time_end: "10:00 AM",
+                    category: WmCategory::Work,
+                    location: "Matrix Channel",
+                    note: "SMP kernel, Long Mode memory paging, ring-3 transition.",
+                },
+                WmCalendarEvent {
+                    id: 3,
+                    title: "Team Celebration Dinner",
+                    year: 2026,
+                    month: 11,
+                    day: 19,
+                    time_start: "07:30 PM",
+                    time_end: "09:30 PM",
+                    category: WmCategory::Personal,
+                    location: "The Sapphire Bistro",
+                    note: "Celebrating Month 6 hardening and release readiness.",
+                },
+                WmCalendarEvent {
+                    id: 4,
+                    title: "Backup Cloud Snapshot Sync",
+                    year: 2026,
+                    month: 11,
+                    day: 19,
+                    time_start: "11:00 PM",
+                    time_end: "11:30 PM",
+                    category: WmCategory::Reminders,
+                    location: "Automated Host",
+                    note: "Verify Btrfs subvolume replication across cluster.",
+                },
+                WmCalendarEvent {
+                    id: 5,
+                    title: "Security Architecture Review",
+                    year: 2026,
+                    month: 11,
+                    day: 25,
+                    time_start: "10:00 AM",
+                    time_end: "12:00 PM",
+                    category: WmCategory::Work,
+                    location: "Conf Room B",
+                    note: "Capability-based syscall authorization verification.",
+                },
+                WmCalendarEvent {
+                    id: 6,
+                    title: "Thanksgiving Holiday",
+                    year: 2026,
+                    month: 11,
+                    day: 26,
+                    time_start: "All Day",
+                    time_end: "",
+                    category: WmCategory::Holidays,
+                    location: "Worldwide",
+                    note: "Annual holiday observance.",
+                },
+                WmCalendarEvent {
+                    id: 7,
+                    title: "Sprint 7 Planning",
+                    year: 2026,
+                    month: 12,
+                    day: 1,
+                    time_start: "09:00 AM",
+                    time_end: "10:30 AM",
+                    category: WmCategory::Work,
+                    location: "Virtual Room 1",
+                    note: "Roadmap planning for post-v2.0 enterprise telemetry.",
+                },
+                WmCalendarEvent {
+                    id: 8,
+                    title: "Christmas Day Holiday",
+                    year: 2026,
+                    month: 12,
+                    day: 25,
+                    time_start: "All Day",
+                    time_end: "",
+                    category: WmCategory::Holidays,
+                    location: "Worldwide",
+                    note: "Statutory winter holiday.",
+                },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+                WmCalendarEvent { id: 0, title: "", year: 0, month: 0, day: 0, time_start: "", time_end: "", category: WmCategory::Work, location: "", note: "" },
+            ],
+            event_count: 8,
+            next_event_id: 9,
+            status_msg: "Calendar Ready (Synced with RTC)",
+        }
+    }
+
+    pub fn next_month(&mut self) {
+        if self.view_month == 12 {
+            self.view_month = 1;
+            self.view_year = self.view_year.saturating_add(1);
+        } else {
+            self.view_month += 1;
+        }
+        let max_d = days_in_month(self.view_year, self.view_month);
+        self.selected_day = self.selected_day.min(max_d).max(1);
+    }
+
+    pub fn prev_month(&mut self) {
+        if self.view_month == 1 {
+            self.view_month = 12;
+            self.view_year = self.view_year.saturating_sub(1);
+        } else {
+            self.view_month -= 1;
+        }
+        let max_d = days_in_month(self.view_year, self.view_month);
+        self.selected_day = self.selected_day.min(max_d).max(1);
+    }
+
+    pub fn go_today(&mut self) {
+        self.view_year = self.today_year;
+        self.view_month = self.today_month;
+        self.selected_day = self.today_day;
+    }
+
+    pub fn toggle_category(&mut self, cat: WmCategory) {
+        self.filter_mask ^= cat.bit_mask();
+    }
+
+    pub fn is_category_enabled(&self, cat: WmCategory) -> bool {
+        (self.filter_mask & cat.bit_mask()) != 0
+    }
+
+    pub fn add_sample_event(&mut self) {
+        if self.event_count < WM_MAX_CALENDAR_EVENTS {
+            let id = self.next_event_id;
+            self.next_event_id += 1;
+            self.events[self.event_count] = WmCalendarEvent {
+                id,
+                title: "User Scheduled Session",
+                year: self.view_year,
+                month: self.view_month,
+                day: self.selected_day,
+                time_start: "03:30 PM",
+                time_end: "04:30 PM",
+                category: WmCategory::Work,
+                location: "NovaOS Workspace",
+                note: "Interactive event created via Calendar UI.",
+            };
+            self.event_count += 1;
+            self.status_msg = "New event added to calendar!";
+        } else {
+            self.status_msg = "Calendar schedule full.";
+        }
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let sb_w = if client.w >= 300 { 110 } else { 0 };
+
+        // 1. Sidebar clicks
+        if sb_w > 0 && px >= client.x && px < client.x + sb_w {
+            // Hero Date card click -> jump today
+            let hero_card = Rect::new(client.x + 6, client.y + 6, sb_w - 12, 58);
+            if point_in_rect(px, py, hero_card.x, hero_card.y, hero_card.w, hero_card.h) {
+                self.go_today();
+                return;
+            }
+
+            // Categories checkboxes: starts at y + 80
+            let cats = [
+                WmCategory::Work,
+                WmCategory::Personal,
+                WmCategory::NovaOS,
+                WmCategory::Holidays,
+                WmCategory::Reminders,
+            ];
+            let mut cat_y = client.y + 80;
+            for cat in cats.iter() {
+                let cat_rect = Rect::new(client.x + 6, cat_y, sb_w - 12, 18);
+                if point_in_rect(px, py, cat_rect.x, cat_rect.y, cat_rect.w, cat_rect.h) {
+                    self.toggle_category(*cat);
+                    return;
+                }
+                cat_y += 20;
+            }
+
+            // + Add Event button at bottom
+            let add_btn = Rect::new(client.x + 8, client.bottom() - 28, sb_w - 16, 22);
+            if point_in_rect(px, py, add_btn.x, add_btn.y, add_btn.w, add_btn.h) {
+                self.add_sample_event();
+                return;
+            }
+            return;
+        }
+
+        // 2. Main content area
+        let cx = client.x + sb_w;
+        let cw = client.w - sb_w;
+        let hdr_h = 28;
+
+        // Top Toolbar clicks
+        if py >= client.y && py < client.y + hdr_h {
+            // [ < ] Prev Month
+            let btn_prev = Rect::new(cx + 8, client.y + 4, 20, 20);
+            if point_in_rect(px, py, btn_prev.x, btn_prev.y, btn_prev.w, btn_prev.h) {
+                self.prev_month();
+                return;
+            }
+
+            // [ > ] Next Month
+            let btn_next = Rect::new(cx + 128, client.y + 4, 20, 20);
+            if point_in_rect(px, py, btn_next.x, btn_next.y, btn_next.w, btn_next.h) {
+                self.next_month();
+                return;
+            }
+
+            // [ Today ]
+            let btn_today = Rect::new(cx + 154, client.y + 4, 46, 20);
+            if point_in_rect(px, py, btn_today.x, btn_today.y, btn_today.w, btn_today.h) {
+                self.go_today();
+                return;
+            }
+
+            // View Switcher: [ Month | Week | Day | Agenda ]
+            let v_modes = [WmViewMode::Month, WmViewMode::Week, WmViewMode::Day, WmViewMode::Agenda];
+            let seg_w = 40;
+            let total_seg_w = seg_w * 4;
+            let seg_start_x = cx + cw - total_seg_w - 8;
+            for (i, mode) in v_modes.iter().enumerate() {
+                let seg_btn = Rect::new(seg_start_x + (i as i32) * seg_w, client.y + 4, seg_w, 20);
+                if point_in_rect(px, py, seg_btn.x, seg_btn.y, seg_btn.w, seg_btn.h) {
+                    self.view_mode = *mode;
+                    return;
+                }
+            }
+            return;
+        }
+
+        // 3. Grid clicks in Month view
+        if self.view_mode == WmViewMode::Month {
+            let grid_y0 = client.y + hdr_h + 18;
+            let col_w = (cw - 12) / 7;
+            let row_h = (client.h - hdr_h - 18 - 36).max(14) / 6;
+
+            if px >= cx + 6 && px < cx + 6 + col_w * 7 && py >= grid_y0 && py < grid_y0 + row_h * 6 {
+                let col = (px - (cx + 6)) / col_w;
+                let row = (py - grid_y0) / row_h;
+                let idx = (row * 7 + col) as usize;
+
+                let first_dow = day_of_week(self.view_year, self.view_month, 1) as usize;
+                let total_days = days_in_month(self.view_year, self.view_month) as usize;
+
+                if idx >= first_dow && idx < first_dow + total_days {
+                    let clicked_day = (idx - first_dow + 1) as u8;
+                    self.selected_day = clicked_day;
+                }
+            }
+        }
+    }
+}
+
 pub const TERM_MAX_LINES: usize = 28;
 pub const TERM_LINE_LEN: usize = 96;
 pub const TERM_INPUT_LEN: usize = 128;
@@ -756,6 +1131,7 @@ impl WmTerminal {
                 self.push_line("  cat <file> - Display file contents (e.g. cat HELLO.TXT)", Color::rgb(220, 230, 242));
                 self.push_line("  whoami     - Display active logged-in user credentials", Color::rgb(220, 230, 242));
                 self.push_line("  date       - Print date/time (flags: --tz, --24h, --12h, -u, --sync)", Color::rgb(220, 230, 242));
+                self.push_line("  cal        - Display calendar schedule & upcoming events (--events)", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -941,6 +1317,28 @@ impl WmTerminal {
                     self.push_line(s, Color::rgb(248, 81, 73));
                 }
             }
+            "cal" | "calendar" => {
+                if rest.is_empty() || rest == "--month" {
+                    self.push_line("    November 2026", Color::rgb(0, 212, 255));
+                    self.push_line("Su Mo Tu We Th Fr Sa", Color::rgb(139, 148, 158));
+                    self.push_line(" 1  2  3  4  5  6  7", Color::rgb(220, 230, 242));
+                    self.push_line(" 8  9 10 11 12 13 14", Color::rgb(220, 230, 242));
+                    self.push_line("15 16 17 18 19 20 21", Color::rgb(240, 246, 252));
+                    self.push_line("22 23 24 25 26 27 28", Color::rgb(220, 230, 242));
+                    self.push_line("29 30               ", Color::rgb(220, 230, 242));
+                    self.push_line("Today: Nov 19, 2026 (4 events scheduled)", Color::rgb(63, 185, 80));
+                } else if rest == "--events" || rest == "-e" {
+                    self.push_line("NovaOS Calendar - Scheduled Events:", Color::rgb(88, 166, 255));
+                    self.push_line("  * Nov 19, 09:30 AM [Work] Daily Architecture Standup", Color::rgb(239, 68, 68));
+                    self.push_line("  * Nov 19, 02:00 PM [NovaOS] NovaOS 2.0 GA Release Launch", Color::rgb(139, 92, 246));
+                    self.push_line("  * Nov 19, 07:30 PM [Personal] Team Celebration Dinner", Color::rgb(16, 185, 129));
+                    self.push_line("  * Nov 19, 11:00 PM [Reminders] Backup Cloud Snapshot Sync", Color::rgb(14, 165, 233));
+                    self.push_line("  * Nov 25, 10:00 AM [Work] Security Architecture Review", Color::rgb(239, 68, 68));
+                    self.push_line("  * Nov 26, All Day  [Holidays] Thanksgiving Holiday", Color::rgb(245, 158, 11));
+                } else {
+                    self.push_line("Usage: cal [--month | --events]", Color::rgb(88, 166, 255));
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -1020,6 +1418,7 @@ pub struct Wm {
     pub time_cfg: TimeConfig,
     pub raw_rtc: ffi::RtcTime,
     pub calendar_open: bool,
+    pub calendar_app: WmCalendarApp,
 }
 
 impl Wm {
@@ -1074,6 +1473,7 @@ impl Wm {
             time_cfg: TimeConfig::default(),
             raw_rtc: ffi::RtcTime::default(),
             calendar_open: false,
+            calendar_app: WmCalendarApp::new(),
         }
     }
 
@@ -1138,6 +1538,7 @@ impl Wm {
             time_cfg: TimeConfig::default(),
             raw_rtc: ffi::RtcTime::default(),
             calendar_open: false,
+            calendar_app: WmCalendarApp::new(),
         }
     }
 
@@ -1581,6 +1982,9 @@ impl Wm {
                 second: 0,
             };
         }
+        self.calendar_app.today_year = self.raw_rtc.year;
+        self.calendar_app.today_month = self.raw_rtc.month;
+        self.calendar_app.today_day = self.raw_rtc.day;
     }
 
     /// Returns the current dynamic date and time computed with active timezone and manual offset.
@@ -1619,10 +2023,13 @@ impl Wm {
         if idx >= DESKTOP_SHORTCUTS.len() || self.desktop_h < 400 {
             return None;
         }
-        let x = 18;
         let start_y = if self.menubar_h > 0 { self.menubar_h + 16 } else { 16 };
-        let y = start_y + (idx as i32 * 78);
-        if y + 70 > self.desktop_h - 10 {
+        let items_per_col = ((self.desktop_h - start_y - 10) / 78).max(1) as usize;
+        let col = (idx / items_per_col) as i32;
+        let row = (idx % items_per_col) as i32;
+        let x = 18 + col * 86;
+        let y = start_y + row * 78;
+        if y + 70 > self.desktop_h {
             return None;
         }
         Some(Rect::new(x, y, 78, 70))
@@ -1668,6 +2075,12 @@ impl Wm {
                 return;
             }
         }
+        // 3. Fallback: reuse the background-most window slot
+        let bg_idx = self.z_order[0];
+        self.windows[bg_idx].label = app_id;
+        self.windows[bg_idx].is_open = true;
+        self.windows[bg_idx].is_minimized = false;
+        self.raise(bg_idx);
     }
 
     /// Windows 11 style "Show Desktop" toggle: minimizes all windows or restores active.
@@ -2046,6 +2459,14 @@ impl Wm {
                     return;
                 }
 
+                // 2b. Open Full Calendar App Button
+                let btn_open_app = Rect::new(cr.x + cr.w - 86, cr.y + 102, 72, 20);
+                if point_in_rect(px, py, btn_open_app.x, btn_open_app.y, btn_open_app.w, btn_open_app.h) {
+                    self.launch_or_restore(6);
+                    self.calendar_open = false;
+                    return;
+                }
+
                 // 3. Timezone Prev [<] / Next [>] Buttons
                 let btn_tz_prev = Rect::new(cr.x + 14, cr.y + 64, 24, 24);
                 if point_in_rect(px, py, btn_tz_prev.x, btn_tz_prev.y, btn_tz_prev.w, btn_tz_prev.h) {
@@ -2141,9 +2562,9 @@ impl Wm {
                         0 => 1, // Terminal
                         1 => 2, // Files
                         2 => 3, // Editor
-                        3 => 4, // Software Store
+                        3 => 6, // Calendar
                         4 => 5, // Settings
-                        _ => 4, // System / Monitor
+                        _ => 4, // Software Store
                     };
                     self.launch_or_restore(target_app);
                     self.start_menu_open = false;
@@ -2280,9 +2701,17 @@ impl Wm {
             return;
         }
 
-        // 5. Window body clicks (raise)
+        // 5. Window body clicks (raise & route interactive events)
         if let Some(idx) = self.window_at(px, py) {
             self.raise(idx);
+            let w = &self.windows[idx];
+            if w.label == 6 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.calendar_app.handle_click(px, py, client);
+                }
+            }
             return;
         }
 
@@ -2406,6 +2835,8 @@ impl Wm {
                     draw_store_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 5 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                } else if w.label == 6 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_calendar_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.calendar_app, &palette);
                 }
             }
 
@@ -2463,6 +2894,7 @@ impl Wm {
                     3 => "Editor - Scratchpad",
                     4 => "Software Store - Packages",
                     5 => "Settings - Control Panel",
+                    6 => "Calendar - NovaOS Schedule & Events",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -2690,9 +3122,9 @@ impl Wm {
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Scratchpad", "Code Editor", 3),
-            ("App Store", "Nova Packages", 4),
+            ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
-            ("Diagnostics", "This PC Stats", 0),
+            ("App Store", "Nova Packages", 4),
         ];
 
         for i in 0..6 {
@@ -2813,6 +3245,12 @@ impl Wm {
         format_u32(dt.year as u32, &mut my_buf, &mut my_off);
         let my_str = core::str::from_utf8(&my_buf[..my_off]).unwrap_or("");
         ui::font::draw_text_font(s, cr.x + 16, cr.y + 104, my_str, palette.text_primary, &font_bold);
+
+        // Open Full Calendar App Button
+        let btn_open_app = Rect::new(cr.x + cr.w - 86, cr.y + 102, 72, 20);
+        ui::draw::draw_rounded_rect(s, btn_open_app, 4, Color::rgba(139, 92, 246, 180));
+        ui::draw::draw_rect_outline(s, btn_open_app, 1, Color::rgba(255, 255, 255, 60));
+        ui::font::draw_text_font(s, btn_open_app.x + 8, btn_open_app.y + 4, "Open App", Color::WHITE, &font_sm);
 
         // 9. Day of Week Column Headers (Su Mo Tu We Th Fr Sa)
         let col_w = 41;
@@ -3131,6 +3569,48 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             ui::draw::draw_rounded_rect(s, Rect::new(cx2 - r2 / 2, cy2 - r2 / 2, r2, r2), r2 / 2, Color::rgb(148, 163, 184));
             s.fill_rect(Rect::new(cx2 - 1, cy2 - 1, 3, 3), Color::rgb(59, 130, 246));
         }
+        6 => {
+            // 6: Calendar (Realistic 3D calendar with crimson header, binder rings, date '19', colored category dots)
+            let cal_w = (size * 82) / 100;
+            let cal_h = (size * 82) / 100;
+            let cal_x = x + (size - cal_w) / 2;
+            let cal_y = y + (size - cal_h) / 2;
+
+            // Page drop shadow
+            s.fill_rect(Rect::new(cal_x + 2, cal_y + 2, cal_w, cal_h), Color::rgba(0, 0, 0, 45));
+
+            // Calendar page body (ivory paper)
+            ui::draw::draw_rounded_rect(s, Rect::new(cal_x, cal_y, cal_w, cal_h), 4, Color::rgb(248, 250, 252));
+            ui::draw::draw_rect_outline(s, Rect::new(cal_x, cal_y, cal_w, cal_h), 1, Color::rgb(203, 213, 225));
+
+            // Crimson / Coral Header Banner
+            let hdr_h = (cal_h * 32) / 100;
+            ui::draw::draw_rounded_rect(s, Rect::new(cal_x, cal_y, cal_w, hdr_h), 3, Color::rgb(225, 29, 72));
+            s.fill_rect(Rect::new(cal_x + 1, cal_y + 1, cal_w - 2, 1), Color::rgb(244, 63, 94)); // top sheen
+
+            // Metallic Twin Binder Rings
+            let ring_w = 3;
+            let ring_h = 5;
+            let r1_x = cal_x + (cal_w * 25) / 100;
+            let r2_x = cal_x + (cal_w * 75) / 100 - ring_w;
+            let r_y = cal_y - 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(r1_x, r_y, ring_w, ring_h), 1, Color::rgb(226, 232, 240));
+            ui::draw::draw_rounded_rect(s, Rect::new(r2_x, r_y, ring_w, ring_h), 1, Color::rgb(226, 232, 240));
+
+            // Bold Day Number "19" in center
+            let font_reg = Font::regular();
+            let d_sz = font_reg.measure_str("19");
+            let dx = cal_x + (cal_w - d_sz.w) / 2;
+            let dy = cal_y + hdr_h + (cal_h - hdr_h - d_sz.h) / 2 - 2;
+            ui::font::draw_text_font(s, dx, dy, "19", Color::rgb(15, 23, 42), &font_reg);
+
+            // Colored event category indicator dots at bottom (Emerald, Royal Purple, Amber)
+            let dot_y = cal_y + cal_h - 5;
+            let dot_cx = cal_x + cal_w / 2;
+            s.fill_rect(Rect::new(dot_cx - 6, dot_y, 3, 3), Color::rgb(16, 185, 129));
+            s.fill_rect(Rect::new(dot_cx - 1, dot_y, 3, 3), Color::rgb(139, 92, 246));
+            s.fill_rect(Rect::new(dot_cx + 4, dot_y, 3, 3), Color::rgb(245, 158, 11));
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -3144,10 +3624,13 @@ fn draw_desktop_icons<S: Surface + ?Sized>(
     palette: &ThemePalette,
 ) {
     let font = Font::small();
+    let start_y = if menubar_h > 0 { menubar_h + 16 } else { 16 };
+    let items_per_col = 6;
     for (i, spec) in DESKTOP_SHORTCUTS.iter().enumerate() {
-        let x = 18;
-        let start_y = if menubar_h > 0 { menubar_h + 16 } else { 16 };
-        let y = start_y + (i as i32 * 78);
+        let col = (i / items_per_col) as i32;
+        let row = (i % items_per_col) as i32;
+        let x = 18 + col * 86;
+        let y = start_y + row * 78;
         let rect = Rect::new(x, y, 78, 70);
 
         let is_hovered = hovered_icon == Some(i);
@@ -3202,6 +3685,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
         5 => {
             // Settings sliders icon
             ui::dock::draw_dock_app_icon(s, x, y, 5, palette);
+        }
+        6 => {
+            // Calendar icon: red header bar + white card + colored dots
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::WHITE);
+            s.fill_rect(Rect::new(x + 1, y + 1, 10, 3), Color::rgb(225, 29, 72));
+            s.put_pixel(x + 3, y + 7, Color::rgb(14, 165, 233));
+            s.put_pixel(x + 6, y + 7, Color::rgb(245, 158, 11));
+            s.put_pixel(x + 9, y + 7, Color::rgb(34, 197, 94));
         }
         _ => {
             // System gear icon
@@ -3401,6 +3892,353 @@ fn draw_settings_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palet
         s.fill_rect(sb_rect, palette.surface_raised);
         s.fill_rect(Rect::new(cx, sb_rect.y, cw, 1), palette.border_subtle);
         ui::font::draw_text_font(s, cx + 8, sb_rect.y + 2, "Ready | Synchronized", palette.text_muted, &f_small);
+    }
+}
+
+/// Renders the complete, interactive NovaOS Calendar Application client body inside Window 6.
+/// Synthesizes Apple Calendar (macOS), Windows 11 Calendar, and Ubuntu GNOME Calendar.
+fn draw_calendar_app_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    cal: &WmCalendarApp,
+    palette: &ThemePalette,
+) {
+    let font_sm = Font::small();
+    let font_reg = Font::regular();
+
+    // Responsive sidebar
+    let sb_w = if client.w >= 300 { 110 } else { 0 };
+
+    // 1. Sidebar (macOS categories + Windows 11 Acrylic Hero Card)
+    if sb_w > 0 {
+        let sb_rect = Rect::new(client.x, client.y, sb_w, client.h);
+        s.fill_rect(sb_rect, palette.surface_raised);
+        s.fill_rect(Rect::new(sb_rect.right() - 1, sb_rect.y, 1, sb_rect.h), palette.border_subtle);
+
+        // Windows 11 Hero Date Card
+        let hero_rect = Rect::new(client.x + 6, client.y + 6, sb_w - 12, 58);
+        ui::draw::draw_rounded_rect(s, hero_rect, 6, Color::rgba(255, 255, 255, 14));
+        ui::draw::draw_rect_outline(s, hero_rect, 1, Color::rgba(255, 255, 255, 26));
+
+        // Selected Day Number (Big, e.g. "19")
+        let mut dbuf = [0u8; 8];
+        let mut doff = 0;
+        format_u32(cal.selected_day as u32, &mut dbuf, &mut doff);
+        let d_str = core::str::from_utf8(&dbuf[..doff]).unwrap_or("");
+        ui::font::draw_text_font(s, hero_rect.x + 8, hero_rect.y + 4, d_str, Color::rgb(0, 212, 255), &font_reg);
+
+        // Day of Week
+        let sel_dow = day_of_week(cal.view_year, cal.view_month, cal.selected_day);
+        let dow_str = DAY_NAMES_FULL[sel_dow as usize % 7];
+        ui::font::draw_text_font(s, hero_rect.x + 8, hero_rect.y + 24, dow_str, Color::WHITE, &font_sm);
+
+        // Month & Year
+        let m_idx = cal.view_month.saturating_sub(1) as usize % 12;
+        let mut my_buf = [0u8; 24];
+        let mut my_off = 0;
+        append_str(MONTH_NAMES_SHORT[m_idx], &mut my_buf, &mut my_off);
+        append_str(" ", &mut my_buf, &mut my_off);
+        format_u32(cal.view_year as u32, &mut my_buf, &mut my_off);
+        let my_str = core::str::from_utf8(&my_buf[..my_off]).unwrap_or("");
+        ui::font::draw_text_font(s, hero_rect.x + 8, hero_rect.y + 40, my_str, palette.text_muted, &font_sm);
+
+        // macOS Category Filters Header
+        let sec_y = client.y + 70;
+        ui::font::draw_text_font(s, client.x + 8, sec_y, "CATEGORIES", palette.text_muted, &font_sm);
+
+        // Category items with interactive pills
+        let cats = [
+            WmCategory::Work,
+            WmCategory::Personal,
+            WmCategory::NovaOS,
+            WmCategory::Holidays,
+            WmCategory::Reminders,
+        ];
+        let mut cy = sec_y + 14;
+        for cat in cats.iter() {
+            if cy + 18 > client.bottom() - 32 {
+                break;
+            }
+            let is_enabled = cal.is_category_enabled(*cat);
+            let pill_rect = Rect::new(client.x + 6, cy, sb_w - 12, 18);
+            if is_enabled {
+                ui::draw::draw_rounded_rect(s, pill_rect, 3, Color::rgba(255, 255, 255, 14));
+            }
+
+            // Colored dot
+            let (r, g, b) = cat.color_rgb();
+            let dot_col = if is_enabled { Color::rgb(r, g, b) } else { Color::rgb(80, 88, 98) };
+            ui::draw::draw_rounded_rect(s, Rect::new(pill_rect.x + 4, cy + 4, 8, 8), 4, dot_col);
+
+            let txt_col = if is_enabled { Color::WHITE } else { palette.text_muted };
+            ui::font::draw_text_font(s, pill_rect.x + 16, cy + 3, cat.name(), txt_col, &font_sm);
+
+            cy += 20;
+        }
+
+        // "+ Add Event" Button at bottom
+        let add_btn = Rect::new(client.x + 8, client.bottom() - 26, sb_w - 16, 20);
+        ui::draw::draw_rounded_rect(s, add_btn, 4, Color::rgb(35, 134, 54));
+        ui::draw::draw_rect_outline(s, add_btn, 1, Color::rgb(63, 185, 80));
+        ui::font::draw_text_font(s, add_btn.x + 10, add_btn.y + 3, "+ Add Event", Color::WHITE, &font_sm);
+    }
+
+    // 2. Main Content Canvas
+    let cx = client.x + sb_w;
+    let cw = client.w - sb_w;
+    let hdr_h = 28;
+
+    // Header Toolbar
+    let hdr_rect = Rect::new(cx, client.y, cw, hdr_h);
+    s.fill_rect(hdr_rect, palette.surface_raised);
+    s.fill_rect(Rect::new(cx, hdr_rect.bottom() - 1, cw, 1), palette.border_subtle);
+
+    // Prev Button [<]
+    let btn_prev = Rect::new(cx + 8, client.y + 4, 20, 20);
+    ui::draw::draw_rounded_rect(s, btn_prev, 3, Color::rgba(255, 255, 255, 20));
+    ui::font::draw_text_font(s, btn_prev.x + 6, btn_prev.y + 3, "<", palette.text_primary, &font_sm);
+
+    // Title: e.g. "November 2026"
+    let m_idx = cal.view_month.saturating_sub(1) as usize % 12;
+    let mut hdr_title_buf = [0u8; 32];
+    let mut hdr_off = 0;
+    append_str(MONTH_NAMES_FULL[m_idx], &mut hdr_title_buf, &mut hdr_off);
+    append_str(" ", &mut hdr_title_buf, &mut hdr_off);
+    format_u32(cal.view_year as u32, &mut hdr_title_buf, &mut hdr_off);
+    let hdr_title = core::str::from_utf8(&hdr_title_buf[..hdr_off]).unwrap_or("");
+    ui::font::draw_text_font(s, cx + 34, client.y + 5, hdr_title, Color::WHITE, &font_reg);
+
+    // Next Button [>]
+    let title_w = font_reg.measure_str(hdr_title).w;
+    let btn_next = Rect::new(cx + 42 + title_w, client.y + 4, 20, 20);
+    ui::draw::draw_rounded_rect(s, btn_next, 3, Color::rgba(255, 255, 255, 20));
+    ui::font::draw_text_font(s, btn_next.x + 6, btn_next.y + 3, ">", palette.text_primary, &font_sm);
+
+    // Today Button
+    let btn_today = Rect::new(btn_next.right() + 8, client.y + 4, 46, 20);
+    ui::draw::draw_rounded_rect(s, btn_today, 3, Color::rgba(255, 255, 255, 20));
+    ui::font::draw_text_font(s, btn_today.x + 6, btn_today.y + 3, "Today", palette.text_primary, &font_sm);
+
+    // View Switcher (macOS Segmented control): [ Month | Week | Day | Agenda ]
+    let v_modes = [
+        (WmViewMode::Month, "Month"),
+        (WmViewMode::Week, "Week"),
+        (WmViewMode::Day, "Day"),
+        (WmViewMode::Agenda, "Agenda"),
+    ];
+    let seg_w = 40;
+    let total_seg_w = seg_w * 4;
+    let seg_x = cx + cw - total_seg_w - 8;
+    for (i, &(mode, label)) in v_modes.iter().enumerate() {
+        let seg_rect = Rect::new(seg_x + (i as i32) * seg_w, client.y + 4, seg_w, 20);
+        let is_active = cal.view_mode == mode;
+        if is_active {
+            ui::draw::draw_rounded_rect(s, seg_rect, 3, palette.accent_primary);
+            ui::font::draw_text_font(s, seg_rect.x + 4, seg_rect.y + 3, label, Color::WHITE, &font_sm);
+        } else {
+            ui::draw::draw_rounded_rect(s, seg_rect, 3, Color::rgba(255, 255, 255, 12));
+            ui::font::draw_text_font(s, seg_rect.x + 4, seg_rect.y + 3, label, palette.text_muted, &font_sm);
+        }
+    }
+
+    // 3. Render Mode Content
+    match cal.view_mode {
+        WmViewMode::Month => {
+            // Day of week column headers
+            let col_w = (cw - 12) / 7;
+            let dow_y = client.y + hdr_h + 4;
+            let dow_names = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+            for (c, &name) in dow_names.iter().enumerate() {
+                ui::font::draw_text_font(s, cx + 6 + (c as i32) * col_w + 6, dow_y, name, palette.text_muted, &font_sm);
+            }
+
+            // Month Grid
+            let grid_y = dow_y + 16;
+            let bottom_card_h = if client.h >= 240 { 50 } else { 0 };
+            let grid_h = client.bottom() - grid_y - bottom_card_h - 4;
+            let row_h = (grid_h / 6).max(14);
+
+            let first_dow = day_of_week(cal.view_year, cal.view_month, 1) as usize;
+            let total_days = days_in_month(cal.view_year, cal.view_month) as usize;
+            let prev_m = if cal.view_month == 1 { 12 } else { cal.view_month - 1 };
+            let prev_y = if cal.view_month == 1 { cal.view_year - 1 } else { cal.view_year };
+            let prev_m_days = days_in_month(prev_y, prev_m) as usize;
+
+            for r in 0..6 {
+                for c in 0..7 {
+                    let cell_x = cx + 6 + (c as i32) * col_w;
+                    let cell_y = grid_y + (r as i32) * row_h;
+                    let idx = r * 7 + c;
+
+                    // Subtle cell border
+                    s.fill_rect(Rect::new(cell_x, cell_y, col_w, 1), Color::rgba(255, 255, 255, 8));
+
+                    if idx < first_dow {
+                        let d = prev_m_days - (first_dow - 1 - idx);
+                        let mut buf = [0u8; 8];
+                        let mut off = 0;
+                        format_u32(d as u32, &mut buf, &mut off);
+                        let str_val = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                        ui::font::draw_text_font(s, cell_x + 4, cell_y + 2, str_val, Color::rgb(70, 78, 90), &font_sm);
+                    } else if idx < first_dow + total_days {
+                        let d = (idx - first_dow + 1) as u8;
+                        let is_today = cal.view_year == cal.today_year && cal.view_month == cal.today_month && d == cal.today_day;
+                        let is_selected = d == cal.selected_day;
+
+                        if is_selected {
+                            ui::draw::draw_rounded_rect(s, Rect::new(cell_x + 1, cell_y + 1, col_w - 2, row_h - 2), 3, Color::rgba(0, 212, 255, 30));
+                            ui::draw::draw_rect_outline(s, Rect::new(cell_x + 1, cell_y + 1, col_w - 2, row_h - 2), 1, Color::rgb(0, 212, 255));
+                        }
+
+                        let mut buf = [0u8; 8];
+                        let mut off = 0;
+                        format_u32(d as u32, &mut buf, &mut off);
+                        let str_val = core::str::from_utf8(&buf[..off]).unwrap_or("");
+
+                        if is_today {
+                            let badge = Rect::new(cell_x + 3, cell_y + 1, 16, 14);
+                            ui::draw::draw_rounded_rect(s, badge, 3, Color::rgb(225, 29, 72));
+                            ui::font::draw_text_font(s, cell_x + 4, cell_y + 2, str_val, Color::WHITE, &font_sm);
+                        } else {
+                            let num_col = if is_selected { Color::WHITE } else { palette.text_primary };
+                            ui::font::draw_text_font(s, cell_x + 4, cell_y + 2, str_val, num_col, &font_sm);
+                        }
+
+                        // Event indicator dots (Ubuntu GNOME Calendar dots)
+                        let mut dot_x = cell_x + 4;
+                        let dot_y = cell_y + row_h - 4;
+                        let mut dots_shown = 0;
+                        for i in 0..cal.event_count {
+                            let ev = &cal.events[i];
+                            if ev.year == cal.view_year && ev.month == cal.view_month && ev.day == d && cal.is_category_enabled(ev.category) {
+                                let (r, g, b) = ev.category.color_rgb();
+                                s.fill_rect(Rect::new(dot_x, dot_y, 4, 3), Color::rgb(r, g, b));
+                                dot_x += 6;
+                                dots_shown += 1;
+                                if dots_shown >= 3 {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        let d = idx - (first_dow + total_days) + 1;
+                        let mut buf = [0u8; 8];
+                        let mut off = 0;
+                        format_u32(d as u32, &mut buf, &mut off);
+                        let str_val = core::str::from_utf8(&buf[..off]).unwrap_or("");
+                        ui::font::draw_text_font(s, cell_x + 4, cell_y + 2, str_val, Color::rgb(70, 78, 90), &font_sm);
+                    }
+                }
+            }
+
+            // Bottom Selected Day Event Preview card (Windows 11 card)
+            if bottom_card_h > 0 {
+                let card_y = client.bottom() - bottom_card_h - 2;
+                let card_rect = Rect::new(cx + 6, card_y, cw - 12, bottom_card_h);
+                ui::draw::draw_rounded_rect(s, card_rect, 4, Color::rgba(255, 255, 255, 14));
+                ui::draw::draw_rect_outline(s, card_rect, 1, Color::rgba(255, 255, 255, 25));
+
+                // Find events for selected day
+                let mut found = 0;
+                let mut ey = card_y + 4;
+                for i in 0..cal.event_count {
+                    let ev = &cal.events[i];
+                    if ev.year == cal.view_year && ev.month == cal.view_month && ev.day == cal.selected_day && cal.is_category_enabled(ev.category) {
+                        found += 1;
+                        if ey + 14 <= card_rect.bottom() {
+                            let (r, g, b) = ev.category.color_rgb();
+                            s.fill_rect(Rect::new(card_rect.x + 6, ey + 2, 3, 12), Color::rgb(r, g, b));
+                            ui::font::draw_text_font(s, card_rect.x + 14, ey + 1, ev.time_start, Color::rgb(0, 212, 255), &font_sm);
+                            ui::font::draw_text_font(s, card_rect.x + 72, ey + 1, ev.title, Color::WHITE, &font_sm);
+                            ey += 18;
+                        }
+                    }
+                }
+                if found == 0 {
+                    ui::font::draw_text_font(s, card_rect.x + 10, card_y + 16, "No events scheduled for selected date.", palette.text_muted, &font_sm);
+                }
+            }
+        }
+        WmViewMode::Week => {
+            let col_w = (cw - 8) / 7;
+            let col_y = client.y + hdr_h + 4;
+            for c in 0..7 {
+                let wx = cx + 4 + (c as i32) * col_w;
+                let d = ((cal.selected_day as i32 - 3 + c as i32).max(1) as u8).min(days_in_month(cal.view_year, cal.view_month));
+                let dow_idx = day_of_week(cal.view_year, cal.view_month, d);
+                let dow_str = DAY_NAMES_SHORT[dow_idx as usize % 7];
+
+                let h_card = Rect::new(wx, col_y, col_w - 2, 22);
+                let is_sel = d == cal.selected_day;
+                if is_sel {
+                    ui::draw::draw_rounded_rect(s, h_card, 3, palette.accent_primary);
+                } else {
+                    ui::draw::draw_rounded_rect(s, h_card, 3, Color::rgba(255, 255, 255, 10));
+                }
+                ui::font::draw_text_font(s, wx + 4, col_y + 4, dow_str, Color::WHITE, &font_sm);
+
+                let mut dbuf = [0u8; 8];
+                let mut doff = 0;
+                format_u32(d as u32, &mut dbuf, &mut doff);
+                let d_str = core::str::from_utf8(&dbuf[..doff]).unwrap_or("");
+                ui::font::draw_text_font(s, wx + col_w - 18, col_y + 4, d_str, Color::WHITE, &font_sm);
+
+                // Vertical column separator
+                s.fill_rect(Rect::new(wx + col_w - 1, col_y + 24, 1, client.bottom() - col_y - 28), Color::rgba(255, 255, 255, 12));
+            }
+        }
+        WmViewMode::Day => {
+            let dy = client.y + hdr_h + 8;
+            ui::font::draw_text_font(s, cx + 12, dy, "Daily Schedule & Hour Timeline", Color::WHITE, &font_reg);
+
+            let mut ey = dy + 22;
+            let hours: &[&str] = &["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM", "07:30 PM", "11:00 PM"];
+            for (idx, &hr) in hours.iter().enumerate() {
+                if ey + 24 > client.bottom() - 10 {
+                    break;
+                }
+                s.fill_rect(Rect::new(cx + 12, ey + 10, cw - 24, 1), Color::rgba(255, 255, 255, 14));
+                ui::font::draw_text_font(s, cx + 12, ey, hr, palette.text_muted, &font_sm);
+
+                // Show matching event
+                if idx < cal.event_count {
+                    let ev = &cal.events[idx];
+                    let (r, g, b) = ev.category.color_rgb();
+                    let card = Rect::new(cx + 80, ey - 4, cw - 100, 22);
+                    ui::draw::draw_rounded_rect(s, card, 3, Color::rgb(r, g, b).darken(40));
+                    ui::draw::draw_rect_outline(s, card, 1, Color::rgb(r, g, b));
+                    ui::font::draw_text_font(s, card.x + 8, card.y + 4, ev.title, Color::WHITE, &font_sm);
+                }
+                ey += 30;
+            }
+        }
+        WmViewMode::Agenda => {
+            let mut ey = client.y + hdr_h + 8;
+            for i in 0..cal.event_count {
+                let ev = &cal.events[i];
+                if ey + 32 > client.bottom() - 6 {
+                    break;
+                }
+                if cal.is_category_enabled(ev.category) {
+                    let card = Rect::new(cx + 10, ey, cw - 20, 28);
+                    ui::draw::draw_rounded_rect(s, card, 4, Color::rgba(255, 255, 255, 14));
+                    ui::draw::draw_rect_outline(s, card, 1, Color::rgba(255, 255, 255, 25));
+
+                    let (r, g, b) = ev.category.color_rgb();
+                    s.fill_rect(Rect::new(card.x + 2, card.y + 2, 4, card.h - 4), Color::rgb(r, g, b));
+
+                    // Date & Time badge
+                    ui::font::draw_text_font(s, card.x + 12, card.y + 6, ev.time_start, Color::rgb(0, 212, 255), &font_sm);
+                    // Title
+                    ui::font::draw_text_font(s, card.x + 76, card.y + 6, ev.title, Color::WHITE, &font_sm);
+                    // Location
+                    if card.w >= 220 {
+                        ui::font::draw_text_font(s, card.right() - 90, card.y + 6, ev.location, palette.text_muted, &font_sm);
+                    }
+                    ey += 32;
+                }
+            }
+        }
     }
 }
 
@@ -4804,7 +5642,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 6);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 7);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -5041,5 +5879,81 @@ mod tests {
         }
         wm.on_key(10);
         assert_eq!(TIMEZONES[wm.time_cfg.timezone_idx].name, "Asia/Tokyo");
+    }
+
+    #[test]
+    fn test_wm_calendar_app_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.sync_rtc();
+
+        // 1. Initial Calendar App state
+        assert_eq!(wm.calendar_app.view_year, 2026);
+        assert_eq!(wm.calendar_app.view_month, 11);
+        assert_eq!(wm.calendar_app.selected_day, 19);
+        assert_eq!(wm.calendar_app.view_mode, WmViewMode::Month);
+        assert!(wm.calendar_app.event_count >= 8);
+
+        // 2. Navigation tests
+        wm.calendar_app.next_month();
+        assert_eq!(wm.calendar_app.view_month, 12);
+        wm.calendar_app.prev_month();
+        assert_eq!(wm.calendar_app.view_month, 11);
+        wm.calendar_app.go_today();
+        assert_eq!(wm.calendar_app.selected_day, 19);
+
+        // 3. View mode switching
+        wm.calendar_app.view_mode = WmViewMode::Week;
+        assert_eq!(wm.calendar_app.view_mode, WmViewMode::Week);
+        wm.calendar_app.view_mode = WmViewMode::Day;
+        assert_eq!(wm.calendar_app.view_mode, WmViewMode::Day);
+        wm.calendar_app.view_mode = WmViewMode::Agenda;
+        assert_eq!(wm.calendar_app.view_mode, WmViewMode::Agenda);
+        wm.calendar_app.view_mode = WmViewMode::Month;
+
+        // 4. Category filtering
+        assert!(wm.calendar_app.is_category_enabled(WmCategory::Work));
+        wm.calendar_app.toggle_category(WmCategory::Work);
+        assert!(!wm.calendar_app.is_category_enabled(WmCategory::Work));
+        wm.calendar_app.toggle_category(WmCategory::Work);
+        assert!(wm.calendar_app.is_category_enabled(WmCategory::Work));
+
+        // 5. Add sample event
+        let old_count = wm.calendar_app.event_count;
+        wm.calendar_app.add_sample_event();
+        assert_eq!(wm.calendar_app.event_count, old_count + 1);
+
+        // 6. Launch Calendar via Desktop Shortcut 3
+        let cal_icon = wm.desktop_icon_rect(3).expect("Calendar desktop icon should exist");
+        wm.on_left_press(cal_icon.x + 10, cal_icon.y + 10);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 6, "Clicking Calendar desktop icon should launch window 6");
+
+        // 7. Interactive click inside Window 6: Switch to Week view via segmented pill
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+        let sb_w = 110;
+        let cx = client.x + sb_w;
+        let cw = client.w - sb_w;
+        let seg_w = 40;
+        let seg_x = cx + cw - (seg_w * 4) - 8;
+        // Week is index 1
+        wm.on_left_press(seg_x + seg_w + 5, client.y + 10);
+        assert_eq!(wm.calendar_app.view_mode, WmViewMode::Week, "Clicking Week pill should switch view mode");
+
+        // 8. Test Terminal 'cal' and 'cal --events'
+        wm.raise(0);
+        for b in b"cal" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("Today") || l1.contains("scheduled"));
+
+        for b in b"cal --events" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("Thanksgiving") || l2.contains("NovaOS"));
     }
 }

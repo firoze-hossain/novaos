@@ -11581,6 +11581,30 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
      * **Overall Project: 26/56 tasks completed (46.43%)**.
    - Artifact `NovaOS_Build_Plan.md` updated.
 
+## Phase 100 - Month 5 Desktop Track: Unified Calendar Application (nova-calendar)
+
+**Status: Complete.** Implemented a comprehensive, full-featured desktop Calendar application (`nova-calendar`) synthesizing the design principles of macOS Calendar (segmented views, category color hierarchy, clean typography), Windows 11 Calendar (acrylic sidebar, hero date card, interactive event adder), and Ubuntu GNOME Calendar (clean dark canvas, event dot indicators, timezone awareness).
+
+### What was built:
+1. **Standalone Application Architecture (`userland/desktop/apps/nova-calendar/`)**:
+   - `model.rs`: Event categories (`Work`, `Personal`, `NovaOS`, `Holidays`, `Reminders`), multi-view modes (`Month`, `Week`, `Day`, `Agenda`), dynamic leap-year compensation, days-in-month calculations, day-of-week anchor math, category filter masks, and pre-populated enterprise events.
+   - `ui.rs`: Retained-mode rasterizer rendering into `BufferSurface` featuring acrylic left sidebar, hero date card, calendar grid with category dots, and interactive event detail panels.
+   - `main.rs`: Full CLI supporting `--selftest`, `--events`, `--month`, `--add`.
+   - Host test runner `tools/tests/run_nova_calendar_tests.sh` with 100% test pass rate.
+2. **First-Class Window Manager Integration (`userland/wm-rs/wm.rs`)**:
+   - App ID 6 registered for Calendar: `"Calendar - NovaOS Schedule & Events"`.
+   - Realistic 3D icon in desktop shortcuts, dock, and start menu: coral/crimson header, twin metallic binder rings, large bold date '19', and 3 colored category indicator dots.
+   - Desktop shortcut added to `DESKTOP_SHORTCUTS` with column-wrapping layout.
+   - Start Menu Pinned Applications integration (App card 3).
+   - In-Window client renderer `draw_calendar_app_client_body` with responsive sidebar and 4 interactive views.
+   - Interactive mouse click routing: switching views (`[ Month | Week | Day | Agenda ]`), month navigation (`<`, `>`), jump to `Today`, day cell selection, category toggles, and `+ Add Event`.
+   - In-window Terminal integration: `cal` and `calendar` commands (`--month`, `--events`).
+   - Clock flyout integration: added `[ Open App ]` quick-launch action button.
+3. **Comprehensive Verification**:
+   - All 26 Window Manager host tests passing.
+   - All 14 UI test suites passing in `tools/tests/run_ui_qa_pass.sh`.
+   - Rebuilt `tools/fixtures/WM.ELF`, `tools/fixtures/CALENDAR.ELF`, `disk.img`, and `novaos.iso`.
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

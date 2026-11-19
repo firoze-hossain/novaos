@@ -25,7 +25,7 @@ cd "$(dirname "$0")/../.."
 echo "================================================================================"
 echo "           NovaOS Interface Track - Full Comprehensive UI QA Pass              "
 echo "================================================================================"
-echo "Target: 13 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
+echo "Target: 14 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
 echo "Date:   $(date)"
 echo "--------------------------------------------------------------------------------"
 
@@ -37,7 +37,7 @@ run_qa_step() {
     SCRIPT_PATH="$2"
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
     echo ""
-    echo ">>> Running QA Suite [$TOTAL_SUITES/13]: $SUITE_NAME"
+    echo ">>> Running QA Suite [$TOTAL_SUITES/14]: $SUITE_NAME"
     echo "--------------------------------------------------------------------------------"
     if [ -f "$SCRIPT_PATH" ]; then
         sh "$SCRIPT_PATH"
@@ -62,11 +62,12 @@ run_qa_step "10. Activity Monitor (userland/actmon-rs)" "tools/tests/run_actmon_
 run_qa_step "11. Graphical Installer Wizard (userland/installer-rs)" "tools/tests/run_installer_tests.sh"
 run_qa_step "12. Graphical Crash Reporter (userland/crashrep-rs)" "tools/tests/run_crashrep_tests.sh"
 run_qa_step "13. First-Run Setup Wizard (userland/firstrun-rs)" "tools/tests/run_firstrun_tests.sh"
+run_qa_step "14. Calendar & Schedule Hub (userland/desktop/apps/nova-calendar)" "tools/tests/run_nova_calendar_tests.sh"
 
 echo ""
 echo "================================================================================"
 echo "                         Full UI QA Pass Complete!                              "
 echo "================================================================================"
 echo "Results: $PASSED_SUITES / $TOTAL_SUITES UI test suites passed successfully."
-echo "Status:  100% PASS - All 13 ring-3 applications & UI subsystems verified!"
+echo "Status:  100% PASS - All $TOTAL_SUITES ring-3 applications & UI subsystems verified!"
 echo "================================================================================"
