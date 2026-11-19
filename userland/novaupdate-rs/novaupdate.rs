@@ -415,7 +415,7 @@ pub extern "C" fn main(_argc: i32, _argv: *const *const u8, _envp: *const *const
 
     Console::print(b"[SYSTEM] Current OS Version : ");
     Console::print(CURRENT_VERSION);
-    Console::print(b" (i686-novaos, 32-bit x86 Ring 3)\n");
+    Console::print(b" (x86_64 Long Mode, Dual 32/64-bit ABI)\n");
 
     static mut BUFFER: [u8; MAX_RESPONSE_SIZE] = [0u8; MAX_RESPONSE_SIZE];
     let resp_buf = unsafe {

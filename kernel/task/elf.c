@@ -15,11 +15,13 @@
 #define ELFMAG3 'F'
 
 #define ELFCLASS32 1
+#define ELFCLASS64 2
 #define ELFDATA2LSB 1
 
 #define ET_EXEC 2
 #define ET_DYN  3
 #define EM_386  3
+#define EM_X86_64 62
 
 #define PT_LOAD    1
 #define PT_DYNAMIC 2
@@ -56,30 +58,78 @@ typedef struct __attribute__((packed)) {
     uint32_t p_align;
 } elf32_phdr_t;
 
+typedef struct __attribute__((packed)) {
+    uint8_t  e_ident[EI_NIDENT];
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
+} elf64_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t p_type;
+    uint32_t p_flags;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+} elf64_phdr_t;
+
 bool elf_validate(const uint8_t* data, uint32_t size) {
     if (size < sizeof(elf32_header_t)) {
         return false;
     }
-    const elf32_header_t* hdr = (const elf32_header_t*)data;
+    const uint8_t* ident = data;
 
-    if (hdr->e_ident[0] != ELFMAG0 || hdr->e_ident[1] != ELFMAG1 ||
-        hdr->e_ident[2] != ELFMAG2 || hdr->e_ident[3] != ELFMAG3) {
+    if (ident[0] != ELFMAG0 || ident[1] != ELFMAG1 ||
+        ident[2] != ELFMAG2 || ident[3] != ELFMAG3) {
         return false;
     }
-    if (hdr->e_ident[4] != ELFCLASS32 || hdr->e_ident[5] != ELFDATA2LSB) {
-        return false; /* not 32-bit little-endian - the only kind this
-                          kernel's own architecture can run */
-    }
-    if (hdr->e_type != ET_EXEC) {
-        return false; /* statically-linked, non-PIE only - see elf.h */
-    }
-    if (hdr->e_machine != EM_386) {
+    if (ident[5] != ELFDATA2LSB) {
         return false;
     }
-    if (hdr->e_phoff == 0 || hdr->e_phnum == 0) {
-        return false; /* no program headers - nothing to load */
+
+    if (ident[4] == ELFCLASS32) {
+        const elf32_header_t* hdr = (const elf32_header_t*)data;
+        if (hdr->e_type != ET_EXEC && hdr->e_type != ET_DYN) {
+            return false;
+        }
+        if (hdr->e_machine != EM_386) {
+            return false;
+        }
+        if (hdr->e_phoff == 0 || hdr->e_phnum == 0) {
+            return false;
+        }
+        return true;
+    } else if (ident[4] == ELFCLASS64) {
+        if (size < sizeof(elf64_header_t)) {
+            return false;
+        }
+        const elf64_header_t* hdr = (const elf64_header_t*)data;
+        if (hdr->e_type != ET_EXEC && hdr->e_type != ET_DYN) {
+            return false;
+        }
+        if (hdr->e_machine != EM_X86_64) {
+            return false;
+        }
+        if (hdr->e_phoff == 0 || hdr->e_phnum == 0) {
+            return false;
+        }
+        return true;
     }
-    return true;
+
+    return false;
 }
 
 bool elf_load(const uint8_t* data, uint32_t size,
@@ -87,8 +137,80 @@ bool elf_load(const uint8_t* data, uint32_t size,
     if (!elf_validate(data, size)) {
         return false;
     }
-    const elf32_header_t* hdr = (const elf32_header_t*)data;
+    const uint8_t* ident = data;
     uint32_t* pd = (uint32_t*)page_directory_phys;
+
+    if (ident[4] == ELFCLASS64) {
+        const elf64_header_t* hdr64 = (const elf64_header_t*)data;
+        if ((uint64_t)hdr64->e_phoff + (uint64_t)hdr64->e_phnum * sizeof(elf64_phdr_t) > size) {
+            kernel_log("[FAULT] elf_load: 64-bit program header table runs past end of file\n");
+            return false;
+        }
+
+        for (uint16_t i = 0; i < hdr64->e_phnum; i++) {
+            const elf64_phdr_t* ph = (const elf64_phdr_t*)(data + hdr64->e_phoff + (uint32_t)i * sizeof(*ph));
+            if (ph->p_type != PT_LOAD) {
+                continue;
+            }
+            if (ph->p_filesz > ph->p_memsz) {
+                kernel_log("[FAULT] elf_load: 64-bit segment filesz > memsz\n");
+                return false;
+            }
+            if ((uint64_t)ph->p_offset + (uint64_t)ph->p_filesz > size) {
+                kernel_log("[FAULT] elf_load: 64-bit segment runs past end of file\n");
+                return false;
+            }
+            if (ph->p_vaddr >= 0xC0000000ULL || (ph->p_vaddr + ph->p_memsz) > 0xC0000000ULL) {
+                kernel_log("[FAULT] elf_load: 64-bit segment exceeds userland address space\n");
+                return false;
+            }
+
+            uint32_t seg_start = (uint32_t)(ph->p_vaddr & 0xFFFFF000ULL);
+            uint32_t seg_end = (uint32_t)((ph->p_vaddr + ph->p_memsz + 0xFFFULL) & 0xFFFFF000ULL);
+            uint32_t flags = PAGE_PRESENT | PAGE_USER;
+            if (ph->p_flags & PF_W) {
+                flags |= PAGE_WRITE;
+            }
+
+            for (uint32_t page_addr = seg_start; page_addr < seg_end; page_addr += 4096) {
+                uint32_t frame = pmm_alloc_frame();
+                if (frame == 0) {
+                    kernel_log("[FAULT] elf_load: out of physical memory\n");
+                    return false;
+                }
+                paging_map_page(pd, page_addr, frame, flags);
+                memset((void*)frame, 0, 4096);
+            }
+
+            uint32_t bytes_remaining = (uint32_t)ph->p_filesz;
+            uint32_t file_pos = (uint32_t)ph->p_offset;
+            uint32_t dest_vaddr = (uint32_t)ph->p_vaddr;
+
+            while (bytes_remaining > 0) {
+                uint32_t page_base = dest_vaddr & 0xFFFFF000u;
+                uint32_t page_offset = dest_vaddr - page_base;
+                uint32_t pd_index = page_base >> 22;
+                uint32_t pt_index = (page_base >> 12) & 0x3FFu;
+                uint32_t* pt = (uint32_t*)(pd[pd_index] & 0xFFFFF000u);
+                uint32_t frame = pt[pt_index] & 0xFFFFF000u;
+
+                uint32_t chunk = 4096 - page_offset;
+                if (chunk > bytes_remaining) {
+                    chunk = bytes_remaining;
+                }
+                memcpy((void*)(frame + page_offset), data + file_pos, chunk);
+
+                bytes_remaining -= chunk;
+                file_pos += chunk;
+                dest_vaddr += chunk;
+            }
+        }
+
+        *out_entry_point = (uint32_t)hdr64->e_entry;
+        return true;
+    }
+
+    const elf32_header_t* hdr = (const elf32_header_t*)data;
 
     if ((uint64_t)hdr->e_phoff +
             (uint64_t)hdr->e_phnum * sizeof(elf32_phdr_t) >
@@ -180,27 +302,61 @@ bool elf_load(const uint8_t* data, uint32_t size,
  * ------------------------------------------------------------------ */
 
 bool elf_inspect(const uint8_t* data, uint32_t size, elf_image_t* out_image) {
-    if (size < sizeof(elf32_header_t)) {
+    if (!elf_validate(data, size)) {
         return false;
     }
-    const elf32_header_t* hdr = (const elf32_header_t*)data;
+    const uint8_t* ident = data;
 
-    if (hdr->e_ident[0] != ELFMAG0 || hdr->e_ident[1] != ELFMAG1 ||
-        hdr->e_ident[2] != ELFMAG2 || hdr->e_ident[3] != ELFMAG3) {
-        return false;
+    if (ident[4] == ELFCLASS64) {
+        const elf64_header_t* hdr = (const elf64_header_t*)data;
+        if ((uint64_t)hdr->e_phoff + (uint64_t)hdr->e_phnum * sizeof(elf64_phdr_t) > size) {
+            kernel_log("[FAULT] elf_inspect: 64-bit program header table runs past end of file\n");
+            return false;
+        }
+
+        out_image->seg_count = 0;
+        out_image->has_dynamic = false;
+        out_image->dyn_offset = 0;
+        out_image->dyn_filesz = 0;
+        out_image->entry_point = (uint32_t)hdr->e_entry;
+        out_image->is_dyn = (hdr->e_type == ET_DYN);
+
+        for (uint16_t i = 0; i < hdr->e_phnum; i++) {
+            const elf64_phdr_t* ph = (const elf64_phdr_t*)(data + hdr->e_phoff + (uint32_t)i * sizeof(*ph));
+            if (ph->p_type == PT_DYNAMIC) {
+                if ((uint64_t)ph->p_offset + (uint64_t)ph->p_filesz > size) {
+                    kernel_log("[FAULT] elf_inspect: PT_DYNAMIC runs past end of file\n");
+                    return false;
+                }
+                out_image->has_dynamic = true;
+                out_image->dyn_offset = (uint32_t)ph->p_offset;
+                out_image->dyn_filesz = (uint32_t)ph->p_filesz;
+                continue;
+            }
+            if (ph->p_type != PT_LOAD) {
+                continue;
+            }
+            if (ph->p_filesz > ph->p_memsz) {
+                kernel_log("[FAULT] elf_inspect: segment filesz > memsz\n");
+                return false;
+            }
+            if ((uint64_t)ph->p_offset + (uint64_t)ph->p_filesz > size) {
+                kernel_log("[FAULT] elf_inspect: segment runs past end of file\n");
+                return false;
+            }
+            if (out_image->seg_count >= MAX_LOAD_SEGS) {
+                kernel_log("[FAULT] elf_inspect: more than %d PT_LOAD segments\n", MAX_LOAD_SEGS);
+                return false;
+            }
+            elf_load_seg_t* seg = &out_image->segs[out_image->seg_count++];
+            seg->vaddr = (uint32_t)ph->p_vaddr;
+            seg->offset = (uint32_t)ph->p_offset;
+            seg->filesz = (uint32_t)ph->p_filesz;
+        }
+        return true;
     }
-    if (hdr->e_ident[4] != ELFCLASS32 || hdr->e_ident[5] != ELFDATA2LSB) {
-        return false;
-    }
-    if (hdr->e_type != ET_EXEC && hdr->e_type != ET_DYN) {
-        return false;
-    }
-    if (hdr->e_machine != EM_386) {
-        return false;
-    }
-    if (hdr->e_phoff == 0 || hdr->e_phnum == 0) {
-        return false;
-    }
+
+    const elf32_header_t* hdr = (const elf32_header_t*)data;
     if ((uint64_t)hdr->e_phoff + (uint64_t)hdr->e_phnum * sizeof(elf32_phdr_t) >
         size) {
         kernel_log("[FAULT] elf_inspect: program header table runs past "

@@ -19,18 +19,29 @@ typedef signed int     int32_t;
 typedef signed long long int64_t;
 
 // Boolean
+#if !defined(__bool_true_false_are_defined) && !defined(bool)
 typedef enum { false = 0, true = 1 } bool;
+#endif
 
 // Size type
+#ifndef _SIZE_T_DEFINED
 typedef unsigned int size_t;
+#define _SIZE_T_DEFINED
+#endif
 typedef uint32_t     uintptr_t;
 typedef int32_t      intptr_t;
 
 // NULL pointer
+#ifndef NULL
 #define NULL ((void*)0)
+#endif
 
 // Maximum values
+#ifndef UINT32_MAX
 #define UINT32_MAX 0xFFFFFFFF
+#endif
+#ifndef INT32_MAX
 #define INT32_MAX  0x7FFFFFFF
+#endif
 
 #endif

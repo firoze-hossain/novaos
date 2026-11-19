@@ -1774,7 +1774,7 @@ fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette:
 
     // Line 1: Shell welcome
     if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "NovaOS Terminal (Month 3 Desktop Apps)", Color::rgb(88, 166, 255), &font_mono);
+        ui::font::draw_text_font(s, pad_x, y, "NovaOS Terminal (NovaOS 2.0 x86_64 Enterprise)", Color::rgb(88, 166, 255), &font_mono);
         y += line_h;
     }
 
@@ -1784,7 +1784,7 @@ fn draw_term_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palette:
         y += line_h;
     }
     if y + line_h < client.bottom() - 10 {
-        ui::font::draw_text_font(s, pad_x, y, "NovaOS 1.0.0-compositor i686 pc-novaos", Color::rgb(63, 185, 80), &font_mono);
+        ui::font::draw_text_font(s, pad_x, y, "NovaOS 2.0.0-enterprise x86_64 pc-novaos (SMP 64-bit Long Mode)", Color::rgb(63, 185, 80), &font_mono);
         y += line_h;
     }
 

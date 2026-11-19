@@ -448,6 +448,12 @@ test-matrix: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG)
 test-editions:
 	@sh tools/tests/run_editions_test.sh
 
+# 64-Bit Long Mode & Dual-Architecture qualification test suite
+test-64bit:
+	@sh tools/tests/run_64bit_qualification_test.sh
+
+64bit-test: test-64bit
+
 # Month 6: Dedicated security review & permission boundary audit test suite
 test-security:
 	@sh tools/tests/run_security_audit_test.sh

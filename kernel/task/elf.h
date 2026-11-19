@@ -11,9 +11,14 @@
  * executables (no relocation processing). See PROGRESS.md for the
  * full scope note. */
 
-/* Validates the ELF header: magic, 32-bit class, little-endian data,
- * EM_386 machine, ET_EXEC type. Does not load anything - just answers
- * "is this a file elf_load() should even attempt." */
+#define ELFCLASS32 1
+#define ELFCLASS64 2
+
+#define EM_386     3
+#define EM_X86_64 62
+
+/* Validates the ELF header: magic, 32-bit or 64-bit class, little-endian data,
+ * EM_386 or EM_X86_64 machine, ET_EXEC or ET_DYN type. */
 bool elf_validate(const uint8_t* data, uint32_t size);
 
 /* Loads every PT_LOAD segment from `data` into the address space

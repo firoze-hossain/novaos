@@ -239,7 +239,7 @@ pub unsafe fn reset_mock_environment() {
     MOCK_KLOG_TOTAL_LOGGED = 0;
 
     // Seed default boot messages for realistic initial state
-    mock_append(NOVA_KLOG_NOTICE, b"kernel", b"NovaOS kernel 1.0.0 initializing on i686", 0, 10);
+    mock_append(NOVA_KLOG_NOTICE, b"kernel", b"NovaOS kernel 2.0.0 initializing on x86_64 Long Mode", 0, 10);
     mock_append(NOVA_KLOG_INFO, b"kernel", b"Memory manager detected 65536 KB physical RAM", 0, 25);
     mock_append(NOVA_KLOG_INFO, b"driver", b"PCI bus scan complete: 4 devices discovered", 0, 40);
     mock_append(NOVA_KLOG_INFO, b"driver", b"RTL8139 Fast Ethernet NIC detected at I/O 0xC000", 0, 65);

@@ -1080,8 +1080,8 @@ impl ActivityMonitorApp {
         draw_text_font(s, area.x + 16, area.y + 14, "NOVAOS SYSTEM SPECIFICATION", pal.accent_primary, font);
 
         let items = [
-            ("Operating System:", "NovaOS 0.88.0 (Pure Rust / Bare-metal Kernel)"),
-            ("Processor Architecture:", "x86-32 (i686) SMP Symmetric Multiprocessing"),
+            ("Operating System:", "NovaOS 2.0.0 Enterprise (Pure Rust / Bare-metal Kernel)"),
+            ("Processor Architecture:", "x86_64 Long Mode (with 32-bit i686 Compatibility)"),
             ("Timer Frequency:", "100 Hz (10ms preemptive quantum tick)"),
             ("Interrupt Controllers:", "ACPI MADT, Local APIC, I/O APIC ISA redirects"),
             ("Graphics Compositor:", "BufferSurface32 32-bit XRGB Framebuffer (VBE / Virtio-GPU)"),

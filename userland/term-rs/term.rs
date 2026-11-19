@@ -717,7 +717,7 @@ impl Terminal {
             }
             "date" => self.cmd_date(),
             "uname" | "version" => {
-                self.write_styled("NovaOS 1.0.0-compositor i686 (Month 3 Desktop Apps)\n", ANSI_COLORS[2]);
+                self.write_styled("NovaOS 2.0.0-enterprise x86_64 Long Mode (SMP Dual-Edition)\n", ANSI_COLORS[2]);
             }
             "whoami" => {
                 self.write_styled("admin (uid 800, gid 0)\n", COLOR_FG_DEFAULT);

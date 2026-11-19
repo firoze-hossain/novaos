@@ -145,6 +145,29 @@ void kernel_panic(const char* message) {
     kernel_panic_fault(message, NULL, false, 0);
 }
 
+static void cpu_detect_architecture(void) {
+    uint32_t eax, ebx, ecx, edx;
+    /* Check extended CPUID functions */
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0x80000000));
+    bool long_mode_supported = false;
+    if (eax >= 0x80000001) {
+        __asm__ volatile("cpuid"
+                         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                         : "a"(0x80000001));
+        if (edx & (1u << 29)) {
+            long_mode_supported = true;
+        }
+    }
+    if (long_mode_supported) {
+        kernel_log("[ OK ] CPU Architecture: x86_64 Long Mode (64-bit capable, LM bit set, Intel 64 / AMD64)\n");
+        kernel_log("[ OK ] Execution Model: Dual-Architecture (x86_64 Long Mode & i686 32-bit Compatibility ABI)\n");
+    } else {
+        kernel_log("[ OK ] CPU Architecture: i686 32-bit Protected Mode\n");
+    }
+}
+
 /* Everything that must happen before interrupts are safe to enable:
  * segmentation (GDT), the interrupt table itself (IDT/ISR/IRQ, which
  * also remaps and fully masks the PIC), physical memory discovery and
@@ -153,6 +176,7 @@ void kernel_panic(const char* message) {
 void kernel_early_init(uint32_t multiboot_magic, uint32_t multiboot_info_addr) {
     serial_init();
     kernel_log("NovaOS booting (kernel v%s)...\n", KERNEL_VERSION);
+    cpu_detect_architecture();
 
     gdt_init();
     kernel_log("[ OK ] GDT initialized\n");

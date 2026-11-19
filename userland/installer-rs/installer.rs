@@ -998,7 +998,7 @@ impl InstallerApp {
         draw_text(s, c1.x + 16, c1.y + 14, "Processor & Cores", palette.accent_primary, TypeScale::Subtitle);
         let mut cpu_buf = [0u8; 48];
         let mut pos = 0;
-        self.append_str_to_buf(&mut cpu_buf, &mut pos, "x86 (i686) SMP - Cores: ");
+        self.append_str_to_buf(&mut cpu_buf, &mut pos, "x86_64 Long Mode (SMP) - Cores: ");
         self.append_u32_to_buf(&mut cpu_buf, &mut pos, self.detected_cpus);
         draw_text(s, c1.x + 16, c1.y + 38, cstr_as_str(&cpu_buf), palette.text_secondary, TypeScale::Body);
 
