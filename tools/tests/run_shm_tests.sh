@@ -49,16 +49,18 @@ if command -v gcc >/dev/null 2>&1; then
     # ThreadSanitizer: the stress test hands pixel data between threads using
     # nothing but the header's atomic exchanges, so any missing acquire/
     # release shows up here as a data race even though x86 would hide it.
-    if echo 'int main(void){return 0;}' | gcc -x c -fsanitize=thread -o "$OUT/tsan_probe" - 2>/dev/null && "$OUT/tsan_probe" 2>/dev/null; then
+    if echo 'int main(void){return 0;}' | gcc -x c -fsanitize=thread -o "$OUT/tsan_probe" - 2>/dev/null; then
         echo "--- novashm_test (ThreadSanitizer) ---"
         gcc -O1 -g $CFLAGS -pthread -fsanitize=thread -o "$OUT/nv_tsan" tools/tests/novashm_test.c
-        "$OUT/nv_tsan"
-    elif echo 'int main(void){return 0;}' | gcc -x c -fsanitize=thread -o "$OUT/tsan_probe" - 2>/dev/null && command -v setarch >/dev/null 2>&1 && setarch $(uname -m) -R "$OUT/tsan_probe" 2>/dev/null; then
-        echo "--- novashm_test (ThreadSanitizer) ---"
-        gcc -O1 -g $CFLAGS -pthread -fsanitize=thread -o "$OUT/nv_tsan" tools/tests/novashm_test.c
-        setarch $(uname -m) -R "$OUT/nv_tsan"
+        if command -v setarch >/dev/null 2>&1 && setarch $(uname -m) -R "$OUT/tsan_probe" 2>/dev/null; then
+            setarch $(uname -m) -R "$OUT/nv_tsan"
+        elif "$OUT/tsan_probe" 2>/dev/null; then
+            "$OUT/nv_tsan"
+        else
+            echo "--- ThreadSanitizer not available on this kernel architecture - skipped ---"
+        fi
     else
-        echo "--- ThreadSanitizer not available here - skipped ---"
+        echo "--- ThreadSanitizer compiler support not available - skipped ---"
     fi
 else
     echo "shm-test: gcc not found - skipping the C suite"

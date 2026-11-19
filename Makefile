@@ -459,6 +459,12 @@ release-signoff: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG)
 
 release: release-signoff
 
+# Month 6 - Release Hardening: Final Production Qualification, Sign-Off & v2.0 Release Launch
+final-signoff: $(ISO_FILE) $(DISK_IMG) $(DISK_SERVER_IMG) $(KERNEL_SERVER_BIN)
+	@./tools/release/final_signoff_v2.0.sh
+
+release-signoff-v2: final-signoff
+
 # Month 6 - Release Hardening: Dual-Edition Release Packaging (Desktop ISO & Server ISO)
 # Automated production packaging pipeline generating hybrid UEFI/BIOS bootable ISOs
 # (novaos-desktop-2.0.iso, novaos-server-2.0.iso) and GPT raw disk images with GPG signing.

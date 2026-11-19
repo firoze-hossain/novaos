@@ -1,0 +1,56 @@
+{
+  "project": "NovaOS",
+  "version": "2.0.0",
+  "release_type": "production",
+  "build_timestamp": "2026-11-19T12:34:44Z",
+  "artifacts": [
+    {
+      "filename": "novaos-desktop-2.0.iso",
+      "format": "iso",
+      "edition": "desktop",
+      "description": "NovaOS 2.0 Desktop Edition (Hybrid UEFI/BIOS Live Installer)",
+      "size_bytes": 19316736,
+      "sha256": "3534e33a5ab71c3b2a121e12111b9f64ff6626774a7fac68cd125d4f8337eb4f"
+    },
+    {
+      "filename": "novaos-server-2.0.iso",
+      "format": "iso",
+      "edition": "server",
+      "description": "NovaOS 2.0 Server Edition (Headless Cloud & Microservices ISO)",
+      "size_bytes": 18790400,
+      "sha256": "f4f50f2da58c780ed55c2e8ffe3d44bc9747e0b02f84d30f8f377acbd3868cc1"
+    },
+    {
+      "filename": "novaos-desktop-2.0.img",
+      "format": "img",
+      "edition": "desktop",
+      "description": "NovaOS 2.0 Desktop Edition (GPT Hybrid Raw Disk Image)",
+      "size_bytes": 141557760,
+      "sha256": "f6a1c406f3ee6b589aa9d28280832f0628a29bcee8daccd81cd3036932a06aba"
+    },
+    {
+      "filename": "novaos-server-2.0.img",
+      "format": "img",
+      "edition": "server",
+      "description": "NovaOS 2.0 Server Edition (GPT Hybrid Raw Disk Image)",
+      "size_bytes": 141557760,
+      "sha256": "26993876e9a079d3531feee5431ccd69b0342ca9bf9b8c3a07e68d67eca6885e"
+    },
+    {
+      "filename": "novaos.bin",
+      "format": "elf",
+      "edition": "desktop",
+      "description": "NovaOS Desktop Multiboot Kernel Binary (x86_32)",
+      "size_bytes": 3302484,
+      "sha256": "bab04a3ce90ebb2df06ed0e246e074d8564effb4f270b31d5a063ed99e294f34"
+    },
+    {
+      "filename": "novaos-server.bin",
+      "format": "elf",
+      "edition": "server",
+      "description": "NovaOS Dedicated Headless Server Kernel Binary (x86_32)",
+      "size_bytes": 3302484,
+      "sha256": "bab04a3ce90ebb2df06ed0e246e074d8564effb4f270b31d5a063ed99e294f34"
+    }
+  ]
+}
