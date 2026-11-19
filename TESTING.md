@@ -286,7 +286,7 @@ The Makefile now automatically passes OS-specific display scaling flags:
 - **macOS (`-display cocoa`)**: Uses the native Cocoa display backend. Note that passing `zoom-to-fit=on` on Cocoa triggers an upstream QEMU bug where the window collapses into a 1-pixel sliver when the guest rapidly switches resolutions during boot (`GFXTEST.ELF` testing VBE modes). Leaving `zoom-to-fit` off prevents this collapse and ensures the window automatically expands to a large, clear 1024x768 view when entering Desktop graphical mode.
   - **Full Screen Toggle**: Press `Cmd + Ctrl + F` or choose **View -> Full Screen** in the macOS menu bar.
   - **Launch directly in Full Screen**: Run `make run FULLSCREEN=1`.
-- **Linux (`-display gtk,zoom-to-fit=on` / `-display sdl`)**: Automatically detects GTK or SDL and enables window resizing and display scaling.
+- **Linux (`-display gtk,zoom-to-fit=on,grab-on-hover=on` / `tools/run-novaos-linux.sh`)**: Runs through `tools/run-novaos-linux.sh`. On Wayland desktops (Ubuntu/GNOME/KDE default), automatically exports `GDK_BACKEND=x11` to leverage XWayland pointer warping (`XWarpPointer`), preventing relative mouse cursor freezes when clicking screen borders or bottom dock menu items. Enables `grab-on-hover=on` for immediate, uninterrupted cursor tracking. Fallback to SDL or default displays supported.
 - **Windows (`run-novaos.bat`)**: Launches QEMU with `-display gtk,zoom-to-fit=on` for resizable window scaling on high-DPI Windows screens.
 
 ### About graphics mode and the mouse (Phase 7+)

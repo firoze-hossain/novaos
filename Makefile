@@ -46,9 +46,14 @@ else ifeq ($(UNAME_S),Linux)
     GRUB_MKRESCUE = grub-mkrescue
     CFLAGS_EXTRA =
     LDFLAGS_EXTRA =
-    QEMU_RUN_WRAPPER =
-    # Linux display: GTK with zoom-to-fit auto-scales on high-DPI screens, fallback to SDL or default.
-    ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on -version >/dev/null 2>&1 && echo ok),ok)
+    # Linux launcher wrapper: routes through XWayland (GDK_BACKEND=x11) on Wayland desktop
+    # environments so pointer warping (XWarpPointer) and relative mouse captures operate smoothly
+    # without freezing when interacting with screen edges and bottom dock menus.
+    QEMU_RUN_WRAPPER = ./tools/run-novaos-linux.sh
+    # Linux display: GTK with zoom-to-fit and grab-on-hover for seamless mouse capture, fallback to SDL or default.
+    ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on,grab-on-hover=on -version >/dev/null 2>&1 && echo ok),ok)
+        DISPLAY_FLAGS ?= -display gtk,zoom-to-fit=on,grab-on-hover=on
+    else ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on -version >/dev/null 2>&1 && echo ok),ok)
         DISPLAY_FLAGS ?= -display gtk,zoom-to-fit=on
     else ifeq ($(shell $(QEMU) -display sdl -version >/dev/null 2>&1 && echo ok),ok)
         DISPLAY_FLAGS ?= -display sdl

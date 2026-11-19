@@ -5,6 +5,7 @@
 #include "../../arch/x86/cpu/irq.h"
 #include "../../arch/x86/io.h"
 #include "../../include/kernel.h"
+#include "../../lib/spinlock.h"
 #include "../driver.h"
 
 DRIVER_REGISTER("PS/2 mouse", ps2mouse_init, DRIVER_PHASE_EARLY);
@@ -14,6 +15,7 @@ DRIVER_REGISTER("PS/2 mouse", ps2mouse_init, DRIVER_PHASE_EARLY);
 #define PS2_COMMAND 0x64
 
 static bool present = false;
+static spinlock_t mouse_lock;
 
 static uint8_t packet[3];
 static int packet_index = 0;
@@ -82,11 +84,21 @@ static void mouse_irq_handler(registers_t* regs) {
         dy -= 256; /* sign-extend the 9-bit Y delta */
     }
 
+    /* Bit 6: X overflow, Bit 7: Y overflow. Discard saturated deltas on overflow */
+    if (status & 0x40) {
+        dx = 0;
+    }
+    if (status & 0x80) {
+        dy = 0;
+    }
+
+    uint32_t flags = spinlock_acquire(&mouse_lock);
     accum_dx += dx;
     accum_dy += -dy; /* PS/2 reports +Y as "up"; screen Y grows downward */
     left_button = (status & 0x01) != 0;
     right_button = (status & 0x02) != 0;
     middle_button = (status & 0x04) != 0;
+    spinlock_release(&mouse_lock, flags);
 }
 
 void ps2mouse_init(void) {
@@ -142,6 +154,7 @@ bool ps2mouse_is_present(void) {
 
 mouse_state_t ps2mouse_read(void) {
     mouse_state_t state;
+    uint32_t flags = spinlock_acquire(&mouse_lock);
     state.dx = accum_dx;
     state.dy = accum_dy;
     state.left_button = left_button;
@@ -150,14 +163,17 @@ mouse_state_t ps2mouse_read(void) {
 
     accum_dx = 0;
     accum_dy = 0;
+    spinlock_release(&mouse_lock, flags);
 
     return state;
 }
 
 void mouse_inject_state(int dx, int dy, bool left, bool right, bool middle) {
+    uint32_t flags = spinlock_acquire(&mouse_lock);
     accum_dx += dx;
     accum_dy += dy;
     left_button = left;
     right_button = right;
     middle_button = middle;
+    spinlock_release(&mouse_lock, flags);
 }
