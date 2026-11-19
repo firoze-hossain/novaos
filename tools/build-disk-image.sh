@@ -215,7 +215,7 @@ if command -v parted >/dev/null 2>&1; then
     parted -s "$DISK_IMG" mkpart primary fat32 1MiB $((PART1_MB + 1))MiB >/dev/null 2>&1
     parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + 1))MiB $((PART1_MB + PART2_MB + 1))MiB >/dev/null 2>&1
     parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + 1))MiB >/dev/null 2>&1
-    parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))MiB >/dev/null 2>&1
+    parted -s "$DISK_IMG" mkpart primary ext2 $((PART1_MB + PART2_MB + PART3_MB + 1))MiB $((PART1_MB + PART2_MB + PART3_MB + PART4_MB + 1))MiB >/dev/null 2>&1
 
     PART1_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 1/ {gsub("s","",$2); print $2}')
     PART2_START=$(parted -s "$DISK_IMG" unit s print | awk '/^ 2/ {gsub("s","",$2); print $2}')

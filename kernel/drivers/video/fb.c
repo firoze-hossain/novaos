@@ -10,7 +10,6 @@
 #include "../vga/vga.h"
 #include "../../arch/x86/mm/paging.h"
 #include "../../arch/x86/mm/pmm.h"
-#include "../../task/process.h"
 #include "../../lib/string.h"
 #include "../../lib/spinlock.h"
 #include "../../include/kernel.h"
@@ -367,13 +366,6 @@ int fb_sys_acquire(int pid, uint32_t backend) {
     g_owner_pid = pid;
     spinlock_release(&g_lock, flags);
 
-    process_t* cur = process_current();
-    if (cur != NULL && strcmp(cur->name, "GFXTEST.ELF") == 0) {
-        vbe_set_skip_hw_switch(true);
-    } else {
-        vbe_set_skip_hw_switch(false);
-    }
-
     bool ok = be->acquire();
 
     flags = spinlock_acquire(&g_lock);
@@ -400,7 +392,6 @@ int fb_sys_acquire(int pid, uint32_t backend) {
  * Caller has already moved g_state to TRANSITION under the lock. */
 static void finish_release(const fb_backend_t* be, int pid, const char* why) {
     be->release();
-    vbe_set_skip_hw_switch(false);
     uint32_t flags = spinlock_acquire(&g_lock);
     g_active = NULL;
     g_owner_pid = -1;

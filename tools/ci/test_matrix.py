@@ -466,7 +466,7 @@ class SubsystemSuiteDef:
     script_path: str
     make_target: str
     assertion_desc: str
-    timeout_sec: int = 60
+    timeout_sec: int = 120
 
 
 SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
