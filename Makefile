@@ -498,6 +498,12 @@ test-recovery:
 
 recovery-test: test-recovery
 
+# Month 6 - Release Hardening: Complete Enterprise Documentation & Architecture Manuals
+test-docs:
+	@sh tools/tests/run_docs_tests.sh
+
+docs-test: test-docs
+
 # Phase 95: Dedicated 4-core SMP scaling validation test target.
 test-smp4: $(ISO_FILE) $(DISK_IMG)
 	@python3 tools/python/test_runner.py --boot --timeout 600 \

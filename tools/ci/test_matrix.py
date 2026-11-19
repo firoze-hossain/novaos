@@ -543,6 +543,15 @@ SUBSYSTEM_SUITES: List[SubsystemSuiteDef] = [
         assertion_desc="18/18 checks (Kernel recovery hook, GPT/MBR repair, NovaFS snapshot rollback, PBKDF2 reset, GUI/CLI)"
     ),
     SubsystemSuiteDef(
+        id="test-docs",
+        name="Complete Enterprise Documentation & Architecture Manuals",
+        track="Release Track",
+        month="Month 6",
+        script_path="tools/tests/run_docs_tests.sh",
+        make_target="test-docs",
+        assertion_desc="23/23 checks (5 manuals: Architecture, Syscall ABI, Desktop Guide, Server Handbook, SDK Reference)"
+    ),
+    SubsystemSuiteDef(
         id="test-editions",
         name="Desktop & Server Edition Profile Isolation",
         track="Release Track",
