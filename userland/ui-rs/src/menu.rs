@@ -338,7 +338,7 @@ pub fn draw_menubar_surface<S: Surface + ?Sized>(
         cur_x += item_w + 2;
     }
 
-    // 4. Clock and System Indicators on far right
+    // 4. Clock and System Indicators on far right (macOS Control Center & Ubuntu Status Hub)
     let clock_sz = font.measure_str(clock_str);
     let clock_x = rect.right() - clock_sz.w - 12;
     draw_text_font(s, clock_x, text_y, clock_str, palette.text_primary, &font);
@@ -347,6 +347,33 @@ pub fn draw_menubar_surface<S: Surface + ?Sized>(
     let dot_x = clock_x - 14;
     let dot_y = rect.y + (rect.h - 6) / 2;
     draw_rounded_rect(s, Rect::new(dot_x, dot_y, 6, 6), 3, palette.status_success);
+
+    // Extended system tray indicators on high-res displays (width >= 640)
+    if rect.w >= 640 {
+        // Battery / Power status
+        let pwr_str = "AC";
+        let pwr_sz = font.measure_str(pwr_str);
+        let pwr_x = dot_x - pwr_sz.w - 12;
+        draw_text_font(s, pwr_x, text_y, pwr_str, palette.text_muted, &font);
+
+        // Audio Volume pill
+        let vol_str = "100%";
+        let vol_sz = font.measure_str(vol_str);
+        let vol_x = pwr_x - vol_sz.w - 12;
+        draw_text_font(s, vol_x, text_y, vol_str, palette.text_muted, &font);
+
+        // Network Ethernet / Wi-Fi pill
+        let net_str = "Eth0";
+        let net_sz = font.measure_str(net_str);
+        let net_x = vol_x - net_sz.w - 12;
+        draw_text_font(s, net_x, text_y, net_str, palette.accent_primary, &font);
+
+        // CPU / Performance monitor pill
+        let cpu_str = "2% CPU";
+        let cpu_sz = font.measure_str(cpu_str);
+        let cpu_x = net_x - cpu_sz.w - 12;
+        draw_text_font(s, cpu_x, text_y, cpu_str, palette.status_success, &font);
+    }
 }
 
 /// Computes the bounding rectangle for an open dropdown menu.

@@ -231,6 +231,23 @@ fn point_in_rect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesktopIconSpec {
+    pub label: &'static str,
+    pub sublabel: &'static str,
+    pub app_id: u8,
+    pub icon_type: u8,
+}
+
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 6] = [
+    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",  app_id: 4, icon_type: 4 },
+    DesktopIconSpec { label: "Files",       sublabel: "/root",        app_id: 2, icon_type: 2 },
+    DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",     app_id: 1, icon_type: 1 },
+    DesktopIconSpec { label: "App Store",   sublabel: "Packages",     app_id: 4, icon_type: 4 },
+    DesktopIconSpec { label: "Settings",    sublabel: "Control Panel", app_id: 5, icon_type: 5 },
+    DesktopIconSpec { label: "README.txt",  sublabel: "Document",     app_id: 3, icon_type: 3 },
+];
+
 pub struct Wm {
     pub screen_w: i32,
     pub screen_h: i32,
@@ -257,6 +274,9 @@ pub struct Wm {
     pub last_dock_event: Option<DockEvent>,
     pub access_cfg: AccessibilityConfig,
     pub preview_snap: Option<SnapState>,
+    pub start_menu_open: bool,
+    pub hovered_start_item: Option<usize>,
+    pub hovered_desktop_icon: Option<usize>,
 }
 
 impl Wm {
@@ -304,6 +324,9 @@ impl Wm {
             last_dock_event: None,
             access_cfg: AccessibilityConfig::new(),
             preview_snap: None,
+            start_menu_open: false,
+            hovered_start_item: None,
+            hovered_desktop_icon: None,
         }
     }
 
@@ -361,6 +384,9 @@ impl Wm {
             last_dock_event: None,
             access_cfg: AccessibilityConfig::new(),
             preview_snap: None,
+            start_menu_open: false,
+            hovered_start_item: None,
+            hovered_desktop_icon: None,
         }
     }
 
@@ -754,6 +780,117 @@ impl Wm {
         self.dock_item_at(px, py)
     }
 
+    /// Returns the bounding rectangle for the interactive Start Menu popup.
+    pub fn start_menu_rect(&self) -> Rect {
+        let sm_w = if self.screen_w >= 800 { 360 } else { 260 };
+        let sm_h = if self.desktop_h >= 500 { 380 } else { (self.desktop_h - 20).max(120) };
+        let sm_x = 12;
+        let sm_y = (self.desktop_h - sm_h - 6).max(self.menubar_h);
+        Rect::new(sm_x, sm_y, sm_w, sm_h)
+    }
+
+    /// Computes hit-tested Start Menu application card rectangle.
+    pub fn start_menu_item_rect(&self, idx: usize) -> Option<Rect> {
+        if idx >= 6 {
+            return None;
+        }
+        let sm = self.start_menu_rect();
+        let pad = 14;
+        let col_w = (sm.w - pad * 2 - 10) / 2;
+        let col = (idx % 2) as i32;
+        let row = (idx / 2) as i32;
+        let card_x = sm.x + pad + col * (col_w + 10);
+        let card_y = sm.y + 104 + row * 50;
+        Some(Rect::new(card_x, card_y, col_w, 44))
+    }
+
+    /// Hit-tests a pointer location against Start Menu application cards.
+    pub fn start_menu_item_at(&self, px: i32, py: i32) -> Option<usize> {
+        if !self.start_menu_open {
+            return None;
+        }
+        for i in 0..6 {
+            if let Some(r) = self.start_menu_item_rect(i) {
+                if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns the bounding rectangle for desktop shortcut icon at index `idx`.
+    pub fn desktop_icon_rect(&self, idx: usize) -> Option<Rect> {
+        if idx >= DESKTOP_SHORTCUTS.len() || self.desktop_h < 400 {
+            return None;
+        }
+        let x = 20;
+        let start_y = if self.menubar_h > 0 { self.menubar_h + 16 } else { 16 };
+        let y = start_y + (idx as i32 * 76);
+        if y + 68 > self.desktop_h - 10 {
+            return None;
+        }
+        Some(Rect::new(x, y, 76, 68))
+    }
+
+    /// Hit-tests pointer coordinates against desktop shortcut icons.
+    pub fn desktop_icon_at(&self, px: i32, py: i32) -> Option<usize> {
+        if self.desktop_h < 400 {
+            return None;
+        }
+        // If an open window covers the desktop icon, it's not clickable
+        if self.window_at(px, py).is_some() {
+            return None;
+        }
+        for i in 0..DESKTOP_SHORTCUTS.len() {
+            if let Some(r) = self.desktop_icon_rect(i) {
+                if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Launches or restores application window with label `app_id`.
+    pub fn launch_or_restore(&mut self, app_id: u8) {
+        // 1. If matching window exists, un-minimize, raise, and focus it
+        for (w_idx, w) in self.windows.iter_mut().enumerate() {
+            if w.label == app_id {
+                w.is_open = true;
+                w.is_minimized = false;
+                self.raise(w_idx);
+                return;
+            }
+        }
+        // 2. Allocate first closed / minimized slot
+        for (w_idx, w) in self.windows.iter_mut().enumerate() {
+            if !w.is_open || w.is_minimized {
+                w.label = app_id;
+                w.is_open = true;
+                w.is_minimized = false;
+                self.raise(w_idx);
+                return;
+            }
+        }
+    }
+
+    /// Windows 11 style "Show Desktop" toggle: minimizes all windows or restores active.
+    pub fn toggle_show_desktop(&mut self) {
+        let any_visible = self.windows.iter().any(|w| w.is_open && !w.is_minimized);
+        if any_visible {
+            for w in self.windows.iter_mut() {
+                if w.is_open {
+                    w.is_minimized = true;
+                }
+            }
+        } else {
+            self.windows[0].is_minimized = false;
+            self.windows[0].is_open = true;
+            self.raise(0);
+        }
+    }
+
     /// Returns the MenuBar for the window at `win_index`.
     pub fn app_menubar(&self, win_index: usize) -> ui::menu::MenuBar {
         if win_index < MAX_WINDOWS {
@@ -1029,6 +1166,15 @@ impl Wm {
         if self.dragging.is_some() {
             return CursorShape::Move;
         }
+        if self.start_menu_open {
+            if self.hovered_start_item.is_some() {
+                return CursorShape::Pointer;
+            }
+            let sm = self.start_menu_rect();
+            if point_in_rect(cx, cy, sm.x, sm.y, sm.w, sm.h) {
+                return CursorShape::Arrow;
+            }
+        }
         // Active dropdown menu inspection
         if let Some(rect) = self.active_dropdown_rect() {
             if point_in_rect(cx, cy, rect.x, rect.y, rect.w, rect.h) {
@@ -1040,12 +1186,18 @@ impl Wm {
         }
         // Top menubar inspection
         if self.menubar_h > 0 && cy < self.menubar_h {
-            if self.menubar_item_at(cx, cy).is_some() {
+            if (cx >= 8 && cx < 36) || self.menubar_item_at(cx, cy).is_some() {
                 return CursorShape::Pointer;
             }
             return CursorShape::Arrow;
         }
-        if self.taskbar_button_at(cx, cy).is_some() {
+        if self.taskbar_h > 0 && cy >= self.desktop_h {
+            if cx < 42 || cx >= self.screen_w - 6 || self.taskbar_button_at(cx, cy).is_some() {
+                return CursorShape::Pointer;
+            }
+        }
+        // Desktop shortcut icons inspection
+        if self.hovered_desktop_icon.is_some() {
             return CursorShape::Pointer;
         }
         for i in (0..MAX_WINDOWS).rev() {
@@ -1079,6 +1231,39 @@ impl Wm {
     }
 
     pub fn on_left_press(&mut self, px: i32, py: i32) {
+        // 0. If Start Menu is open:
+        if self.start_menu_open {
+            let sm = self.start_menu_rect();
+            if point_in_rect(px, py, sm.x, sm.y, sm.w, sm.h) {
+                if let Some(item_idx) = self.start_menu_item_at(px, py) {
+                    let target_app: u8 = match item_idx {
+                        0 => 1, // Terminal
+                        1 => 2, // Files
+                        2 => 3, // Editor
+                        3 => 4, // Software Store
+                        4 => 5, // Settings
+                        _ => 4, // System / Monitor
+                    };
+                    self.launch_or_restore(target_app);
+                    self.start_menu_open = false;
+                    return;
+                }
+                // Check if power buttons were clicked
+                let sep_y = sm.y + sm.h - 48;
+                let foot_y = sep_y + 10;
+                let btn_w = 48;
+                let pwr_x = sm.right() - 16 - btn_w;
+                let lck_x = pwr_x - (btn_w + 6) * 2;
+                if py >= foot_y && py <= foot_y + 26 && px >= lck_x && px < sm.right() - 16 {
+                    self.start_menu_open = false;
+                    return;
+                }
+                return;
+            } else {
+                self.start_menu_open = false;
+            }
+        }
+
         // 1. If dropdown menu is open:
         if self.active_menu.is_some() {
             if let Some(item_idx) = self.dropdown_item_at(px, py) {
@@ -1117,6 +1302,10 @@ impl Wm {
 
         // 2. Top menu bar clicks
         if self.menubar_h > 0 && py < self.menubar_h {
+            if px >= 6 && px < 36 {
+                self.start_menu_open = !self.start_menu_open;
+                return;
+            }
             if let Some(menu_idx) = self.menubar_item_at(px, py) {
                 self.active_menu = Some(menu_idx);
             }
@@ -1124,8 +1313,21 @@ impl Wm {
         }
 
         // 3. Taskbar button clicks
-        if let Some(idx) = self.taskbar_button_at(px, py) {
-            self.on_dock_item_click(idx);
+        if py >= self.desktop_h {
+            // Windows 11 Start badge on far left
+            if px < 42 {
+                self.start_menu_open = !self.start_menu_open;
+                return;
+            }
+            // Windows 11 "Show Desktop" peek strip on far right edge
+            if px >= self.screen_w - 6 {
+                self.toggle_show_desktop();
+                return;
+            }
+            if let Some(idx) = self.taskbar_button_at(px, py) {
+                self.on_dock_item_click(idx);
+                return;
+            }
             return;
         }
 
@@ -1175,6 +1377,14 @@ impl Wm {
         // 5. Window body clicks (raise)
         if let Some(idx) = self.window_at(px, py) {
             self.raise(idx);
+            return;
+        }
+
+        // 6. Desktop shortcut icon clicks (launch or restore app)
+        if let Some(icon_idx) = self.desktop_icon_at(px, py) {
+            let spec = DESKTOP_SHORTCUTS[icon_idx];
+            self.launch_or_restore(spec.app_id);
+            return;
         }
     }
 
@@ -1196,6 +1406,8 @@ impl Wm {
         self.hovered_menu = self.menubar_item_at(self.cursor_x, self.cursor_y);
         self.hovered_item = self.dropdown_item_at(self.cursor_x, self.cursor_y);
         self.hovered_dock_item = self.dock_item_at(self.cursor_x, self.cursor_y);
+        self.hovered_start_item = self.start_menu_item_at(self.cursor_x, self.cursor_y);
+        self.hovered_desktop_icon = self.desktop_icon_at(self.cursor_x, self.cursor_y);
 
         // If dropdown is open, hovering over another top menu switches to that dropdown
         if self.active_menu.is_some() {
@@ -1234,8 +1446,13 @@ impl Wm {
         let palette = self.access_cfg.effective_palette();
         let is_high_contrast = self.access_cfg.theme.is_high_contrast();
 
-        // 1. Desktop background
-        surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
+        // 1. Desktop background & Desktop Icons
+        if self.screen_h >= 600 && !is_high_contrast {
+            draw_modern_desktop_wallpaper(surface, self.screen_w, self.desktop_h);
+            draw_desktop_icons(surface, self.menubar_h, self.hovered_desktop_icon, &palette);
+        } else {
+            surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
+        }
 
         // 2. Windows in z-order
         let active_win = self.active_window();
@@ -1507,10 +1724,214 @@ impl Wm {
             }
         }
 
+        // 5b. Start Menu Popup Overlay
+        if self.start_menu_open {
+            self.draw_start_menu(surface, &palette);
+        }
+
         // 6. Mouse cursor
         let shape = self.cursor_shape_at(self.cursor_x, self.cursor_y);
         let cur_theme = self.access_cfg.effective_cursor_theme();
         ui::cursor::draw_cursor_sprite(surface, self.cursor_x, self.cursor_y, shape, cur_theme);
+    }
+
+    pub fn draw_start_menu<S: Surface + ?Sized>(&self, s: &mut S, palette: &ThemePalette) {
+        let sm = self.start_menu_rect();
+        let font_reg = Font::regular().scaled(self.access_cfg.font_scale);
+        let font_sm = Font::small().scaled(self.access_cfg.font_scale);
+
+        // 1. Drop shadow (frosted floating window)
+        s.fill_rect(Rect::new(sm.x + 4, sm.y + 4, sm.w, sm.h), Color::rgba(0, 0, 0, 80));
+        s.fill_rect(Rect::new(sm.x + 2, sm.y + 2, sm.w, sm.h), Color::rgba(0, 0, 0, 50));
+
+        // 2. Acrylic / Frosted glass background & subtle glass border
+        ui::draw::draw_rounded_rect(s, sm, 10, Color::rgba(22, 27, 42, 244));
+        ui::draw::draw_rect_outline(s, sm, 1, Color::rgba(255, 255, 255, 45));
+
+        // 3. User profile card in header (Windows 11 / macOS account pill)
+        let ava_x = sm.x + 16;
+        let ava_y = sm.y + 14;
+        ui::draw::draw_rounded_rect(s, Rect::new(ava_x, ava_y, 32, 32), 6, palette.accent_primary);
+        ui::draw::draw_line(s, ava_x + 16, ava_y + 8, ava_x + 16, ava_y + 18, Color::WHITE);
+        ui::draw::draw_line(s, ava_x + 10, ava_y + 24, ava_x + 22, ava_y + 24, Color::WHITE);
+        ui::font::draw_text_font(s, ava_x + 40, ava_y + 2, "admin@novaos", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ava_x + 40, ava_y + 18, "Administrator (v2.0 Long Mode)", palette.text_muted, &font_sm);
+
+        // 4. Windows 11 style Search bar
+        let srch_y = ava_y + 38;
+        let srch_w = sm.w - 32;
+        let srch_rect = Rect::new(sm.x + 16, srch_y, srch_w, 24);
+        ui::draw::draw_rounded_rect(s, srch_rect, 4, Color::rgba(255, 255, 255, 16));
+        ui::draw::draw_rect_outline(s, srch_rect, 1, Color::rgba(255, 255, 255, 30));
+        ui::font::draw_text_font(s, sm.x + 24, srch_y + 5, "Search apps, files, settings...", palette.text_muted, &font_sm);
+
+        // 5. Section label
+        let sec_y = srch_y + 30;
+        ui::font::draw_text_font(s, sm.x + 18, sec_y, "PINNED APPLICATIONS", Color::rgba(255, 255, 255, 120), &font_sm);
+
+        // 6. 6 App Cards (2 columns x 3 rows)
+        let apps: [(&str, &str, u8, Color); 6] = [
+            ("Terminal", "NovaTerm CLI", 1, Color::rgb(30, 41, 59)),
+            ("Files", "Root Storage", 2, Color::rgb(217, 119, 6)),
+            ("Scratchpad", "Code Editor", 3, Color::rgb(14, 165, 233)),
+            ("App Store", "Nova Packages", 4, Color::rgb(124, 58, 237)),
+            ("Settings", "Control Panel", 5, Color::rgb(71, 85, 105)),
+            ("Diagnostics", "System Status", 4, Color::rgb(16, 185, 129)),
+        ];
+
+        for i in 0..6 {
+            if let Some(card_rect) = self.start_menu_item_rect(i) {
+                let is_hov = self.hovered_start_item == Some(i);
+                let (title, desc, icon_lbl, icon_col) = apps[i];
+
+                if is_hov {
+                    ui::draw::draw_rounded_rect(s, card_rect, 6, Color::rgba(255, 255, 255, 28));
+                    ui::draw::draw_rect_outline(s, card_rect, 1, Color::rgba(255, 255, 255, 55));
+                } else {
+                    ui::draw::draw_rounded_rect(s, card_rect, 6, Color::rgba(255, 255, 255, 10));
+                    ui::draw::draw_rect_outline(s, card_rect, 1, Color::rgba(255, 255, 255, 20));
+                }
+
+                // App Icon
+                let ic_x = card_rect.x + 6;
+                let ic_y = card_rect.y + (card_rect.h - 24) / 2;
+                ui::draw::draw_rounded_rect(s, Rect::new(ic_x, ic_y, 24, 24), 4, icon_col);
+                draw_app_icon(s, ic_x + 6, ic_y + 6, icon_lbl, palette);
+
+                // App Title and Subtitle
+                let tx_x = ic_x + 30;
+                ui::font::draw_text_font(s, tx_x, card_rect.y + 6, title, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, tx_x, card_rect.y + 22, desc, palette.text_muted, &font_sm);
+            }
+        }
+
+        // 7. Footer bar with OS badge and Power controls
+        let foot_y = sm.y + sm.h - 44;
+        s.fill_rect(Rect::new(sm.x + 12, foot_y - 4, sm.w - 24, 1), Color::rgba(255, 255, 255, 24));
+
+        // OS badge
+        ui::draw::draw_rounded_rect(s, Rect::new(sm.x + 16, foot_y + 4, 8, 8), 4, Color::rgb(34, 197, 94));
+        ui::font::draw_text_font(s, sm.x + 30, foot_y + 4, "NovaOS 2.0 (GA)", Color::WHITE, &font_sm);
+
+        // Power actions: [Restart] [Power]
+        let pwr_x = sm.x + sm.w - 56;
+        ui::draw::draw_rounded_rect(s, Rect::new(pwr_x, foot_y, 42, 20), 4, Color::rgba(239, 68, 68, 160));
+        ui::font::draw_text_font(s, pwr_x + 6, foot_y + 4, "Power", Color::WHITE, &font_sm);
+
+        let rst_x = pwr_x - 52;
+        ui::draw::draw_rounded_rect(s, Rect::new(rst_x, foot_y, 46, 20), 4, Color::rgba(255, 255, 255, 20));
+        ui::font::draw_text_font(s, rst_x + 6, foot_y + 4, "Restart", Color::WHITE, &font_sm);
+    }
+}
+
+fn draw_modern_desktop_wallpaper<S: Surface + ?Sized>(s: &mut S, w: i32, h: i32) {
+    // Sliced vertical gradient: deep dark slate/navy (#0b1120) to midnight dark violet (#0f0d1b)
+    let step = 4;
+    let num_slices = (h + step - 1) / step;
+    for i in 0..num_slices {
+        let y = i * step;
+        let slice_h = step.min(h - y);
+        let t = (y * 255) / h.max(1);
+        let r = (12 * (255 - t) + 8 * t) / 255;
+        let g = (18 * (255 - t) + 12 * t) / 255;
+        let b = (34 * (255 - t) + 26 * t) / 255;
+        s.fill_rect(Rect::new(0, y, w, slice_h), Color::rgb(r as u8, g as u8, b as u8));
+    }
+
+    // Modern Aurora Waves: glowing ambient light orbs blending macOS Sonoma & Windows 11 Bloom
+    // Orb 1: Upper-right Cyan/Sky glow
+    let cx1 = (w * 65) / 100;
+    let cy1 = (h * 32) / 100;
+    let r1 = (w.min(h) * 38) / 100;
+    for layer in 0..5 {
+        let radius = r1 - layer * (r1 / 6);
+        let alpha = (8 + layer * 6) as u8;
+        let color = Color::rgba(14, 165, 233, alpha);
+        ui::draw::draw_rounded_rect(
+            s,
+            Rect::new(cx1 - radius, cy1 - (radius * 7) / 10, radius * 2, (radius * 14) / 10),
+            radius / 2,
+            color,
+        );
+    }
+
+    // Orb 2: Lower-center Purple/Violet aurora
+    let cx2 = (w * 42) / 100;
+    let cy2 = (h * 68) / 100;
+    let r2 = (w.min(h) * 44) / 100;
+    for layer in 0..5 {
+        let radius = r2 - layer * (r2 / 6);
+        let alpha = (7 + layer * 5) as u8;
+        let color = Color::rgba(139, 92, 246, alpha);
+        ui::draw::draw_rounded_rect(
+            s,
+            Rect::new(cx2 - radius, cy2 - (radius * 6) / 10, radius * 2, (radius * 12) / 10),
+            radius / 2,
+            color,
+        );
+    }
+
+    // Orb 3: Subtle central warm magenta accent (Ubuntu touch)
+    let cx3 = (w * 52) / 100;
+    let cy3 = (h * 50) / 100;
+    let r3 = (w.min(h) * 26) / 100;
+    for layer in 0..4 {
+        let radius = r3 - layer * (r3 / 5);
+        let alpha = (6 + layer * 4) as u8;
+        let color = Color::rgba(236, 72, 153, alpha);
+        ui::draw::draw_rounded_rect(
+            s,
+            Rect::new(cx3 - radius, cy3 - (radius * 5) / 10, radius * 2, radius),
+            radius / 2,
+            color,
+        );
+    }
+}
+
+fn draw_desktop_icons<S: Surface + ?Sized>(
+    s: &mut S,
+    menubar_h: i32,
+    hovered_icon: Option<usize>,
+    palette: &ThemePalette,
+) {
+    let font = Font::small();
+    for (i, spec) in DESKTOP_SHORTCUTS.iter().enumerate() {
+        let x = 20;
+        let start_y = if menubar_h > 0 { menubar_h + 16 } else { 16 };
+        let y = start_y + (i as i32 * 76);
+        let rect = Rect::new(x, y, 76, 68);
+
+        let is_hovered = hovered_icon == Some(i);
+        if is_hovered {
+            ui::draw::draw_rounded_rect(s, rect, 6, Color::rgba(255, 255, 255, 28));
+            ui::draw::draw_rect_outline(s, rect, 1, Color::rgba(255, 255, 255, 50));
+        }
+
+        // Icon tile (32x32)
+        let tile_x = x + (rect.w - 32) / 2;
+        let tile_y = y + 6;
+        let tile_rect = Rect::new(tile_x, tile_y, 32, 32);
+
+        let (tile_col, icon_label) = match spec.icon_type {
+            1 => (Color::rgb(30, 41, 59), 1),
+            2 => (Color::rgb(217, 119, 6), 2),
+            3 => (Color::rgb(14, 165, 233), 3),
+            4 => (Color::rgb(124, 58, 237), 4),
+            5 => (Color::rgb(71, 85, 105), 5),
+            _ => (Color::rgb(37, 99, 235), 4),
+        };
+
+        ui::draw::draw_rounded_rect(s, tile_rect, 6, tile_col);
+        ui::draw::draw_rect_outline(s, tile_rect, 1, Color::rgba(255, 255, 255, 40));
+        draw_app_icon(s, tile_x + 10, tile_y + 10, icon_label, palette);
+
+        // Label text below tile
+        let label_w = font.measure_str(spec.label).w;
+        let text_x = x + ((rect.w - label_w) / 2).max(2);
+        let text_y = tile_y + 36;
+        // Subtle drop shadow for desktop icon text readability over wallpaper
+        ui::font::draw_text_font(s, text_x + 1, text_y + 1, spec.label, Color::BLACK, &font);
+        ui::font::draw_text_font(s, text_x, text_y, spec.label, Color::WHITE, &font);
     }
 }
 
@@ -2635,6 +3056,24 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         wm.apply_accessibility_config(cfg);
     }
 
+    // In production desktop runtime, boot into a clean, spacious desktop:
+    // Only a centered, welcoming Terminal console window is open.
+    // Core applications (Files, Scratchpad, App Store) are neatly docked
+    // in the taskbar and desktop icons for instant 1-click launch/restore.
+    wm.windows[1].is_minimized = true;
+    wm.windows[2].is_minimized = true;
+    wm.windows[3].is_minimized = true;
+    wm.windows[0].is_open = true;
+    wm.windows[0].is_minimized = false;
+    if screen_w >= 800 && screen_h >= 600 {
+        wm.windows[0].w = 560;
+        wm.windows[0].h = 380;
+        wm.windows[0].x = (screen_w - 560) / 2;
+        wm.windows[0].y = (screen_h - 380) / 2 - 12;
+        wm.windows[0].pre_snap = (wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h);
+    }
+    wm.raise(0);
+
     loop {
         let key = unsafe { ffi::sys_read_key() };
         if key == b'q' as i32 || key == 27 {
@@ -3077,5 +3516,81 @@ mod tests {
         }
         assert!(found_white, "Active window should have high-contrast white titlebar");
         assert!(found_yellow, "Active window should have high-contrast yellow border");
+    }
+
+    #[test]
+    fn test_wm_start_menu_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        assert!(!wm.start_menu_open);
+
+        // Click Windows 11 Start badge on taskbar (far left, y >= desktop_h)
+        wm.on_left_press(16, 750);
+        assert!(wm.start_menu_open, "Clicking start badge should open start menu");
+
+        // Start menu bounds
+        let sm_rect = wm.start_menu_rect();
+        assert_eq!(sm_rect.x, 12);
+        assert_eq!(sm_rect.w, 360);
+        assert!(sm_rect.h >= 350);
+
+        // Hit-test item 0 (Terminal)
+        let item0_rect = wm.start_menu_item_rect(0).expect("item 0 should exist");
+        assert_eq!(wm.start_menu_item_at(item0_rect.x + 5, item0_rect.y + 5), Some(0));
+
+        // Clicking item 1 (Files) should launch/restore Files and close Start Menu
+        wm.windows[1].is_minimized = true;
+        let item1_rect = wm.start_menu_item_rect(1).expect("item 1 should exist");
+        wm.on_left_press(item1_rect.x + 10, item1_rect.y + 10);
+        assert!(!wm.start_menu_open, "Clicking app card should close start menu");
+        assert!(!wm.windows[1].is_minimized, "Files window should be unminimized");
+
+        // Clicking top menubar star badge toggles start menu
+        wm.on_left_press(16, 10);
+        assert!(wm.start_menu_open, "Clicking menubar star badge should toggle start menu");
+
+        // Clicking outside start menu closes it
+        wm.on_left_press(800, 400);
+        assert!(!wm.start_menu_open, "Clicking outside should dismiss start menu");
+    }
+
+    #[test]
+    fn test_wm_desktop_icons_and_peek_strip() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // Check desktop shortcuts exist
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 6);
+        let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
+        assert_eq!(icon0.x, 20);
+        assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
+
+        // Minimize window 1, then click desktop icon for Files (idx 1)
+        wm.windows[1].is_minimized = true;
+        let icon1 = wm.desktop_icon_rect(1).expect("Files icon should exist");
+        wm.on_left_press(icon1.x + 10, icon1.y + 10);
+        assert!(!wm.windows[1].is_minimized, "Clicking Files desktop icon should unminimize it");
+
+        // Windows 11 Show Desktop peek strip (far right edge)
+        assert!(!wm.windows[0].is_minimized);
+        wm.on_left_press(1022, 750); // far right
+        // All open windows should be minimized
+        assert!(wm.windows[0].is_minimized);
+        // Click peek strip again to restore
+        wm.on_left_press(1022, 750);
+        assert!(!wm.windows[0].is_minimized);
+    }
+
+    #[test]
+    fn test_wm_modern_wallpaper_render() {
+        let wm = Wm::new_for_display(1024, 768);
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surface = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surface);
+
+        // Verify desktop background contains gradient / aurora pixels (not all identical)
+        let p_top = surface.buffer[35 * 1024 + 100];
+        let p_mid = surface.buffer[350 * 1024 + 500];
+        assert_ne!(p_top, 0);
+        assert_ne!(p_mid, 0);
+        assert_ne!(p_top, p_mid, "Wallpaper should be a smooth gradient / aurora bloom");
     }
 }

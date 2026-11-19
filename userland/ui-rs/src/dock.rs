@@ -209,7 +209,7 @@ pub fn draw_dock_surface<S: Surface + ?Sized>(
     let font = if taskbar_rect.h >= 24 { Font::regular() } else { Font::small() };
     let line_h = font.line_height();
 
-    // 2. NovaOS Start / Launcher badge on far left
+    // 2. Windows 11 Fluent 4-Square Start Badge on far left
     let start_w = if taskbar_rect.h >= 24 { 36 } else { 24 };
     let start_rect = Rect::new(taskbar_rect.x + 4, taskbar_rect.y + 3, start_w, taskbar_rect.h - 6);
     draw_rounded_rect(s, start_rect, RADIUS_XS, palette.surface_raised);
@@ -218,9 +218,11 @@ pub fn draw_dock_surface<S: Surface + ?Sized>(
     let star_size = if taskbar_rect.h >= 24 { 12 } else { 8 };
     let star_x = start_rect.x + (start_rect.w - star_size) / 2;
     let star_y = start_rect.y + (start_rect.h - star_size) / 2;
-    s.fill_rect(Rect::new(star_x + 3, star_y, star_size - 6, star_size), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x, star_y + 3, star_size, star_size - 6), palette.accent_primary);
-    s.fill_rect(Rect::new(star_x + 2, star_y + 2, star_size - 4, star_size - 4), WHITE);
+    let tile_w = (star_size - 2) / 2;
+    s.fill_rect(Rect::new(star_x, star_y, tile_w, tile_w), Color::rgb(0, 164, 239));
+    s.fill_rect(Rect::new(star_x + tile_w + 2, star_y, tile_w, tile_w), palette.accent_primary);
+    s.fill_rect(Rect::new(star_x, star_y + tile_w + 2, tile_w, tile_w), palette.accent_primary);
+    s.fill_rect(Rect::new(star_x + tile_w + 2, star_y + tile_w + 2, tile_w, tile_w), Color::rgb(0, 164, 239));
 
     // 3. Dock Items (pinned apps & running windows)
     let start_offset_x = start_w + 12;
@@ -309,4 +311,7 @@ pub fn draw_dock_surface<S: Surface + ?Sized>(
     let dot_x = clock_x - 12;
     let dot_y = taskbar_rect.y + (taskbar_rect.h - 6) / 2;
     draw_rounded_rect(s, Rect::new(dot_x, dot_y, 6, 6), 3, palette.status_success);
+
+    // 5. Windows 11 "Show Desktop" peek strip on far right edge
+    s.fill_rect(Rect::new(taskbar_rect.right() - 2, taskbar_rect.y + 2, 2, taskbar_rect.h - 4), palette.border_subtle);
 }
