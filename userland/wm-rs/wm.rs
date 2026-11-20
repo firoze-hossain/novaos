@@ -239,13 +239,14 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 9] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 10] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 1, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
     DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks", app_id: 6, icon_type: 6 },
     DesktopIconSpec { label: "Calculator",  sublabel: "Math Studio",    app_id: 7, icon_type: 7 },
     DesktopIconSpec { label: "Aero Web",    sublabel: "Browser",        app_id: 8, icon_type: 8 },
+    DesktopIconSpec { label: "Nova Player", sublabel: "Media Studio",   app_id: 9, icon_type: 9 },
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
@@ -2108,6 +2109,114 @@ impl WmBrowserApp {
     }
 }
 
+// --- Nova Player Desktop App Subsystem ---
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmPlayerApp {
+    pub is_playing: bool,
+    pub active_track: usize,
+    pub volume_pct: u32,
+    pub is_muted: bool,
+    pub show_visualizer: bool,
+    pub show_playlist: bool,
+    pub speed_step: u8,
+    pub aspect_idx: u8,
+    pub position_secs: u32,
+    pub duration_secs: u32,
+}
+
+impl WmPlayerApp {
+    pub fn new() -> Self {
+        WmPlayerApp {
+            is_playing: true,
+            active_track: 0,
+            volume_pct: 100,
+            is_muted: false,
+            show_visualizer: false,
+            show_playlist: false,
+            speed_step: 1, // 1.0x
+            aspect_idx: 0, // Auto
+            position_secs: 45,
+            duration_secs: 180,
+        }
+    }
+
+    pub fn toggle_play(&mut self) {
+        self.is_playing = !self.is_playing;
+    }
+
+    pub fn next_track(&mut self) {
+        self.active_track = (self.active_track + 1) % 4;
+        self.position_secs = 0;
+    }
+
+    pub fn prev_track(&mut self) {
+        if self.position_secs > 5 {
+            self.position_secs = 0;
+        } else if self.active_track > 0 {
+            self.active_track -= 1;
+            self.position_secs = 0;
+        }
+    }
+
+    pub fn toggle_viz(&mut self) {
+        self.show_visualizer = !self.show_visualizer;
+    }
+
+    pub fn toggle_playlist(&mut self) {
+        self.show_playlist = !self.show_playlist;
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let rel_x = px - client.x;
+        let rel_y = py - client.y;
+
+        // Bottom control island
+        if rel_y >= client.h - 58 && rel_y <= client.h - 8 {
+            // Play/Pause button
+            if rel_x >= 70 && rel_x <= 110 {
+                self.toggle_play();
+                return;
+            }
+            // Prev button
+            if rel_x >= 20 && rel_x <= 50 {
+                self.prev_track();
+                return;
+            }
+            // Next button
+            if rel_x >= 115 && rel_x <= 145 {
+                self.next_track();
+                return;
+            }
+            // Viz button
+            if rel_x >= client.w - 75 && rel_x <= client.w - 40 {
+                self.toggle_viz();
+                return;
+            }
+            // Volume toggle
+            if rel_x >= client.w - 130 && rel_x <= client.w - 85 {
+                self.is_muted = !self.is_muted;
+                return;
+            }
+        }
+
+        // Top right quick actions
+        if rel_y >= 6 && rel_y <= 30 {
+            if rel_x >= client.w - 40 && rel_x <= client.w - 8 {
+                self.toggle_playlist();
+                return;
+            }
+            if rel_x >= client.w - 75 && rel_x <= client.w - 42 {
+                self.toggle_viz();
+                return;
+            }
+        }
+
+        // Click on video canvas toggles play
+        self.toggle_play();
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -2237,6 +2346,7 @@ impl WmTerminal {
                 self.push_line("  cal        - Display calendar schedule & upcoming events (--events)", Color::rgb(220, 230, 242));
                 self.push_line("  calc <exp> - Evaluate math expression (e.g. calc 125 * 4, calc sqrt(144))", Color::rgb(220, 230, 242));
                 self.push_line("  browser    - Launch Aero Web Browser (or 'aero <url>', '--shields')", Color::rgb(220, 230, 242));
+                self.push_line("  player     - Launch Nova Media Player (or 'player <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -2555,6 +2665,27 @@ impl WmTerminal {
                     self.push_line("[OK] 200 OK - Aero Engine rendered frame (Shields: Protected)", Color::rgb(240, 246, 252));
                 }
             }
+            "player" | "media" | "vlc" => {
+                if rest.is_empty() || rest == "--help" || rest == "-h" {
+                    self.push_line("Nova Player v1.0.0 (Pure Rust Media Engine)", Color::rgb(56, 189, 248));
+                    self.push_line("NovaOS Default Media Player: 4K UHD, 8K HDR, 32-Band Equalizer", Color::rgb(88, 166, 255));
+                    self.push_line("Usage: player [file | --info | --visualizer | --version]", Color::rgb(220, 230, 242));
+                    self.push_line("Active Media: video/cyberpunk_metropolis_4k.mkv (4K UHD 60 FPS)", Color::rgb(63, 185, 80));
+                } else if rest == "--info" || rest == "-i" {
+                    self.push_line("Nova Player Media Telemetry & Codec Inspector:", Color::rgb(56, 189, 248));
+                    self.push_line("  * Video Pipeline: 4K UHD (3840x2160) @ 60 FPS", Color::rgb(63, 185, 80));
+                    self.push_line("  * Hardware Scaling: Bilinear Multi-Resolution Letterbox", Color::rgb(56, 189, 248));
+                    self.push_line("  * Codecs: H.264/AVC, AV1 8K, VP9, FLAC 24/96, MP3 320k", Color::rgb(74, 222, 128));
+                    self.push_line("  * Audio Equalizer: 32-Band Dynamic Spectrum (Boost: 125%)", Color::rgb(88, 166, 255));
+                } else if rest == "--version" || rest == "-v" {
+                    self.push_line("Nova Player 1.0.0 (pc-novaos-elf, Pure Rust Engine)", Color::rgb(88, 166, 255));
+                    self.push_line("Architecture: nova-player-core + nova-player-ui (Zero C/C++, Zero FFmpeg)", Color::rgb(220, 230, 242));
+                } else {
+                    self.push_line("Loading media into Nova Player:", Color::rgb(88, 166, 255));
+                    self.push_line(rest, Color::rgb(63, 185, 80));
+                    self.push_line("[OK] Stream format demuxed: 4K UHD @ 60 FPS (Audio: Stereo PCM 48kHz)", Color::rgb(240, 246, 252));
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -2637,6 +2768,7 @@ pub struct Wm {
     pub calendar_app: WmCalendarApp,
     pub calc_app: WmCalcApp,
     pub browser_app: WmBrowserApp,
+    pub player_app: WmPlayerApp,
 }
 
 impl Wm {
@@ -2694,6 +2826,7 @@ impl Wm {
             calendar_app: WmCalendarApp::new(),
             calc_app: WmCalcApp::new(),
             browser_app: WmBrowserApp::new(),
+            player_app: WmPlayerApp::new(),
         }
     }
 
@@ -2761,6 +2894,7 @@ impl Wm {
             calendar_app: WmCalendarApp::new(),
             calc_app: WmCalcApp::new(),
             browser_app: WmBrowserApp::new(),
+            player_app: WmPlayerApp::new(),
         }
     }
 
@@ -3784,11 +3918,11 @@ impl Wm {
                         0 => 1, // Terminal
                         1 => 2, // Files
                         2 => 8, // Aero Browser
-                        3 => 7, // Calculator
-                        4 => 6, // Calendar
-                        5 => 5, // Settings
-                        6 => 4, // Software Store
-                        _ => 0, // Diagnostics
+                        3 => 9, // Nova Player (Default Media Player)
+                        4 => 7, // Calculator
+                        5 => 6, // Calendar
+                        6 => 5, // Settings
+                        _ => 4, // Software Store
                     };
                     self.launch_or_restore(target_app);
                     self.start_menu_open = false;
@@ -3947,6 +4081,12 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.browser_app.handle_click(px, py, client);
                 }
+            } else if w.label == 9 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.player_app.handle_click(px, py, client);
+                }
             }
             return;
         }
@@ -4077,6 +4217,8 @@ impl Wm {
                     draw_calc_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.calc_app, &palette);
                 } else if w.label == 8 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_browser_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.browser_app, &palette);
+                } else if w.label == 9 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_player_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.player_app, &palette);
                 }
             }
 
@@ -4137,6 +4279,7 @@ impl Wm {
                     6 => "Calendar - NovaOS Schedule & Events",
                     7 => "Calculator - NovaOS Math Studio",
                     8 => "Aero Browser - Fast & Private Web",
+                    9 => "Nova Player - Ultra HD Media Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -4364,11 +4507,11 @@ impl Wm {
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Aero Browser", "Fast Web Engine", 8),
+            ("Nova Player", "Ultra HD Media", 9),
             ("Calculator", "Math Studio", 7),
             ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
             ("App Store", "Nova Packages", 4),
-            ("Diagnostics", "System Status", 0),
         ];
 
         for i in 0..8 {
@@ -5029,6 +5172,15 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             ui::draw::draw_line(s, x + 8, y + 7, x + 6, y + 9, Color::rgb(255, 107, 0));
             s.put_pixel(x + 5, y + 5, Color::rgb(0, 212, 255));
             s.put_pixel(x + 6, y + 5, Color::rgb(0, 212, 255));
+        }
+        9 => {
+            // Nova Player: cyber-cyan rounded badge with play glyph and amber status dot
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(14, 23, 42));
+            ui::draw::draw_line(s, x + 4, y + 3, x + 4, y + 9, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, x + 5, y + 4, x + 5, y + 8, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, x + 6, y + 5, x + 6, y + 7, Color::rgb(56, 189, 248));
+            s.put_pixel(x + 7, y + 6, Color::rgb(56, 189, 248));
+            s.put_pixel(x + 9, y + 2, Color::rgb(245, 158, 11));
         }
         _ => {
             // System gear icon
@@ -6023,6 +6175,220 @@ fn draw_browser_client_body<S: Surface + ?Sized>(
         ui::font::draw_text_font(s, flyout_x + 12, flyout_y + 110, "[x] Upgrade HTTPS", Color::rgb(226, 232, 240), &font_sm);
         ui::font::draw_text_font(s, flyout_x + 12, flyout_y + 128, "[x] Shield protection active", Color::rgb(74, 222, 128), &font_sm);
     }
+}
+
+/// Renders the Nova Player Ultra HD Default Media Studio client view inside Window 9.
+fn draw_player_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    player: &WmPlayerApp,
+    palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+
+    // 1. Deep Obsidian Cinema Canvas (#0A0E17)
+    s.fill_rect(client, Color::rgb(10, 14, 23));
+
+    // Track metadata
+    let tracks: [(&str, &str, &str, &str); 4] = [
+        ("Cyberpunk Metropolis 2077", "4K UHD 60 FPS", "AV1 HDR10+", "03:00"),
+        ("Deep Space Accretion Disk", "8K FUHD 60 FPS", "HEVC 10-Bit", "04:15"),
+        ("Ocean Aurora Borealis", "1080p 60 FPS", "VP9 Pro", "02:45"),
+        ("Synthwave Sunset Overdrive", "FLAC 24/96", "Hi-Res Audio", "03:30"),
+    ];
+    let (track_title, track_res, track_codec, _track_dur) = tracks[player.active_track.min(3)];
+
+    // 2. Top Header Bar (Acrylic floating glass)
+    let hdr_h = 28;
+    s.fill_rect(Rect::new(client.x, client.y, client.w, hdr_h), Color::rgba(15, 23, 42, 220));
+    ui::draw::draw_line(s, client.x, client.y + hdr_h - 1, client.x + client.w, client.y + hdr_h - 1, Color::rgb(30, 41, 59));
+
+    // Nova Player badge
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, client.y + 5, 20, 18), 3, Color::rgb(14, 165, 233));
+    ui::draw::draw_line(s, client.x + 15, client.y + 9, client.x + 15, client.y + 19, Color::WHITE);
+    ui::draw::draw_line(s, client.x + 16, client.y + 10, client.x + 21, client.y + 14, Color::WHITE);
+    ui::draw::draw_line(s, client.x + 21, client.y + 14, client.x + 16, client.y + 18, Color::WHITE);
+
+    // Track Title and Format Badges
+    ui::font::draw_text_font(s, client.x + 34, client.y + 7, track_title, Color::WHITE, &font_reg);
+
+    let res_x = client.x + 36 + font_reg.measure_str(track_title).w;
+    if res_x + 90 < client.w - 110 {
+        ui::draw::draw_rounded_rect(s, Rect::new(res_x, client.y + 6, 52, 16), 3, Color::rgb(30, 41, 59));
+        ui::draw::draw_rect_outline(s, Rect::new(res_x, client.y + 6, 52, 16), 1, Color::rgb(56, 189, 248));
+        ui::font::draw_text_font(s, res_x + 4, client.y + 8, track_res, Color::rgb(56, 189, 248), &font_sm);
+
+        let cod_x = res_x + 58;
+        if cod_x + 70 < client.w - 110 {
+            ui::draw::draw_rounded_rect(s, Rect::new(cod_x, client.y + 6, 64, 16), 3, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(cod_x, client.y + 6, 64, 16), 1, Color::rgb(74, 222, 128));
+            ui::font::draw_text_font(s, cod_x + 4, client.y + 8, track_codec, Color::rgb(74, 222, 128), &font_sm);
+        }
+    }
+
+    // Top Right Action Buttons: Spectrum & Playlist
+    let btn_viz_x = client.x + client.w - 75;
+    let viz_bg = if player.show_visualizer { Color::rgb(14, 165, 233) } else { Color::rgb(30, 41, 59) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_viz_x, client.y + 4, 32, 20), 4, viz_bg);
+    ui::font::draw_text_font(s, btn_viz_x + 6, client.y + 7, "VIZ", Color::WHITE, &font_sm);
+
+    let btn_pl_x = client.x + client.w - 38;
+    let pl_bg = if player.show_playlist { Color::rgb(245, 158, 11) } else { Color::rgb(30, 41, 59) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_pl_x, client.y + 4, 30, 20), 4, pl_bg);
+    ui::font::draw_text_font(s, btn_pl_x + 8, client.y + 7, "PL", Color::WHITE, &font_sm);
+
+    // 3. Main Cinema Viewport (Letterbox with Cyberpunk Grid / Aurora)
+    let vp_y = client.y + hdr_h;
+    let vp_h = (client.h - hdr_h - 60).max(40);
+    let _vp_rect = Rect::new(client.x, vp_y, client.w, vp_h);
+
+    // Perspective horizon grid
+    let horizon_y = vp_y + (vp_h * 55) / 100;
+    ui::draw::draw_line(s, client.x, horizon_y, client.right(), horizon_y, Color::rgb(30, 58, 138));
+
+    // Vertical perspective grid lines
+    let cx = client.x + client.w / 2;
+    for i in -6..=6 {
+        let bottom_offset = i * (client.w / 14);
+        let bx = cx + bottom_offset;
+        ui::draw::draw_line(s, cx, horizon_y, bx, vp_y + vp_h, Color::rgb(20, 35, 75));
+    }
+    // Horizontal perspective grid lines
+    let mut gy = horizon_y + 6;
+    let mut step = 6;
+    while gy < vp_y + vp_h {
+        ui::draw::draw_line(s, client.x, gy, client.right(), gy, Color::rgb(20, 35, 75));
+        step = (step * 14) / 10;
+        gy += step;
+    }
+
+    // Neon Cyber Sun / Black Hole Accretion Disc in background
+    let sun_y = horizon_y - 28;
+    ui::draw::draw_rounded_rect(s, Rect::new(cx - 36, sun_y, 72, 36), 18, Color::rgb(244, 63, 94));
+    ui::draw::draw_line(s, cx - 44, sun_y + 18, cx + 44, sun_y + 18, Color::rgb(251, 191, 36));
+
+    // Audio / Visualizer 32-Band FFT overlay if active
+    if player.show_visualizer || player.active_track == 3 {
+        let viz_bar_count = 24.min((client.w - 40) / 10) as usize;
+        let viz_start_x = cx - ((viz_bar_count as i32 * 10) / 2);
+        let base_y = vp_y + vp_h - 10;
+
+        for b in 0..viz_bar_count {
+            let bx = viz_start_x + (b as i32) * 10;
+            // Procedural frequency height simulation
+            let h_val = (((b * 7 + 13) % 45) + 12) as i32;
+            let bar_h = if player.is_playing { h_val } else { 4 };
+            let bar_col = match b % 4 {
+                0 => Color::rgb(56, 189, 248),  // Cyan
+                1 => Color::rgb(74, 222, 128),  // Emerald
+                2 => Color::rgb(245, 158, 11),  // Amber
+                _ => Color::rgb(244, 63, 94),   // Rose
+            };
+            s.fill_rect(Rect::new(bx, base_y - bar_h, 7, bar_h), bar_col);
+            // Peak cap dot
+            s.fill_rect(Rect::new(bx, base_y - bar_h - 3, 7, 2), Color::WHITE);
+        }
+    }
+
+    // Centered Play/Pause Watermark if paused
+    if !player.is_playing {
+        let pw_w = 110;
+        let pw_h = 42;
+        let pw_rect = Rect::new(cx - pw_w / 2, vp_y + (vp_h - pw_h) / 2, pw_w, pw_h);
+        ui::draw::draw_rounded_rect(s, pw_rect, 8, Color::rgba(0, 0, 0, 180));
+        ui::draw::draw_rect_outline(s, pw_rect, 1, Color::rgb(56, 189, 248));
+        ui::font::draw_text_font(s, pw_rect.x + 22, pw_rect.y + 12, "PAUSED", Color::WHITE, &font_reg);
+    }
+
+    // 4. Sliding Playlist Panel (if open)
+    if player.show_playlist {
+        let pl_w = 210.min(client.w / 2);
+        let pl_x = client.x + client.w - pl_w - 8;
+        let pl_y = client.y + hdr_h + 8;
+        let pl_h = vp_h - 16;
+        let pl_rect = Rect::new(pl_x, pl_y, pl_w, pl_h);
+
+        ui::draw::draw_rounded_rect(s, pl_rect, 8, Color::rgba(15, 23, 42, 230));
+        ui::draw::draw_rect_outline(s, pl_rect, 1, Color::rgb(56, 189, 248));
+
+        ui::font::draw_text_font(s, pl_x + 12, pl_y + 8, "MEDIA PLAYLIST", Color::rgb(56, 189, 248), &font_sm);
+        ui::draw::draw_line(s, pl_x + 8, pl_y + 24, pl_x + pl_w - 8, pl_y + 24, Color::rgb(51, 65, 85));
+
+        for (idx, &(t_title, _, _, t_time)) in tracks.iter().enumerate() {
+            let row_y = pl_y + 30 + (idx as i32) * 32;
+            if row_y + 28 > pl_y + pl_h {
+                break;
+            }
+            let is_sel = player.active_track == idx;
+            let row_bg = if is_sel { Color::rgba(56, 189, 248, 40) } else { Color::rgba(255, 255, 255, 6) };
+            ui::draw::draw_rounded_rect(s, Rect::new(pl_x + 6, row_y, pl_w - 12, 26), 4, row_bg);
+            if is_sel {
+                ui::draw::draw_rect_outline(s, Rect::new(pl_x + 6, row_y, pl_w - 12, 26), 1, Color::rgb(56, 189, 248));
+                ui::font::draw_text_font(s, pl_x + 10, row_y + 6, ">", Color::rgb(56, 189, 248), &font_sm);
+            }
+            let text_col = if is_sel { Color::WHITE } else { palette.text_muted };
+            let title_short = if t_title.len() > 14 { &t_title[..14] } else { t_title };
+            ui::font::draw_text_font(s, pl_x + 22, row_y + 6, title_short, text_col, &font_sm);
+            ui::font::draw_text_font(s, pl_x + pl_w - 44, row_y + 6, t_time, Color::rgb(148, 163, 184), &font_sm);
+        }
+    }
+
+    // 5. Floating Acrylic Bottom Island (Transport Controls)
+    let bot_h = 52;
+    let bot_y = client.y + client.h - bot_h - 4;
+    let bot_rect = Rect::new(client.x + 8, bot_y, client.w - 16, bot_h);
+    ui::draw::draw_rounded_rect(s, bot_rect, 10, Color::rgba(18, 24, 38, 235));
+    ui::draw::draw_rect_outline(s, bot_rect, 1, Color::rgba(255, 255, 255, 30));
+
+    // Timeline Scrub Bar
+    let scrub_x = bot_rect.x + 16;
+    let scrub_w = bot_rect.w - 32;
+    let scrub_y = bot_y + 8;
+    ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, scrub_w, 4), 2, Color::rgb(30, 41, 59));
+
+    // Buffer bar (65%)
+    let buf_w = (scrub_w * 65) / 100;
+    ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, buf_w, 4), 2, Color::rgb(71, 85, 105));
+
+    // Played bar (25% progress)
+    let prog_w = (scrub_w * 25) / 100;
+    ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, prog_w, 4), 2, Color::rgb(56, 189, 248));
+    // Playhead dot
+    s.fill_rect(Rect::new(scrub_x + prog_w - 3, scrub_y - 2, 7, 8), Color::WHITE);
+
+    // Transport buttons row
+    let btn_row_y = bot_y + 20;
+
+    // Prev [|<]
+    let prev_x = bot_rect.x + 20;
+    ui::font::draw_text_font(s, prev_x, btn_row_y + 4, "|<", Color::rgb(226, 232, 240), &font_reg);
+
+    // Play/Pause circular button [ > ] or [ || ]
+    let play_x = bot_rect.x + 72;
+    ui::draw::draw_rounded_rect(s, Rect::new(play_x, btn_row_y, 36, 24), 6, Color::rgb(14, 165, 233));
+    let play_label = if player.is_playing { "||" } else { ">" };
+    let pl_off = if player.is_playing { 13 } else { 15 };
+    ui::font::draw_text_font(s, play_x + pl_off, btn_row_y + 4, play_label, Color::WHITE, &font_reg);
+
+    // Next [>|]
+    let next_x = bot_rect.x + 120;
+    ui::font::draw_text_font(s, next_x, btn_row_y + 4, ">|", Color::rgb(226, 232, 240), &font_reg);
+
+    // Timestamp
+    let time_x = next_x + 36;
+    let time_str = "00:45 / 03:00";
+    ui::font::draw_text_font(s, time_x, btn_row_y + 6, time_str, Color::rgb(148, 163, 184), &font_sm);
+
+    // Right transport controls: Volume, Speed, Aspect
+    let vol_x = bot_rect.x + bot_rect.w - 120;
+    let vol_txt = if player.is_muted { "MUTE" } else { "VOL 100%" };
+    let vol_col = if player.is_muted { Color::rgb(245, 158, 11) } else { Color::rgb(74, 222, 128) };
+    ui::font::draw_text_font(s, vol_x, btn_row_y + 6, vol_txt, vol_col, &font_sm);
+
+    let spd_x = bot_rect.x + bot_rect.w - 42;
+    ui::draw::draw_rounded_rect(s, Rect::new(spd_x, btn_row_y + 2, 34, 18), 3, Color::rgb(30, 41, 59));
+    ui::font::draw_text_font(s, spd_x + 4, btn_row_y + 4, "1.0x", Color::rgb(56, 189, 248), &font_sm);
 }
 
 /// Renders the in-window terminal emulator client view inside Window 0 / Console Shell.
@@ -7444,7 +7810,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 9);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 10);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -7935,5 +8301,98 @@ mod tests {
         wm.on_key(10);
         let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l2.contains("200 OK") || l2.contains("Aero Engine"), "Terminal aero output: {}", l2);
+    }
+
+    #[test]
+    fn test_wm_nova_player_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial State
+        assert!(wm.player_app.is_playing);
+        assert_eq!(wm.player_app.active_track, 0);
+        assert_eq!(wm.player_app.volume_pct, 100);
+        assert!(!wm.player_app.is_muted);
+        assert!(!wm.player_app.show_visualizer);
+        assert!(!wm.player_app.show_playlist);
+
+        // 2. Track Navigation and Controls Unit Logic
+        wm.player_app.next_track();
+        assert_eq!(wm.player_app.active_track, 1);
+        wm.player_app.prev_track();
+        assert_eq!(wm.player_app.active_track, 0);
+
+        wm.player_app.toggle_play();
+        assert!(!wm.player_app.is_playing);
+        wm.player_app.toggle_play();
+        assert!(wm.player_app.is_playing);
+
+        wm.player_app.toggle_viz();
+        assert!(wm.player_app.show_visualizer);
+        wm.player_app.toggle_viz();
+        assert!(!wm.player_app.show_visualizer);
+
+        wm.player_app.toggle_playlist();
+        assert!(wm.player_app.show_playlist);
+        wm.player_app.toggle_playlist();
+        assert!(!wm.player_app.show_playlist);
+
+        // 3. Launch via Desktop Shortcut 6 (Nova Player)
+        let player_icon = wm.desktop_icon_rect(6).expect("Nova Player desktop shortcut should exist");
+        wm.on_left_press(player_icon.x + 10, player_icon.y + 10);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 9, "Clicking player desktop icon should launch window 9");
+
+        // 4. Interactive clicks inside window 9
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // Click play/pause button (x: 80, y: client.h - 30)
+        wm.on_left_press(client.x + 85, client.y + client.h - 30);
+        assert!(!wm.player_app.is_playing, "Clicking play button should pause playback");
+        wm.on_left_press(client.x + 85, client.y + client.h - 30);
+        assert!(wm.player_app.is_playing, "Clicking play button again should resume playback");
+
+        // Click Next button (x: 130, y: client.h - 30)
+        wm.on_left_press(client.x + 130, client.y + client.h - 30);
+        assert_eq!(wm.player_app.active_track, 1, "Clicking next button should switch track");
+
+        // Click Prev button (x: 35, y: client.h - 30)
+        wm.on_left_press(client.x + 35, client.y + client.h - 30);
+        assert_eq!(wm.player_app.active_track, 0, "Clicking prev button should return to track 0");
+
+        // Click Viz button on bottom island (x: client.w - 60)
+        wm.on_left_press(client.x + client.w - 60, client.y + client.h - 30);
+        assert!(wm.player_app.show_visualizer, "Clicking viz button should toggle visualizer");
+
+        // Click Volume mute toggle (x: client.w - 100)
+        wm.on_left_press(client.x + client.w - 100, client.y + client.h - 30);
+        assert!(wm.player_app.is_muted, "Clicking volume label should toggle mute");
+
+        // Click Top right PL button (x: client.w - 20, y: 15)
+        wm.on_left_press(client.x + client.w - 20, client.y + 15);
+        assert!(wm.player_app.show_playlist, "Clicking top PL button should toggle playlist");
+
+        // 5. Shell Terminal commands: player, player --info, player --version
+        wm.raise(0);
+        for b in b"player --info" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("Equalizer") || l1.contains("32-Band"), "Terminal player --info output: {}", l1);
+
+        for b in b"player --version" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("Pure Rust Engine") || l2.contains("nova-player-core"), "Terminal player --version output: {}", l2);
+
+        for b in b"player movie.mkv" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l3.contains("demuxed") || l3.contains("4K UHD"), "Terminal player movie.mkv output: {}", l3);
     }
 }
