@@ -20,6 +20,7 @@ pub const APP_ID_SETTINGS: u8 = 5;
 pub const APP_ID_CALENDAR: u8   = 6;
 pub const APP_ID_STORE: u8      = 7;
 pub const APP_ID_CALCULATOR: u8 = 8;
+pub const APP_ID_BROWSER: u8    = 9;
 
 pub const MAX_PINNED_APPS: usize = 8;
 
@@ -63,6 +64,7 @@ pub fn app_for_id(id: u8) -> Option<DockApp> {
         APP_ID_CALENDAR   => Some(DockApp::new(APP_ID_CALENDAR, "Calendar", "CALENDAR.ELF", true)),
         APP_ID_STORE      => Some(DockApp::new(APP_ID_STORE, "Store", "STORE.ELF", true)),
         APP_ID_CALCULATOR => Some(DockApp::new(APP_ID_CALCULATOR, "Calculator", "CALC.ELF", true)),
+        APP_ID_BROWSER    => Some(DockApp::new(APP_ID_BROWSER, "Browser", "AERO.ELF", true)),
         _ => None,
     }
 }
@@ -191,6 +193,14 @@ pub fn draw_dock_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, app_id
             draw_line(s, x + 4, y + 2, x + 10, y + 2, WHITE);
             draw_line(s, x + 10, y + 2, x + 10, y + 4, WHITE);
             s.fill_rect(Rect::new(x + 6, y + 5, 2, 8), WHITE);
+        }
+        APP_ID_BROWSER => {
+            // Browser icon: dark badge, orange crest, cyan lock
+            draw_rounded_rect(s, Rect::new(x + 1, y + 1, 12, 12), 2, Color::rgb(15, 23, 42));
+            s.fill_rect(Rect::new(x + 3, y + 3, 6, 2), Color::rgb(255, 107, 0));
+            s.fill_rect(Rect::new(x + 3, y + 5, 2, 4), Color::rgb(255, 107, 0));
+            s.fill_rect(Rect::new(x + 7, y + 5, 2, 4), Color::rgb(255, 107, 0));
+            s.put_pixel(x + 5, y + 6, Color::rgb(56, 189, 248));
         }
         _ => {
             // System Gear icon
