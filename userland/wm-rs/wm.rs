@@ -2119,6 +2119,10 @@ pub struct WmPlayerApp {
     pub is_muted: bool,
     pub show_visualizer: bool,
     pub show_playlist: bool,
+    pub show_about: bool,
+    pub is_looping: bool,
+    pub is_shuffling: bool,
+    pub active_menu: Option<usize>,
     pub speed_step: u8,
     pub aspect_idx: u8,
     pub position_secs: u32,
@@ -2134,6 +2138,10 @@ impl WmPlayerApp {
             is_muted: false,
             show_visualizer: false,
             show_playlist: false,
+            show_about: false,
+            is_looping: false,
+            is_shuffling: false,
+            active_menu: None,
             speed_step: 1, // 1.0x
             aspect_idx: 0, // Auto
             position_secs: 45,
@@ -2143,6 +2151,11 @@ impl WmPlayerApp {
 
     pub fn toggle_play(&mut self) {
         self.is_playing = !self.is_playing;
+    }
+
+    pub fn stop(&mut self) {
+        self.is_playing = false;
+        self.position_secs = 0;
     }
 
     pub fn next_track(&mut self) {
@@ -2171,37 +2184,169 @@ impl WmPlayerApp {
         let rel_x = px - client.x;
         let rel_y = py - client.y;
 
-        // Bottom control island
-        if rel_y >= client.h - 58 && rel_y <= client.h - 8 {
+        // 1. About Modal Dialog close
+        if self.show_about {
+            self.show_about = false;
+            return;
+        }
+
+        // 2. Dropdown Menu Clicks (if an active menu is open)
+        if let Some(menu_idx) = self.active_menu {
+            // Dropdown area: x in 6..client.w - 6, y in 46..210
+            if rel_y >= 46 && rel_y <= 210 && rel_x >= 6 && rel_x <= client.w - 6 {
+                let item_idx = ((rel_y - 48) / 20).max(0) as usize;
+                match menu_idx {
+                    0 => { // Media
+                        match item_idx {
+                            0 | 1 | 2 => self.next_track(),
+                            _ => {}
+                        }
+                    }
+                    1 => { // Playback
+                        match item_idx {
+                            0 => self.toggle_play(),
+                            1 => self.stop(),
+                            2 => self.prev_track(),
+                            3 => self.next_track(),
+                            4 => self.is_looping = !self.is_looping,
+                            5 => self.is_shuffling = !self.is_shuffling,
+                            _ => {}
+                        }
+                    }
+                    2 => { // Audio
+                        match item_idx {
+                            0 => self.is_muted = !self.is_muted,
+                            1 => self.volume_pct = (self.volume_pct + 5).min(125),
+                            2 => self.volume_pct = self.volume_pct.saturating_sub(5),
+                            3 => self.toggle_viz(),
+                            _ => {}
+                        }
+                    }
+                    3 => { // Video
+                        match item_idx {
+                            0 => self.aspect_idx = (self.aspect_idx + 1) % 4,
+                            1 => self.active_track = (self.active_track + 1) % 4,
+                            _ => {}
+                        }
+                    }
+                    4 => { // Subtitle
+                        // Subtitle toggle
+                    }
+                    5 => { // Tools
+                        match item_idx {
+                            0 => self.toggle_viz(),
+                            _ => {}
+                        }
+                    }
+                    6 => { // View
+                        match item_idx {
+                            0 => self.toggle_playlist(),
+                            1 => self.toggle_viz(),
+                            _ => {}
+                        }
+                    }
+                    7 => { // Help
+                        match item_idx {
+                            0 => self.show_about = true,
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                self.active_menu = None;
+                return;
+            } else if rel_y > 46 {
+                // Clicking outside closes the active dropdown menu
+                self.active_menu = None;
+            }
+        }
+
+        // 3. Menubar Strip Clicks (rel_y in 26..46)
+        if rel_y >= 26 && rel_y <= 46 {
+            let menu_slots = [
+                (6, 48),    // Media
+                (50, 106),  // Playback
+                (108, 146), // Audio
+                (148, 186), // Video
+                (188, 238), // Subtitle
+                (240, 278), // Tools
+                (280, 314), // View
+                (316, 348), // Help
+            ];
+            for (idx, &(mx1, mx2)) in menu_slots.iter().enumerate() {
+                if rel_x >= mx1 && rel_x <= mx2 {
+                    if self.active_menu == Some(idx) {
+                        self.active_menu = None;
+                    } else {
+                        self.active_menu = Some(idx);
+                    }
+                    return;
+                }
+            }
+        }
+
+        // 4. Bottom Toolbar (VLC Layout)
+        if rel_y >= client.h - 58 && rel_y <= client.h - 6 {
+            // Volume Mute toggle (right aligned)
+            if rel_x >= client.w - 110 && rel_x <= client.w - 80 {
+                self.is_muted = !self.is_muted;
+                return;
+            }
+            // Volume slider (right aligned)
+            if rel_x >= client.w - 75 && rel_x <= client.w - 15 {
+                let frac = ((rel_x - (client.w - 75)) as f32 / 60.0).clamp(0.0, 1.0);
+                self.volume_pct = (frac * 125.0) as u32;
+                self.is_muted = false;
+                return;
+            }
             // Play/Pause button
-            if rel_x >= 70 && rel_x <= 110 {
+            if rel_x >= 14 && rel_x <= 46 {
                 self.toggle_play();
                 return;
             }
+            // Stop button
+            if rel_x >= 48 && rel_x <= 74 {
+                self.stop();
+                return;
+            }
             // Prev button
-            if rel_x >= 20 && rel_x <= 50 {
+            if rel_x >= 76 && rel_x <= 102 {
                 self.prev_track();
                 return;
             }
             // Next button
-            if rel_x >= 115 && rel_x <= 145 {
+            if rel_x >= 104 && rel_x <= 130 {
                 self.next_track();
                 return;
             }
-            // Viz button
-            if rel_x >= client.w - 75 && rel_x <= client.w - 40 {
+            // Fullscreen button
+            if rel_x >= 132 && rel_x <= 158 {
+                return;
+            }
+            // EQ / Effects button
+            if rel_x >= 160 && rel_x <= 188 {
                 self.toggle_viz();
                 return;
             }
-            // Volume toggle
-            if rel_x >= client.w - 130 && rel_x <= client.w - 85 {
-                self.is_muted = !self.is_muted;
+            // Playlist button
+            if rel_x >= 190 && rel_x <= 218 {
+                self.toggle_playlist();
+                return;
+            }
+            // Loop button (wide mode)
+            if rel_x >= 220 && rel_x <= 250 {
+                self.is_looping = !self.is_looping;
+                return;
+            }
+            // Shuffle button (wide mode)
+            if rel_x >= 252 && rel_x <= 282 {
+                self.is_shuffling = !self.is_shuffling;
                 return;
             }
         }
 
-        // Top right quick actions
-        if rel_y >= 6 && rel_y <= 30 {
+        // 5. Top right quick actions (PL, VIZ)
+        if rel_y >= 6 && rel_y <= 24 {
             if rel_x >= client.w - 40 && rel_x <= client.w - 8 {
                 self.toggle_playlist();
                 return;
@@ -6199,48 +6344,75 @@ fn draw_player_client_body<S: Surface + ?Sized>(
     ];
     let (track_title, track_res, track_codec, _track_dur) = tracks[player.active_track.min(3)];
 
-    // 2. Top Header Bar (Acrylic floating glass)
-    let hdr_h = 28;
-    s.fill_rect(Rect::new(client.x, client.y, client.w, hdr_h), Color::rgba(15, 23, 42, 220));
+    // 2. Top Header Bar (Acrylic floating glass, h = 24)
+    let hdr_h = 24;
+    s.fill_rect(Rect::new(client.x, client.y, client.w, hdr_h), Color::rgba(15, 23, 42, 240));
     ui::draw::draw_line(s, client.x, client.y + hdr_h - 1, client.x + client.w, client.y + hdr_h - 1, Color::rgb(30, 41, 59));
 
-    // Nova Player badge
-    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, client.y + 5, 20, 18), 3, Color::rgb(14, 165, 233));
-    ui::draw::draw_line(s, client.x + 15, client.y + 9, client.x + 15, client.y + 19, Color::WHITE);
-    ui::draw::draw_line(s, client.x + 16, client.y + 10, client.x + 21, client.y + 14, Color::WHITE);
-    ui::draw::draw_line(s, client.x + 21, client.y + 14, client.x + 16, client.y + 18, Color::WHITE);
+    // Spectra badge [S]
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, client.y + 3, 18, 18), 3, Color::rgb(14, 165, 233));
+    ui::font::draw_text_font(s, client.x + 13, client.y + 4, "S", Color::WHITE, &font_reg);
 
     // Track Title and Format Badges
-    ui::font::draw_text_font(s, client.x + 34, client.y + 7, track_title, Color::WHITE, &font_reg);
+    ui::font::draw_text_font(s, client.x + 32, client.y + 5, track_title, Color::WHITE, &font_reg);
 
-    let res_x = client.x + 36 + font_reg.measure_str(track_title).w;
-    if res_x + 90 < client.w - 110 {
-        ui::draw::draw_rounded_rect(s, Rect::new(res_x, client.y + 6, 52, 16), 3, Color::rgb(30, 41, 59));
-        ui::draw::draw_rect_outline(s, Rect::new(res_x, client.y + 6, 52, 16), 1, Color::rgb(56, 189, 248));
-        ui::font::draw_text_font(s, res_x + 4, client.y + 8, track_res, Color::rgb(56, 189, 248), &font_sm);
+    let res_x = client.x + 34 + font_reg.measure_str(track_title).w;
+    if res_x + 90 < client.w - 90 {
+        ui::draw::draw_rounded_rect(s, Rect::new(res_x, client.y + 4, 52, 16), 3, Color::rgb(30, 41, 59));
+        ui::draw::draw_rect_outline(s, Rect::new(res_x, client.y + 4, 52, 16), 1, Color::rgb(56, 189, 248));
+        ui::font::draw_text_font(s, res_x + 4, client.y + 6, track_res, Color::rgb(56, 189, 248), &font_sm);
 
         let cod_x = res_x + 58;
-        if cod_x + 70 < client.w - 110 {
-            ui::draw::draw_rounded_rect(s, Rect::new(cod_x, client.y + 6, 64, 16), 3, Color::rgb(30, 41, 59));
-            ui::draw::draw_rect_outline(s, Rect::new(cod_x, client.y + 6, 64, 16), 1, Color::rgb(74, 222, 128));
-            ui::font::draw_text_font(s, cod_x + 4, client.y + 8, track_codec, Color::rgb(74, 222, 128), &font_sm);
+        if cod_x + 70 < client.w - 90 {
+            ui::draw::draw_rounded_rect(s, Rect::new(cod_x, client.y + 4, 64, 16), 3, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(cod_x, client.y + 4, 64, 16), 1, Color::rgb(74, 222, 128));
+            ui::font::draw_text_font(s, cod_x + 4, client.y + 6, track_codec, Color::rgb(74, 222, 128), &font_sm);
         }
     }
 
     // Top Right Action Buttons: Spectrum & Playlist
     let btn_viz_x = client.x + client.w - 75;
     let viz_bg = if player.show_visualizer { Color::rgb(14, 165, 233) } else { Color::rgb(30, 41, 59) };
-    ui::draw::draw_rounded_rect(s, Rect::new(btn_viz_x, client.y + 4, 32, 20), 4, viz_bg);
-    ui::font::draw_text_font(s, btn_viz_x + 6, client.y + 7, "VIZ", Color::WHITE, &font_sm);
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_viz_x, client.y + 3, 32, 18), 3, viz_bg);
+    ui::font::draw_text_font(s, btn_viz_x + 6, client.y + 5, "VIZ", Color::WHITE, &font_sm);
 
     let btn_pl_x = client.x + client.w - 38;
     let pl_bg = if player.show_playlist { Color::rgb(245, 158, 11) } else { Color::rgb(30, 41, 59) };
-    ui::draw::draw_rounded_rect(s, Rect::new(btn_pl_x, client.y + 4, 30, 20), 4, pl_bg);
-    ui::font::draw_text_font(s, btn_pl_x + 8, client.y + 7, "PL", Color::WHITE, &font_sm);
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_pl_x, client.y + 3, 30, 18), 3, pl_bg);
+    ui::font::draw_text_font(s, btn_pl_x + 8, client.y + 5, "PL", Color::WHITE, &font_sm);
 
-    // 3. Main Cinema Viewport (Letterbox with Cyberpunk Grid / Aurora)
-    let vp_y = client.y + hdr_h;
-    let vp_h = (client.h - hdr_h - 60).max(40);
+    // 3. VLC Top Menu Bar Strip (y: client.y + 24 to client.y + 44)
+    let menu_bar_y = client.y + 24;
+    let menu_bar_h = 20;
+    s.fill_rect(Rect::new(client.x, menu_bar_y, client.w, menu_bar_h), Color::rgb(18, 24, 38));
+    ui::draw::draw_line(s, client.x, menu_bar_y + menu_bar_h - 1, client.x + client.w, menu_bar_y + menu_bar_h - 1, Color::rgb(48, 54, 61));
+
+    let menu_defs = [
+        ("Media", 6, 48),
+        ("Playback", 50, 106),
+        ("Audio", 108, 146),
+        ("Video", 148, 186),
+        ("Subtitle", 188, 238),
+        ("Tools", 240, 278),
+        ("View", 280, 314),
+        ("Help", 316, 348),
+    ];
+
+    for (m_idx, (m_label, mx1, mx2)) in menu_defs.iter().enumerate() {
+        let is_active = player.active_menu == Some(m_idx);
+        let m_rect = Rect::new(client.x + mx1, menu_bar_y + 1, mx2 - mx1, menu_bar_h - 2);
+        if is_active {
+            ui::draw::draw_rounded_rect(s, m_rect, 3, Color::rgb(14, 165, 233));
+            ui::font::draw_text_font(s, client.x + mx1 + 4, menu_bar_y + 4, m_label, Color::WHITE, &font_sm);
+        } else {
+            ui::font::draw_text_font(s, client.x + mx1 + 4, menu_bar_y + 4, m_label, Color::rgb(203, 213, 225), &font_sm);
+        }
+    }
+
+    // 4. Main Cinema Viewport (Letterbox with Cyberpunk Grid / Aurora)
+    let vp_y = client.y + 44;
+    let bot_h = 58;
+    let vp_h = (client.h - 44 - bot_h - 6).max(40);
     let _vp_rect = Rect::new(client.x, vp_y, client.w, vp_h);
 
     // Perspective horizon grid
@@ -6276,17 +6448,15 @@ fn draw_player_client_body<S: Surface + ?Sized>(
 
         for b in 0..viz_bar_count {
             let bx = viz_start_x + (b as i32) * 10;
-            // Procedural frequency height simulation
             let h_val = (((b * 7 + 13) % 45) + 12) as i32;
             let bar_h = if player.is_playing { h_val } else { 4 };
             let bar_col = match b % 4 {
-                0 => Color::rgb(56, 189, 248),  // Cyan
-                1 => Color::rgb(74, 222, 128),  // Emerald
-                2 => Color::rgb(245, 158, 11),  // Amber
-                _ => Color::rgb(244, 63, 94),   // Rose
+                0 => Color::rgb(56, 189, 248),
+                1 => Color::rgb(74, 222, 128),
+                2 => Color::rgb(245, 158, 11),
+                _ => Color::rgb(244, 63, 94),
             };
             s.fill_rect(Rect::new(bx, base_y - bar_h, 7, bar_h), bar_col);
-            // Peak cap dot
             s.fill_rect(Rect::new(bx, base_y - bar_h - 3, 7, 2), Color::WHITE);
         }
     }
@@ -6301,12 +6471,12 @@ fn draw_player_client_body<S: Surface + ?Sized>(
         ui::font::draw_text_font(s, pw_rect.x + 22, pw_rect.y + 12, "PAUSED", Color::WHITE, &font_reg);
     }
 
-    // 4. Sliding Playlist Panel (if open)
+    // 5. Sliding Playlist Panel (if open)
     if player.show_playlist {
         let pl_w = 210.min(client.w / 2);
         let pl_x = client.x + client.w - pl_w - 8;
-        let pl_y = client.y + hdr_h + 8;
-        let pl_h = vp_h - 16;
+        let pl_y = client.y + 48;
+        let pl_h = vp_h - 8;
         let pl_rect = Rect::new(pl_x, pl_y, pl_w, pl_h);
 
         ui::draw::draw_rounded_rect(s, pl_rect, 8, Color::rgba(15, 23, 42, 230));
@@ -6334,61 +6504,207 @@ fn draw_player_client_body<S: Surface + ?Sized>(
         }
     }
 
-    // 5. Floating Acrylic Bottom Island (Transport Controls)
-    let bot_h = 52;
+    // 6. Floating Acrylic Bottom Island (VLC-Style Transport Controls)
     let bot_y = client.y + client.h - bot_h - 4;
     let bot_rect = Rect::new(client.x + 8, bot_y, client.w - 16, bot_h);
-    ui::draw::draw_rounded_rect(s, bot_rect, 10, Color::rgba(18, 24, 38, 235));
-    ui::draw::draw_rect_outline(s, bot_rect, 1, Color::rgba(255, 255, 255, 30));
+    ui::draw::draw_rounded_rect(s, bot_rect, 8, Color::rgba(18, 24, 38, 240));
+    ui::draw::draw_rect_outline(s, bot_rect, 1, Color::rgba(255, 255, 255, 25));
 
-    // Timeline Scrub Bar
-    let scrub_x = bot_rect.x + 16;
-    let scrub_w = bot_rect.w - 32;
-    let scrub_y = bot_y + 8;
-    ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, scrub_w, 4), 2, Color::rgb(30, 41, 59));
+    // Top Row: Timeline [00:45] =======[O]================ [03:00]
+    let cur_pos = player.position_secs;
+    let time_cur_str = format!("{:02}:{:02}", cur_pos / 60, cur_pos % 60);
+    ui::font::draw_text_font(s, bot_rect.x + 8, bot_y + 6, &time_cur_str, Color::rgb(148, 163, 184), &font_sm);
+
+    let scrub_x = bot_rect.x + 48;
+    let scrub_w = (bot_rect.w - 96).max(20);
+    let scrub_y = bot_y + 9;
+    ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, scrub_w, 4), 2, Color::rgb(48, 54, 61));
 
     // Buffer bar (65%)
     let buf_w = (scrub_w * 65) / 100;
     ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, buf_w, 4), 2, Color::rgb(71, 85, 105));
 
-    // Played bar (25% progress)
-    let prog_w = (scrub_w * 25) / 100;
+    // Played bar (progress based on position_secs / 180)
+    let play_pct = (cur_pos as i32 * 100) / 180;
+    let prog_w = (scrub_w * play_pct.clamp(0, 100)) / 100;
     ui::draw::draw_rounded_rect(s, Rect::new(scrub_x, scrub_y, prog_w, 4), 2, Color::rgb(56, 189, 248));
     // Playhead dot
     s.fill_rect(Rect::new(scrub_x + prog_w - 3, scrub_y - 2, 7, 8), Color::WHITE);
 
-    // Transport buttons row
-    let btn_row_y = bot_y + 20;
+    // Duration timestamp
+    ui::font::draw_text_font(s, bot_rect.right() - 40, bot_y + 6, "03:00", Color::rgb(148, 163, 184), &font_sm);
 
-    // Prev [|<]
-    let prev_x = bot_rect.x + 20;
-    ui::font::draw_text_font(s, prev_x, btn_row_y + 4, "|<", Color::rgb(226, 232, 240), &font_reg);
+    // Bottom Row: Transport buttons (y: bot_y + 24)
+    let btn_y = bot_y + 24;
 
-    // Play/Pause circular button [ > ] or [ || ]
-    let play_x = bot_rect.x + 72;
-    ui::draw::draw_rounded_rect(s, Rect::new(play_x, btn_row_y, 36, 24), 6, Color::rgb(14, 165, 233));
-    let play_label = if player.is_playing { "||" } else { ">" };
-    let pl_off = if player.is_playing { 13 } else { 15 };
-    ui::font::draw_text_font(s, play_x + pl_off, btn_row_y + 4, play_label, Color::WHITE, &font_reg);
+    // Play/Pause button [ > ] / [ || ] (x: 14..46)
+    let play_bg = if player.is_playing { Color::rgb(14, 165, 233) } else { Color::rgb(56, 189, 248) };
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 14, btn_y, 32, 24), 4, play_bg);
+    let play_icon = if player.is_playing { "||" } else { ">" };
+    let pl_off = if player.is_playing { 11 } else { 13 };
+    ui::font::draw_text_font(s, client.x + 14 + pl_off, btn_y + 4, play_icon, Color::rgb(15, 23, 42), &font_reg);
 
-    // Next [>|]
-    let next_x = bot_rect.x + 120;
-    ui::font::draw_text_font(s, next_x, btn_row_y + 4, ">|", Color::rgb(226, 232, 240), &font_reg);
+    // Stop button [ ■ ] (x: 48..74)
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 48, btn_y, 26, 24), 4, Color::rgba(255, 255, 255, 14));
+    s.fill_rect(Rect::new(client.x + 56, btn_y + 7, 10, 10), Color::rgb(239, 68, 68));
 
-    // Timestamp
-    let time_x = next_x + 36;
-    let time_str = "00:45 / 03:00";
-    ui::font::draw_text_font(s, time_x, btn_row_y + 6, time_str, Color::rgb(148, 163, 184), &font_sm);
+    // Prev [|<] (x: 76..102)
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 76, btn_y, 26, 24), 4, Color::rgba(255, 255, 255, 14));
+    ui::font::draw_text_font(s, client.x + 82, btn_y + 4, "|<", Color::WHITE, &font_sm);
 
-    // Right transport controls: Volume, Speed, Aspect
-    let vol_x = bot_rect.x + bot_rect.w - 120;
-    let vol_txt = if player.is_muted { "MUTE" } else { "VOL 100%" };
-    let vol_col = if player.is_muted { Color::rgb(245, 158, 11) } else { Color::rgb(74, 222, 128) };
-    ui::font::draw_text_font(s, vol_x, btn_row_y + 6, vol_txt, vol_col, &font_sm);
+    // Next [>|] (x: 104..130)
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 104, btn_y, 26, 24), 4, Color::rgba(255, 255, 255, 14));
+    ui::font::draw_text_font(s, client.x + 110, btn_y + 4, ">|", Color::WHITE, &font_sm);
 
-    let spd_x = bot_rect.x + bot_rect.w - 42;
-    ui::draw::draw_rounded_rect(s, Rect::new(spd_x, btn_row_y + 2, 34, 18), 3, Color::rgb(30, 41, 59));
-    ui::font::draw_text_font(s, spd_x + 4, btn_row_y + 4, "1.0x", Color::rgb(56, 189, 248), &font_sm);
+    // Fullscreen [[ ]] (x: 132..158)
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 132, btn_y, 26, 24), 4, Color::rgba(255, 255, 255, 14));
+    ui::font::draw_text_font(s, client.x + 137, btn_y + 4, "[ ]", Color::WHITE, &font_sm);
+
+    // EQ button (x: 160..188)
+    let eq_bg = if player.show_visualizer { Color::rgb(14, 165, 233) } else { Color::rgba(255, 255, 255, 14) };
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 160, btn_y, 28, 24), 4, eq_bg);
+    ui::font::draw_text_font(s, client.x + 166, btn_y + 4, "EQ", Color::WHITE, &font_sm);
+
+    // Playlist button (x: 190..218)
+    let pl_btn_bg = if player.show_playlist { Color::rgb(245, 158, 11) } else { Color::rgba(255, 255, 255, 14) };
+    ui::draw::draw_rounded_rect(s, Rect::new(client.x + 190, btn_y, 28, 24), 4, pl_btn_bg);
+    ui::font::draw_text_font(s, client.x + 197, btn_y + 4, "PL", Color::WHITE, &font_sm);
+
+    // If wider window (client.w >= 450), show Loop & Shuffle
+    if client.w >= 450 {
+        // Loop button [REP] (x: 220..250)
+        let loop_bg = if player.is_looping { Color::rgb(56, 189, 248) } else { Color::rgba(255, 255, 255, 14) };
+        let loop_fg = if player.is_looping { Color::rgb(15, 23, 42) } else { Color::WHITE };
+        ui::draw::draw_rounded_rect(s, Rect::new(client.x + 220, btn_y, 30, 24), 4, loop_bg);
+        ui::font::draw_text_font(s, client.x + 224, btn_y + 4, "REP", loop_fg, &font_sm);
+
+        // Shuffle button [RND] (x: 252..282)
+        let shuf_bg = if player.is_shuffling { Color::rgb(56, 189, 248) } else { Color::rgba(255, 255, 255, 14) };
+        let shuf_fg = if player.is_shuffling { Color::rgb(15, 23, 42) } else { Color::WHITE };
+        ui::draw::draw_rounded_rect(s, Rect::new(client.x + 252, btn_y, 30, 24), 4, shuf_bg);
+        ui::font::draw_text_font(s, client.x + 256, btn_y + 4, "RND", shuf_fg, &font_sm);
+    }
+
+    // Right Controls: Volume Mute & Slider Wedge
+    let mute_x = client.x + client.w - 110;
+    let mute_col = if player.is_muted { Color::rgb(245, 158, 11) } else { Color::rgb(74, 222, 128) };
+    ui::draw::draw_rounded_rect(s, Rect::new(mute_x, btn_y + 2, 28, 20), 3, Color::rgba(255, 255, 255, 10));
+    ui::font::draw_text_font(s, mute_x + 3, btn_y + 4, if player.is_muted { "MUT" } else { "VOL" }, mute_col, &font_sm);
+
+    let v_slider_x = client.x + client.w - 75;
+    let v_slider_w = 60;
+    ui::draw::draw_rounded_rect(s, Rect::new(v_slider_x, btn_y + 9, v_slider_w, 6), 2, Color::rgb(48, 54, 61));
+    let v_fill_w = if player.is_muted { 0 } else { ((player.volume_pct * v_slider_w as u32) / 125).min(v_slider_w as u32) as i32 };
+    if v_fill_w > 0 {
+        let v_color = if player.volume_pct > 100 { Color::rgb(245, 158, 11) } else { Color::rgb(74, 222, 128) };
+        ui::draw::draw_rounded_rect(s, Rect::new(v_slider_x, btn_y + 9, v_fill_w, 6), 2, v_color);
+    }
+    let vol_pct_str = format!("{}%", player.volume_pct);
+    ui::font::draw_text_font(s, client.x + client.w - 44, btn_y + 5, &vol_pct_str, Color::rgb(148, 163, 184), &font_sm);
+
+    // 7. Dropdown Menu Card (rendered on top if active_menu is open)
+    if let Some(m_idx) = player.active_menu {
+        let items: &[(&str, &str)] = match m_idx {
+            0 => &[ // Media
+                ("Open File...", "Ctrl+O"),
+                ("Open Network...", "Ctrl+N"),
+                ("Open Recent Media", ">"),
+                ("Save Playlist...", "Ctrl+Y"),
+                ("Quit Spectra", "Ctrl+Q"),
+            ],
+            1 => &[ // Playback
+                ("Play / Pause", "Space"),
+                ("Stop", "Ctrl+S"),
+                ("Previous Track", "Ctrl+P"),
+                ("Next Track", "Ctrl+N"),
+                ("Repeat / Loop", "Ctrl+R"),
+                ("Random / Shuffle", "Ctrl+Z"),
+            ],
+            2 => &[ // Audio
+                ("Mute Audio", "M"),
+                ("Volume Up (+5%)", "Ctrl+Up"),
+                ("Volume Down (-5%)", "Ctrl+Dn"),
+                ("Audio Visualizer (FFT)", "V"),
+            ],
+            3 => &[ // Video
+                ("Aspect Ratio (Toggle)", "A"),
+                ("Switch Video Track", "T"),
+                ("Take Snapshot", "Shift+S"),
+            ],
+            4 => &[ // Subtitle
+                ("Add Subtitle File...", "Ctrl+U"),
+                ("Toggle Subtitles", "S"),
+            ],
+            5 => &[ // Tools
+                ("Effects and Filters (EQ)", "Ctrl+E"),
+                ("Media Information", "Ctrl+I"),
+                ("Preferences", "Ctrl+P"),
+            ],
+            6 => &[ // View
+                ("Playlist Window", "Ctrl+L"),
+                ("Spectrum Visualizer", "V"),
+            ],
+            7 => &[ // Help
+                ("About Spectra...", "F1"),
+                ("Keyboard Shortcuts", "?"),
+            ],
+            _ => &[],
+        };
+
+        let card_w = 210;
+        let card_h = (items.len() as i32 * 22) + 12;
+        let card_x = (client.x + menu_defs[m_idx].1).min(client.right() - card_w - 4);
+        let card_y = menu_bar_y + menu_bar_h;
+
+        let card_rect = Rect::new(card_x, card_y, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, card_rect, 6, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, card_rect, 1, Color::rgb(56, 189, 248));
+
+        for (i, &(label, shortcut)) in items.iter().enumerate() {
+            let item_y = card_y + 6 + (i as i32 * 22);
+            let item_rect = Rect::new(card_x + 4, item_y, card_w - 8, 20);
+            if i == 0 {
+                ui::draw::draw_rounded_rect(s, item_rect, 3, Color::rgba(56, 189, 248, 30));
+            }
+            ui::font::draw_text_font(s, card_x + 8, item_y + 3, label, Color::WHITE, &font_sm);
+            let sc_sz = font_sm.measure_str(shortcut);
+            ui::font::draw_text_font(s, card_x + card_w - sc_sz.w - 10, item_y + 3, shortcut, Color::rgb(148, 163, 184), &font_sm);
+        }
+    }
+
+    // 8. About Modal Dialog (rendered centered if show_about is true)
+    if player.show_about {
+        let ab_w = 340.min(client.w - 20);
+        let ab_h = 190.min(client.h - 20);
+        let ab_x = client.x + (client.w - ab_w) / 2;
+        let ab_y = client.y + (client.h - ab_h) / 2;
+        let ab_rect = Rect::new(ab_x, ab_y, ab_w, ab_h);
+
+        // Dim background overlay
+        s.fill_rect(client, Color::rgba(0, 0, 0, 160));
+
+        // Frosted modal card
+        ui::draw::draw_rounded_rect(s, ab_rect, 10, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, ab_rect, 2, Color::rgb(56, 189, 248));
+
+        // Title header
+        ui::draw::draw_rounded_rect(s, Rect::new(ab_x + 16, ab_y + 14, 26, 26), 5, Color::rgb(14, 165, 233));
+        ui::font::draw_text_font(s, ab_x + 23, ab_y + 17, "S", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 50, ab_y + 14, "SPECTRA MEDIA STUDIO", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 50, ab_y + 28, "v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248), &font_sm);
+
+        ui::draw::draw_line(s, ab_x + 14, ab_y + 48, ab_x + ab_w - 14, ab_y + 48, Color::rgb(48, 54, 61));
+
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 56, "High-Performance 4K/8K Audio & Video Player", Color::rgb(226, 232, 240), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 74, "Built specifically for NovaOS Desktop & Web.", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 96, "Supported Decoders: AV1, HEVC, VP9, FLAC, MKV, MP4", Color::rgb(74, 222, 128), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 114, "Audio Pipeline: 32-Band FFT, 10-Band EQ, 125% Boost", Color::rgb(245, 158, 11), &font_sm);
+
+        // Close button
+        let btn_close_rect = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
+        ui::draw::draw_rounded_rect(s, btn_close_rect, 4, Color::rgb(14, 165, 233));
+        ui::font::draw_text_font(s, btn_close_rect.x + 18, btn_close_rect.y + 5, "Dismiss", Color::WHITE, &font_sm);
+    }
 }
 
 /// Renders the in-window terminal emulator client view inside Window 0 / Console Shell.
@@ -8347,31 +8663,44 @@ mod tests {
         let w = &wm.windows[top_win_idx];
         let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
 
-        // Click play/pause button (x: 80, y: client.h - 30)
-        wm.on_left_press(client.x + 85, client.y + client.h - 30);
+        // Click play/pause button (x: 30, y: client.h - 30)
+        wm.on_left_press(client.x + 30, client.y + client.h - 30);
         assert!(!wm.player_app.is_playing, "Clicking play button should pause playback");
-        wm.on_left_press(client.x + 85, client.y + client.h - 30);
+        wm.on_left_press(client.x + 30, client.y + client.h - 30);
         assert!(wm.player_app.is_playing, "Clicking play button again should resume playback");
 
-        // Click Next button (x: 130, y: client.h - 30)
-        wm.on_left_press(client.x + 130, client.y + client.h - 30);
+        // Click Next button (x: 115, y: client.h - 30)
+        wm.on_left_press(client.x + 115, client.y + client.h - 30);
         assert_eq!(wm.player_app.active_track, 1, "Clicking next button should switch track");
 
-        // Click Prev button (x: 35, y: client.h - 30)
-        wm.on_left_press(client.x + 35, client.y + client.h - 30);
+        // Click Prev button (x: 90, y: client.h - 30)
+        wm.on_left_press(client.x + 90, client.y + client.h - 30);
         assert_eq!(wm.player_app.active_track, 0, "Clicking prev button should return to track 0");
 
-        // Click Viz button on bottom island (x: client.w - 60)
-        wm.on_left_press(client.x + client.w - 60, client.y + client.h - 30);
-        assert!(wm.player_app.show_visualizer, "Clicking viz button should toggle visualizer");
+        // Click EQ button on bottom toolbar (x: 175)
+        wm.on_left_press(client.x + 175, client.y + client.h - 30);
+        assert!(wm.player_app.show_visualizer, "Clicking EQ button should toggle visualizer");
 
-        // Click Volume mute toggle (x: client.w - 100)
-        wm.on_left_press(client.x + client.w - 100, client.y + client.h - 30);
+        // Click Volume mute toggle (x: client.w - 95)
+        wm.on_left_press(client.x + client.w - 95, client.y + client.h - 30);
         assert!(wm.player_app.is_muted, "Clicking volume label should toggle mute");
 
         // Click Top right PL button (x: client.w - 20, y: 15)
         wm.on_left_press(client.x + client.w - 20, client.y + 15);
         assert!(wm.player_app.show_playlist, "Clicking top PL button should toggle playlist");
+
+        // Test VLC Menubar click: Help Menu (idx 7, x: 330, y: 35)
+        wm.on_left_press(client.x + 330, client.y + 35);
+        assert_eq!(wm.player_app.active_menu, Some(7), "Clicking Help menubar item should open Help dropdown");
+
+        // Click "About Spectra..." (item 0 in Help dropdown: y in 48..68)
+        wm.on_left_press(client.x + 200, client.y + 55);
+        assert!(wm.player_app.show_about, "Clicking About Spectra should show about modal dialog");
+        assert_eq!(wm.player_app.active_menu, None, "Dropdown menu should close after action");
+
+        // Click anywhere to dismiss About modal dialog
+        wm.on_left_press(client.x + 100, client.y + 100);
+        assert!(!wm.player_app.show_about, "Clicking should dismiss About modal dialog");
 
         // 5. Shell Terminal commands: player, player --info, player --version
         wm.raise(0);
