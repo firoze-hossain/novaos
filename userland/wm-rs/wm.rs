@@ -239,7 +239,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 10] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 11] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 1, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -247,6 +247,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 10] = [
     DesktopIconSpec { label: "Calculator",  sublabel: "Math Studio",    app_id: 7, icon_type: 7 },
     DesktopIconSpec { label: "Aero Web",    sublabel: "Browser",        app_id: 8, icon_type: 8 },
     DesktopIconSpec { label: "Spectra",     sublabel: "Media Studio",   app_id: 9, icon_type: 9 },
+    DesktopIconSpec { label: "Vellum",      sublabel: "PDF Studio",     app_id: 10, icon_type: 10 },
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
@@ -2362,6 +2363,252 @@ impl WmPlayerApp {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmVellumApp {
+    pub page: usize,
+    pub total_pages: usize,
+    pub mode: u8,             // 0: Read, 1: Annotate, 2: Edit, 3: Form
+    pub active_tool: u8,       // 0: Select, 1: Text, 2: Highlight, 3: Underline, 4: Strike, 5: Pen, 6: Rect, 7: TextBox, 8: Note, 9: Redact
+    pub active_color: u8,      // 0: Yellow, 1: Green, 2: Cyan, 3: Coral, 4: Purple
+    pub zoom_pct: u32,
+    pub sidebar_open: bool,
+    pub sidebar_tab: u8,       // 0: Pages, 1: Outline, 2: Annots
+    pub search_open: bool,
+    pub match_idx: usize,
+    pub total_matches: usize,
+    pub night_mode: bool,
+    pub show_about: bool,
+    pub show_inspector: bool,
+    pub selected_span: Option<usize>,
+}
+
+impl WmVellumApp {
+    pub fn new() -> Self {
+        WmVellumApp {
+            page: 0,
+            total_pages: 3,
+            mode: 0,
+            active_tool: 0,
+            active_color: 0,
+            zoom_pct: 100,
+            sidebar_open: true,
+            sidebar_tab: 0,
+            search_open: false,
+            match_idx: 1,
+            total_matches: 3,
+            night_mode: false,
+            show_about: false,
+            show_inspector: false,
+            selected_span: None,
+        }
+    }
+
+    pub fn set_mode(&mut self, m: u8) {
+        self.mode = m;
+        if m == 1 {
+            self.active_tool = 2; // Default to Highlight tool in Annotate mode
+        }
+    }
+
+    pub fn set_tool(&mut self, t: u8) {
+        self.active_tool = t;
+    }
+
+    pub fn set_color(&mut self, c: u8) {
+        self.active_color = c % 5;
+    }
+
+    pub fn next_page(&mut self) {
+        if self.page + 1 < self.total_pages {
+            self.page += 1;
+            self.selected_span = None;
+        }
+    }
+
+    pub fn prev_page(&mut self) {
+        if self.page > 0 {
+            self.page -= 1;
+            self.selected_span = None;
+        }
+    }
+
+    pub fn zoom_in(&mut self) {
+        self.zoom_pct = (self.zoom_pct + 15).min(300);
+    }
+
+    pub fn zoom_out(&mut self) {
+        self.zoom_pct = self.zoom_pct.saturating_sub(15).max(30);
+    }
+
+    pub fn toggle_search(&mut self) {
+        self.search_open = !self.search_open;
+    }
+
+    pub fn toggle_night(&mut self) {
+        self.night_mode = !self.night_mode;
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.sidebar_open = !self.sidebar_open;
+    }
+
+    pub fn toggle_inspector(&mut self) {
+        self.show_inspector = !self.show_inspector;
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let rel_x = px - client.x;
+        let rel_y = py - client.y;
+
+        // 1. If About modal is open, click anywhere dismisses it
+        if self.show_about {
+            self.show_about = false;
+            return;
+        }
+
+        // 2. Top Ribbon Clicks (rel_y in 0..32)
+        if rel_y >= 0 && rel_y <= 32 {
+            // Mode Tabs: Read (32..68), Annotate (70..118), Edit (120..154), Form (156..190)
+            if rel_x >= 32 && rel_x <= 68 {
+                self.set_mode(0);
+                return;
+            }
+            if rel_x >= 70 && rel_x <= 118 {
+                self.set_mode(1);
+                return;
+            }
+            if rel_x >= 120 && rel_x <= 154 {
+                self.set_mode(2);
+                return;
+            }
+            if rel_x >= 156 && rel_x <= 190 {
+                self.set_mode(3);
+                return;
+            }
+
+            // Right view controls:
+            // ? About: client.w - 28 .. client.w - 4
+            if rel_x >= client.w - 28 && rel_x <= client.w - 4 {
+                self.show_about = true;
+                return;
+            }
+            // Night: client.w - 68 .. client.w - 30
+            if rel_x >= client.w - 68 && rel_x <= client.w - 30 {
+                self.toggle_night();
+                return;
+            }
+            // Find (Search): client.w - 106 .. client.w - 70
+            if rel_x >= client.w - 106 && rel_x <= client.w - 70 {
+                self.toggle_search();
+                return;
+            }
+            // Sidebar: client.w - 152 .. client.w - 108
+            if rel_x >= client.w - 152 && rel_x <= client.w - 108 {
+                self.toggle_sidebar();
+                return;
+            }
+            // Inspect (if wide client): client.w - 200 .. client.w - 154
+            if client.w >= 500 && rel_x >= client.w - 200 && rel_x <= client.w - 154 {
+                self.toggle_inspector();
+                return;
+            }
+            return;
+        }
+
+        // 3. Search Bar Clicks (if search open, overlay at top right takes priority)
+        if self.search_open && rel_x >= client.w - 240 && rel_x <= client.w - 10 && rel_y >= 34 && rel_y <= 62 {
+            // Next hit: '>' button at client.w - 55..client.w - 35
+            if rel_x >= client.w - 55 && rel_x <= client.w - 35 {
+                self.match_idx = if self.match_idx >= self.total_matches { 1 } else { self.match_idx + 1 };
+                return;
+            }
+            // Prev hit: '<' button at client.w - 75..client.w - 58
+            if rel_x >= client.w - 75 && rel_x <= client.w - 58 {
+                self.match_idx = if self.match_idx <= 1 { self.total_matches } else { self.match_idx - 1 };
+                return;
+            }
+            // Close button: 'X' at client.w - 32..client.w - 10
+            if rel_x >= client.w - 32 && rel_x <= client.w - 10 {
+                self.search_open = false;
+                return;
+            }
+            return;
+        }
+
+        // 4. Markup Bar Clicks (rel_y in 32..58) when in Annotate mode
+        if self.mode == 1 && rel_y >= 32 && rel_y <= 58 {
+            if rel_x >= 12 && rel_x <= 48 { self.set_tool(0); return; }
+            if rel_x >= 52 && rel_x <= 82 { self.set_tool(1); return; }
+            if rel_x >= 86 && rel_x <= 145 { self.set_tool(2); return; }
+            if rel_x >= 149 && rel_x <= 205 { self.set_tool(3); return; }
+            if rel_x >= 209 && rel_x <= 252 { self.set_tool(4); return; }
+            if rel_x >= 256 && rel_x <= 286 { self.set_tool(5); return; }
+            if rel_x >= 290 && rel_x <= 322 { self.set_tool(6); return; }
+            if rel_x >= 326 && rel_x <= 372 { self.set_tool(7); return; }
+            if rel_x >= 376 && rel_x <= 410 { self.set_tool(8); return; }
+            if rel_x >= 414 && rel_x <= 458 { self.set_tool(9); return; }
+
+            // Color swatches (right aligned in markup bar: 5 swatches)
+            let swatch_start = (client.w - 120).max(470);
+            for i in 0..5 {
+                let sx = swatch_start + (i as i32) * 20;
+                if rel_x >= sx && rel_x <= sx + 16 {
+                    self.set_color(i as u8);
+                    return;
+                }
+            }
+            return;
+        }
+
+        // 5. Bottom Status Bar Clicks (rel_y >= client.h - 26)
+        if rel_y >= client.h - 26 {
+            // Prev Page button '<': rel_x in 8..24
+            if rel_x >= 8 && rel_x <= 24 {
+                self.prev_page();
+                return;
+            }
+            // Next Page button '>': rel_x in 92..108
+            if rel_x >= 92 && rel_x <= 108 {
+                self.next_page();
+                return;
+            }
+            // Zoom Out '-': rel_x in client.w - 90..client.w - 72
+            if rel_x >= client.w - 90 && rel_x <= client.w - 72 {
+                self.zoom_out();
+                return;
+            }
+            // Zoom In '+': rel_x in client.w - 40..client.w - 22
+            if rel_x >= client.w - 40 && rel_x <= client.w - 22 {
+                self.zoom_in();
+                return;
+            }
+            return;
+        }
+
+        // 6. Left Sidebar Thumbnail Clicks (if sidebar open, rel_x in 0..120)
+        if self.sidebar_open && rel_x <= 120 {
+            // Tabs: Pages (8..45), Outline (48..85), Annots (88..118)
+            if rel_y >= 34 && rel_y <= 52 {
+                if rel_x <= 46 { self.sidebar_tab = 0; }
+                else if rel_x <= 86 { self.sidebar_tab = 1; }
+                else { self.sidebar_tab = 2; }
+                return;
+            }
+
+            // Thumbnail cards:
+            if rel_y >= 58 && rel_y <= 140 { self.page = 0; return; }
+            if rel_y >= 148 && rel_y <= 230 { self.page = 1; return; }
+            if rel_y >= 238 && rel_y <= 320 { self.page = 2; return; }
+            return;
+        }
+
+        // 7. Paper Canvas Click: in Edit mode, click selects text span
+        if self.mode == 2 {
+            self.selected_span = Some(if self.selected_span.is_some() { 0 } else { 1 });
+        }
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -2492,6 +2739,7 @@ impl WmTerminal {
                 self.push_line("  calc <exp> - Evaluate math expression (e.g. calc 125 * 4, calc sqrt(144))", Color::rgb(220, 230, 242));
                 self.push_line("  browser    - Launch Aero Web Browser (or 'aero <url>', '--shields')", Color::rgb(220, 230, 242));
                 self.push_line("  spectra    - Launch Spectra Media Studio (or 'spectra <file>', '--info')", Color::rgb(220, 230, 242));
+                self.push_line("  vellum     - Launch Vellum PDF Studio (or 'vellum <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -2831,6 +3079,32 @@ impl WmTerminal {
                     self.push_line("[OK] Stream format demuxed: 4K UHD @ 60 FPS (Audio: Stereo PCM 48kHz)", Color::rgb(240, 246, 252));
                 }
             }
+            "vellum" | "pdf" | "reader" => {
+                if rest.is_empty() || rest == "--help" || rest == "-h" {
+                    self.push_line("Vellum PDF Studio v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248));
+                    self.push_line("NovaOS Default PDF Reader, Editor & Authoring Suite", Color::rgb(88, 166, 255));
+                    self.push_line("Usage: vellum [file.pdf | --info | --extract-text | --version]", Color::rgb(220, 230, 242));
+                    self.push_line("Active Doc: docs/architecture_manual.pdf (3 pages, PDF 1.7)", Color::rgb(63, 185, 80));
+                } else if rest == "--info" || rest == "-i" {
+                    self.push_line("Vellum Document Telemetry & PDF Inspector:", Color::rgb(56, 189, 248));
+                    self.push_line("  * Document: NovaOS Architecture & Systems (3 pages)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Geometry: 612 x 792 pt (US Letter Standard)", Color::rgb(56, 189, 248));
+                    self.push_line("  * Compression: RFC 1950/1951 Deflate/Inflate stream codec", Color::rgb(74, 222, 128));
+                    self.push_line("  * Capabilities: In-place text edit, Annotations, Forms, Outlines", Color::rgb(88, 166, 255));
+                } else if rest == "--extract-text" || rest == "-e" {
+                    self.push_line("=== Extracted Text Streams (Vellum Core) ===", Color::rgb(56, 189, 248));
+                    self.push_line("NovaOS Technical Report: Architecture & Systems", Color::rgb(240, 246, 252));
+                    self.push_line("Vellum Studio -- Next-Generation Document Processing in Pure Rust", Color::rgb(220, 230, 242));
+                    self.push_line("1. Executive Overview: Sovereign Rust desktop environment.", Color::rgb(63, 185, 80));
+                } else if rest == "--version" || rest == "-v" {
+                    self.push_line("Vellum PDF Studio 1.0.0 (pc-novaos-elf, Pure Rust 1.99.1)", Color::rgb(88, 166, 255));
+                    self.push_line("Architecture: vellum-core + vellum-ui (Adobe + Preview + Evince synthesis)", Color::rgb(220, 230, 242));
+                } else {
+                    self.push_line("Opening document in Vellum Studio:", Color::rgb(88, 166, 255));
+                    self.push_line(rest, Color::rgb(63, 185, 80));
+                    self.push_line("[OK] PDF 1.7 Parsed - Display list generated (18 text spans)", Color::rgb(240, 246, 252));
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -2914,6 +3188,7 @@ pub struct Wm {
     pub calc_app: WmCalcApp,
     pub browser_app: WmBrowserApp,
     pub player_app: WmPlayerApp,
+    pub vellum_app: WmVellumApp,
 }
 
 impl Wm {
@@ -2972,6 +3247,7 @@ impl Wm {
             calc_app: WmCalcApp::new(),
             browser_app: WmBrowserApp::new(),
             player_app: WmPlayerApp::new(),
+            vellum_app: WmVellumApp::new(),
         }
     }
 
@@ -3040,6 +3316,7 @@ impl Wm {
             calc_app: WmCalcApp::new(),
             browser_app: WmBrowserApp::new(),
             player_app: WmPlayerApp::new(),
+            vellum_app: WmVellumApp::new(),
         }
     }
 
@@ -3436,7 +3713,7 @@ impl Wm {
     /// Returns the bounding rectangle for the interactive Start Menu popup.
     pub fn start_menu_rect(&self) -> Rect {
         let sm_w = if self.screen_w >= 800 { 380 } else { 280 };
-        let sm_h = if self.desktop_h >= 500 { 390 } else { (self.desktop_h - 20).max(120) };
+        let sm_h = if self.desktop_h >= 500 { 430 } else { (self.desktop_h - 20).max(120) };
         let sm_x = 12;
         let sm_y = (self.desktop_h - sm_h - 6).max(self.menubar_h);
         Rect::new(sm_x, sm_y, sm_w, sm_h)
@@ -3444,7 +3721,7 @@ impl Wm {
 
     /// Computes hit-tested Start Menu application card rectangle.
     pub fn start_menu_item_rect(&self, idx: usize) -> Option<Rect> {
-        if idx >= 8 {
+        if idx >= 10 {
             return None;
         }
         let sm = self.start_menu_rect();
@@ -3509,7 +3786,7 @@ impl Wm {
         if !self.start_menu_open {
             return None;
         }
-        for i in 0..8 {
+        for i in 0..10 {
             if let Some(r) = self.start_menu_item_rect(i) {
                 if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
                     return Some(i);
@@ -4063,11 +4340,13 @@ impl Wm {
                         0 => 1, // Terminal
                         1 => 2, // Files
                         2 => 8, // Aero Browser
-                        3 => 9, // Nova Player (Default Media Player)
-                        4 => 7, // Calculator
-                        5 => 6, // Calendar
-                        6 => 5, // Settings
-                        _ => 4, // Software Store
+                        3 => 9, // Spectra (Default Media Player)
+                        4 => 10, // Vellum (Default PDF Studio)
+                        5 => 7, // Calculator
+                        6 => 6, // Calendar
+                        7 => 5, // Settings
+                        8 => 4, // Software Store
+                        _ => 3, // Text Editor
                     };
                     self.launch_or_restore(target_app);
                     self.start_menu_open = false;
@@ -4232,6 +4511,12 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.player_app.handle_click(px, py, client);
                 }
+            } else if w.label == 10 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.vellum_app.handle_click(px, py, client);
+                }
             }
             return;
         }
@@ -4364,6 +4649,8 @@ impl Wm {
                     draw_browser_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.browser_app, &palette);
                 } else if w.label == 9 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_player_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.player_app, &palette);
+                } else if w.label == 10 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_vellum_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vellum_app, &palette);
                 }
             }
 
@@ -4425,6 +4712,7 @@ impl Wm {
                     7 => "Calculator - NovaOS Math Studio",
                     8 => "Aero Browser - Fast & Private Web",
                     9 => "Spectra - Ultra HD Media Studio",
+                    10 => "Vellum - Professional PDF Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -4647,19 +4935,21 @@ impl Wm {
         let sec_y = srch_y + 30;
         ui::font::draw_text_font(s, sm.x + 18, sec_y, "PINNED APPLICATIONS", Color::rgba(255, 255, 255, 120), &font_sm);
 
-        // 6. 8 App Cards (2 columns x 4 rows)
-        let apps: [(&str, &str, u8); 8] = [
+        // 6. 10 App Cards (2 columns x 5 rows)
+        let apps: [(&str, &str, u8); 10] = [
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Aero Browser", "Fast Web Engine", 8),
             ("Spectra", "Ultra HD Media", 9),
+            ("Vellum", "PDF Studio", 10),
             ("Calculator", "Math Studio", 7),
             ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
             ("App Store", "Nova Packages", 4),
+            ("Text Editor", "Document Pad", 3),
         ];
 
-        for i in 0..8 {
+        for i in 0..10 {
             if let Some(card_rect) = self.start_menu_item_rect(i) {
                 let is_hov = self.hovered_start_item == Some(i);
                 let (title, desc, icon_type) = apps[i];
@@ -5213,6 +5503,47 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             s.fill_rect(Rect::new(sh_x + 2, sh_y + 2, sh_w - 4, 3), Color::rgb(254, 215, 170));
             s.put_pixel(mid_x, mid_y, Color::rgb(74, 222, 128));
         }
+        9 => {
+            // 9: Spectra Media Studio (Obsidian cinema chassis, electric cyan play badge, amber status dot)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, b_w, b_h), Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(14, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(56, 189, 248));
+
+            let mid_x = b_x + b_w / 2;
+            let mid_y = b_y + b_h / 2;
+            ui::draw::draw_line(s, mid_x - 3, mid_y - 6, mid_x - 3, mid_y + 6, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, mid_x - 2, mid_y - 5, mid_x + 4, mid_y, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, mid_x - 2, mid_y + 5, mid_x + 4, mid_y, Color::rgb(56, 189, 248));
+            s.put_pixel(b_x + b_w - 6, b_y + 5, Color::rgb(245, 158, 11));
+        }
+        10 => {
+            // 10: Vellum PDF Studio (Archival crimson shield, parchment sheet, folded corner, cyan 'V')
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, b_w, b_h), Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(190, 24, 93));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(251, 113, 133));
+
+            let p_w = (b_w * 65) / 100;
+            let p_h = (b_h * 75) / 100;
+            let p_x = b_x + (b_w - p_w) / 2;
+            let p_y = b_y + (b_h - p_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(p_x, p_y, p_w, p_h), 2, Color::WHITE);
+            s.fill_rect(Rect::new(p_x + p_w - 5, p_y, 5, 5), Color::rgb(226, 232, 240));
+            ui::draw::draw_line(s, p_x + p_w - 5, p_y, p_x + p_w, p_y + 5, Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(p_x + 3, p_y + 6, p_w - 8, 2), Color::rgb(225, 29, 72));
+            s.fill_rect(Rect::new(p_x + 3, p_y + 10, p_w - 6, 2), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(p_x + 3, p_y + 14, p_w - 8, 2), Color::rgb(148, 163, 184));
+            ui::font::draw_text_font(s, p_x + 3, p_y + 7, "V", Color::rgb(14, 165, 233), &Font::small());
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -5326,6 +5657,13 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             ui::draw::draw_line(s, x + 6, y + 5, x + 6, y + 7, Color::rgb(56, 189, 248));
             s.put_pixel(x + 7, y + 6, Color::rgb(56, 189, 248));
             s.put_pixel(x + 9, y + 2, Color::rgb(245, 158, 11));
+        }
+        10 => {
+            // Vellum PDF Studio mini icon: Crimson paper with folded corner & 'V'
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(225, 29, 72));
+            s.fill_rect(Rect::new(x + 3, y + 3, 6, 6), Color::WHITE);
+            s.put_pixel(x + 5, y + 5, Color::rgb(14, 165, 233));
+            s.put_pixel(x + 6, y + 5, Color::rgb(14, 165, 233));
         }
         _ => {
             // System gear icon
@@ -6704,6 +7042,382 @@ fn draw_player_client_body<S: Surface + ?Sized>(
         let btn_close_rect = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
         ui::draw::draw_rounded_rect(s, btn_close_rect, 4, Color::rgb(14, 165, 233));
         ui::font::draw_text_font(s, btn_close_rect.x + 18, btn_close_rect.y + 5, "Dismiss", Color::WHITE, &font_sm);
+    }
+}
+
+/// Renders Vellum PDF Studio inside the client area of Window 10.
+fn draw_vellum_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    vellum: &WmVellumApp,
+    _palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+
+    // 1. Studio Workspace Canvas (#0F172A slate backdrop)
+    s.fill_rect(client, Color::rgb(15, 23, 42));
+
+    // 2. Top Ribbon Header (h = 32)
+    let ribbon_h = 32;
+    let ribbon_rect = Rect::new(client.x, client.y, client.w, ribbon_h);
+    s.fill_rect(ribbon_rect, Color::rgb(15, 23, 42));
+    ui::draw::draw_line(s, client.x, client.y + ribbon_h - 1, client.right(), client.y + ribbon_h - 1, Color::rgb(30, 41, 59));
+
+    // Logo Emblem [V]
+    let logo_x = client.x + 8;
+    let logo_y = client.y + 4;
+    ui::draw::draw_rounded_rect(s, Rect::new(logo_x, logo_y, 22, 22), 4, Color::rgb(14, 165, 233));
+    ui::font::draw_text_font(s, logo_x + 6, logo_y + 4, "V", Color::WHITE, &font_reg);
+
+    // Title: VELLUM
+    ui::font::draw_text_font(s, logo_x + 28, client.y + 7, "VELLUM", Color::rgb(241, 245, 249), &font_reg);
+
+    // Mode Tabs: Read (70..110), Annotate (114..174), Edit (178..218), Form (222..260)
+    let tabs = [
+        ("Read", 70, 40, 0),
+        ("Annotate", 114, 60, 1),
+        ("Edit", 178, 40, 2),
+        ("Form", 222, 38, 3),
+    ];
+    for &(label, rx, rw, m) in &tabs {
+        let is_sel = vellum.mode == m;
+        let tab_x = client.x + rx;
+        let tab_rect = Rect::new(tab_x, client.y + 5, rw, 22);
+        if is_sel {
+            ui::draw::draw_rounded_rect(s, tab_rect, 4, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, tab_rect, 1, Color::rgb(56, 189, 248));
+            s.fill_rect(Rect::new(tab_x + 4, tab_rect.bottom() - 2, rw - 8, 2), Color::rgb(56, 189, 248));
+            ui::font::draw_text_font(s, tab_x + 6, client.y + 7, label, Color::WHITE, &font_sm);
+        } else {
+            ui::font::draw_text_font(s, tab_x + 6, client.y + 7, label, Color::rgb(148, 163, 184), &font_sm);
+        }
+    }
+
+    // Centered Document Title Badge (if width allows)
+    if client.w >= 640 {
+        let title_str = "NovaOS Architecture & Systems.pdf";
+        let tb_w = (title_str.len() as i32 * 6) + 16;
+        let tb_x = client.x + (client.w - tb_w) / 2;
+        if tb_x > client.x + 370 && tb_x + tb_w < client.x + client.w - 280 {
+            ui::draw::draw_rounded_rect(s, Rect::new(tb_x, client.y + 5, tb_w, 20), 4, Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rect_outline(s, Rect::new(tb_x, client.y + 5, tb_w, 20), 1, Color::rgb(51, 65, 85));
+            ui::font::draw_text_font(s, tb_x + 8, client.y + 7, title_str, Color::rgb(203, 213, 225), &font_sm);
+        }
+    }
+
+    // Right View Controls: [Sidebar] [Find] [Night] [Inspect] [?]
+    let r_btn_y = client.y + 5;
+    let r_btn_h = 22;
+
+    // ? Button
+    let btn_about_x = client.x + client.w - 28;
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_about_x, r_btn_y, 22, r_btn_h), 4, Color::rgba(255, 255, 255, 12));
+    ui::font::draw_text_font(s, btn_about_x + 7, r_btn_y + 4, "?", Color::rgb(148, 163, 184), &font_sm);
+
+    // Inspect
+    let btn_insp_x = btn_about_x - 58;
+    let insp_col = if vellum.show_inspector { Color::rgb(56, 189, 248) } else { Color::rgba(255, 255, 255, 12) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_insp_x, r_btn_y, 52, r_btn_h), 4, insp_col);
+    ui::font::draw_text_font(s, btn_insp_x + 6, r_btn_y + 4, "Inspect", if vellum.show_inspector { Color::BLACK } else { Color::rgb(226, 232, 240) }, &font_sm);
+
+    // Night
+    let btn_night_x = btn_insp_x - 52;
+    let night_col = if vellum.night_mode { Color::rgb(14, 165, 233) } else { Color::rgba(255, 255, 255, 12) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_night_x, r_btn_y, 46, r_btn_h), 4, night_col);
+    ui::font::draw_text_font(s, btn_night_x + 6, r_btn_y + 4, "Night", Color::WHITE, &font_sm);
+
+    // Find
+    let btn_find_x = btn_night_x - 48;
+    let find_col = if vellum.search_open { Color::rgb(56, 189, 248) } else { Color::rgba(255, 255, 255, 12) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_find_x, r_btn_y, 42, r_btn_h), 4, find_col);
+    ui::font::draw_text_font(s, btn_find_x + 6, r_btn_y + 4, "Find", if vellum.search_open { Color::BLACK } else { Color::rgb(226, 232, 240) }, &font_sm);
+
+    // Sidebar
+    let btn_sb_x = btn_find_x - 58;
+    let sb_col = if vellum.sidebar_open { Color::rgb(30, 41, 59) } else { Color::rgba(255, 255, 255, 12) };
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_sb_x, r_btn_y, 52, r_btn_h), 4, sb_col);
+    if vellum.sidebar_open {
+        ui::draw::draw_rect_outline(s, Rect::new(btn_sb_x, r_btn_y, 52, r_btn_h), 1, Color::rgb(56, 189, 248));
+    }
+    ui::font::draw_text_font(s, btn_sb_x + 6, r_btn_y + 4, "Sidebar", Color::WHITE, &font_sm);
+
+    let mut content_top = client.y + ribbon_h;
+
+    // 3. macOS Preview Markup Bar (when vellum.mode == 1)
+    if vellum.mode == 1 {
+        let markup_h = 26;
+        let markup_rect = Rect::new(client.x, content_top, client.w, markup_h);
+        s.fill_rect(markup_rect, Color::rgb(30, 41, 59));
+        ui::draw::draw_line(s, client.x, markup_rect.bottom() - 1, client.right(), markup_rect.bottom() - 1, Color::rgb(51, 65, 85));
+
+        let tools = [
+            ("Select", 12, 34, 0),
+            ("Text", 52, 28, 1),
+            ("Highlight", 86, 56, 2),
+            ("Underline", 148, 54, 3),
+            ("Strike", 208, 42, 4),
+            ("Pen", 256, 28, 5),
+            ("Rect", 290, 30, 6),
+            ("Box", 326, 44, 7),
+            ("Note", 376, 32, 8),
+            ("Redact", 414, 42, 9),
+        ];
+        for &(t_name, tx, tw, t_idx) in &tools {
+            let is_sel = vellum.active_tool == t_idx;
+            let t_rect = Rect::new(client.x + tx, content_top + 3, tw, 20);
+            if is_sel {
+                ui::draw::draw_rounded_rect(s, t_rect, 3, Color::rgb(14, 165, 233));
+                ui::font::draw_text_font(s, t_rect.x + 4, t_rect.y + 3, t_name, Color::WHITE, &font_sm);
+            } else {
+                ui::font::draw_text_font(s, t_rect.x + 4, t_rect.y + 3, t_name, Color::rgb(203, 213, 225), &font_sm);
+            }
+        }
+
+        // Color Swatches
+        let swatch_start = (client.x + client.w - 120).max(client.x + 470);
+        let swatches = [
+            Color::rgb(250, 204, 21),  // Yellow
+            Color::rgb(74, 222, 128),  // Green
+            Color::rgb(56, 189, 248),  // Cyan
+            Color::rgb(244, 63, 94),   // Coral
+            Color::rgb(192, 132, 252), // Purple
+        ];
+        for (i, &col) in swatches.iter().enumerate() {
+            let sx = swatch_start + (i as i32) * 20;
+            let is_cur = vellum.active_color == i as u8;
+            ui::draw::draw_rounded_rect(s, Rect::new(sx, content_top + 4, 16, 16), 8, col);
+            if is_cur {
+                ui::draw::draw_rect_outline(s, Rect::new(sx - 2, content_top + 2, 20, 20), 1, Color::WHITE);
+            }
+        }
+
+        content_top += markup_h;
+    }
+
+    let status_h = 24;
+    let content_bot = client.bottom() - status_h;
+    let content_h = content_bot - content_top;
+
+    // 4. Left Sidebar (w = 120)
+    let mut canvas_left = client.x;
+    if vellum.sidebar_open && client.w >= 480 {
+        let sb_w = 120;
+        let sb_rect = Rect::new(client.x, content_top, sb_w, content_h);
+        s.fill_rect(sb_rect, Color::rgb(15, 23, 42));
+        ui::draw::draw_line(s, sb_rect.right() - 1, sb_rect.y, sb_rect.right() - 1, sb_rect.bottom(), Color::rgb(30, 41, 59));
+
+        // Sidebar Tabs: Pages / Outline / Annots
+        let stab_w = (sb_w - 8) / 3;
+        let stabs = [("Pages", 0), ("Outln", 1), ("Annots", 2)];
+        for (i, &(st_name, st_idx)) in stabs.iter().enumerate() {
+            let st_x = client.x + 4 + (i as i32) * stab_w;
+            let is_sel = vellum.sidebar_tab == st_idx;
+            let st_rect = Rect::new(st_x, content_top + 4, stab_w, 18);
+            if is_sel {
+                ui::draw::draw_rounded_rect(s, st_rect, 3, Color::rgb(14, 165, 233));
+                ui::font::draw_text_font(s, st_x + 3, content_top + 6, st_name, Color::WHITE, &font_sm);
+            } else {
+                ui::font::draw_text_font(s, st_x + 3, content_top + 6, st_name, Color::rgb(148, 163, 184), &font_sm);
+            }
+        }
+
+        // Thumbnails preview cards
+        let card_w = sb_w - 24;
+        let card_h = 68;
+        for p in 0..vellum.total_pages.min(3) {
+            let card_y = content_top + 28 + (p as i32) * 80;
+            if card_y + card_h > content_bot {
+                break;
+            }
+            let is_cur = vellum.page == p;
+            let card_rect = Rect::new(client.x + 12, card_y, card_w, card_h);
+            ui::draw::draw_rounded_rect(s, card_rect, 3, Color::WHITE);
+            let border_col = if is_cur { Color::rgb(14, 165, 233) } else { Color::rgb(71, 85, 105) };
+            ui::draw::draw_rect_outline(s, card_rect, if is_cur { 2 } else { 1 }, border_col);
+
+            // Mini lines
+            s.fill_rect(Rect::new(card_rect.x + 6, card_rect.y + 6, card_w - 12, 3), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(card_rect.x + 6, card_rect.y + 12, card_w - 18, 2), Color::rgb(226, 232, 240));
+            s.fill_rect(Rect::new(card_rect.x + 6, card_rect.y + 17, card_w - 14, 2), Color::rgb(226, 232, 240));
+
+            let page_label = format!("Page {}", p + 1);
+            let label_col = if is_cur { Color::rgb(56, 189, 248) } else { Color::rgb(148, 163, 184) };
+            ui::font::draw_text_font(s, card_rect.x + (card_w - 36) / 2, card_rect.bottom() + 2, &page_label, label_col, &font_sm);
+        }
+
+        canvas_left += sb_w;
+    }
+
+    // 5. Right Inspector (w = 120)
+    let mut canvas_right = client.right();
+    if vellum.show_inspector && client.w >= 700 {
+        let insp_w = 120;
+        let insp_x = client.right() - insp_w;
+        let insp_rect = Rect::new(insp_x, content_top, insp_w, content_h);
+        s.fill_rect(insp_rect, Color::rgb(15, 23, 42));
+        ui::draw::draw_line(s, insp_x, content_top, insp_x, content_bot, Color::rgb(30, 41, 59));
+
+        ui::font::draw_text_font(s, insp_x + 8, content_top + 8, "PROPERTIES", Color::rgb(56, 189, 248), &font_sm);
+        ui::font::draw_text_font(s, insp_x + 8, content_top + 26, "Size: Letter", Color::rgb(226, 232, 240), &font_sm);
+        ui::font::draw_text_font(s, insp_x + 8, content_top + 42, "Dim: 612x792", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, insp_x + 8, content_top + 60, "Format: PDF 1.7", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, insp_x + 8, content_top + 78, "Security: None", Color::rgb(74, 222, 128), &font_sm);
+
+        canvas_right -= insp_w;
+    }
+
+    // 6. Paper Canvas
+    let avail_w = canvas_right - canvas_left;
+    let paper_w = (avail_w - 40).min(520).max(200);
+    let paper_h = (content_h - 24).max(180);
+    let paper_x = canvas_left + (avail_w - paper_w) / 2;
+    let paper_y = content_top + (content_h - paper_h) / 2;
+    let paper_rect = Rect::new(paper_x, paper_y, paper_w, paper_h);
+
+    // Drop shadow
+    s.fill_rect(Rect::new(paper_rect.x + 3, paper_rect.y + 3, paper_rect.w, paper_rect.h), Color::rgba(0, 0, 0, 80));
+
+    // Paper background
+    let paper_bg = if vellum.night_mode { Color::rgb(18, 24, 38) } else { Color::WHITE };
+    let text_primary = if vellum.night_mode { Color::rgb(241, 245, 249) } else { Color::rgb(15, 23, 42) };
+    let text_secondary = if vellum.night_mode { Color::rgb(148, 163, 184) } else { Color::rgb(71, 85, 105) };
+    s.fill_rect(paper_rect, paper_bg);
+    ui::draw::draw_rect_outline(s, paper_rect, 1, Color::rgb(203, 213, 225));
+
+    // Document Typography & Content
+    let text_x = paper_rect.x + 24;
+    let mut ty = paper_rect.y + 20;
+
+    match vellum.page {
+        0 => {
+            // Document Header
+            ui::font::draw_text_font(s, text_x, ty, "NovaOS Technical Report: Architecture & Systems", text_primary, &font_reg);
+            ty += 18;
+            ui::font::draw_text_font(s, text_x, ty, "Vellum Studio -- Next-Generation Document Processing in Pure Rust", text_secondary, &font_sm);
+            ty += 24;
+
+            // Section 1
+            ui::font::draw_text_font(s, text_x, ty, "1. Executive Overview", text_primary, &font_reg);
+            ty += 18;
+
+            // Highlight Annotation overlay across body text
+            s.fill_rect(Rect::new(text_x - 2, ty - 2, paper_w - 44, 28), Color::rgba(254, 240, 138, 140));
+
+            ui::font::draw_text_font(s, text_x, ty, "NovaOS introduces a unified desktop environment featuring sovereign,", text_primary, &font_sm);
+            ty += 14;
+            ui::font::draw_text_font(s, text_x, ty, "pure Rust userland applications. Vellum PDF Studio combines editing power,", text_primary, &font_sm);
+            ty += 14;
+            ui::font::draw_text_font(s, text_x, ty, "macOS Preview markup palettes, and Ubuntu Evince distraction-free reading.", text_primary, &font_sm);
+            ty += 22;
+
+            // Callout Box
+            let box_rect = Rect::new(text_x, ty, paper_w - 48, 64);
+            let box_bg = if vellum.night_mode { Color::rgb(30, 41, 59) } else { Color::rgb(241, 245, 249) };
+            s.fill_rect(box_rect, box_bg);
+            ui::draw::draw_rect_outline(s, box_rect, 1, Color::rgb(14, 165, 233));
+            ui::font::draw_text_font(s, text_x + 8, ty + 8, "Core Architectural Highlights:", Color::rgb(14, 165, 233), &font_sm);
+            ui::font::draw_text_font(s, text_x + 12, ty + 24, "- Pure Rust 1.99.1 with zero external C dependencies.", text_secondary, &font_sm);
+            ui::font::draw_text_font(s, text_x + 12, ty + 40, "- Built-in RFC 1950/1951 Deflate/Inflate stream compression.", text_secondary, &font_sm);
+        }
+        1 => {
+            ui::font::draw_text_font(s, text_x, ty, "2. Pure Rust Microkernel Architecture", text_primary, &font_reg);
+            ty += 20;
+            ui::font::draw_text_font(s, text_x, ty, "Memory safety is enforced from hardware boot to graphical presentation.", text_secondary, &font_sm);
+            ty += 30;
+
+            // Diagram Box
+            let diag_rect = Rect::new(text_x, ty, paper_w - 48, 80);
+            s.fill_rect(diag_rect, if vellum.night_mode { Color::rgb(30, 41, 59) } else { Color::rgb(248, 250, 252) });
+            ui::draw::draw_rect_outline(s, diag_rect, 1, Color::rgb(100, 116, 139));
+            ui::font::draw_text_font(s, text_x + 12, ty + 12, "[ Userland: Aero Browser | Vellum Studio | Spectra ]", Color::rgb(34, 197, 94), &font_sm);
+            ui::font::draw_text_font(s, text_x + 12, ty + 34, "[ Compositor / Window Manager (wm-rs) -- ARGB ]", Color::rgb(56, 189, 248), &font_sm);
+            ui::font::draw_text_font(s, text_x + 12, ty + 56, "[ NovaOS Pure Rust Microkernel Core -- VM, IPC ]", Color::rgb(244, 63, 94), &font_sm);
+        }
+        _ => {
+            ui::font::draw_text_font(s, text_x, ty, "3. Vellum Document Studio Ecosystem", text_primary, &font_reg);
+            ty += 20;
+            ui::font::draw_text_font(s, text_x, ty, "Vellum provides end-to-end PDF lifecycle management: reading, in-place editing,", text_secondary, &font_sm);
+            ty += 14;
+            ui::font::draw_text_font(s, text_x, ty, "freehand annotation, form filling, text extraction, search, and writing.", text_secondary, &font_sm);
+        }
+    }
+
+    // In Edit mode: draw Acrobat-style text selection dashed rectangle
+    if vellum.mode == 2 {
+        let edit_rect = Rect::new(text_x - 4, paper_rect.y + 16, paper_w - 40, 24);
+        ui::draw::draw_rect_outline(s, edit_rect, 1, Color::rgb(14, 165, 233));
+        s.fill_rect(Rect::new(text_x + 360, paper_rect.y + 19, 2, 16), Color::rgb(14, 165, 233));
+    }
+
+    // 7. Evince Search Bar (top right overlay)
+    if vellum.search_open {
+        let sb_w = 230;
+        let sb_h = 28;
+        let sb_x = client.right() - sb_w - 12;
+        let sb_y = content_top + 6;
+        let sb_rect = Rect::new(sb_x, sb_y, sb_w, sb_h);
+        ui::draw::draw_rounded_rect(s, sb_rect, 6, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, sb_rect, 1, Color::rgb(56, 189, 248));
+
+        ui::font::draw_text_font(s, sb_x + 8, sb_y + 7, "NovaOS", Color::WHITE, &font_sm);
+        let match_str = format!("{}/{}", vellum.match_idx, vellum.total_matches);
+        ui::font::draw_text_font(s, sb_x + 130, sb_y + 7, &match_str, Color::rgb(245, 158, 11), &font_sm);
+        ui::font::draw_text_font(s, sb_x + 168, sb_y + 7, "<", Color::rgb(203, 213, 225), &font_sm);
+        ui::font::draw_text_font(s, sb_x + 188, sb_y + 7, ">", Color::rgb(203, 213, 225), &font_sm);
+        ui::font::draw_text_font(s, sb_x + 212, sb_y + 7, "X", Color::rgb(244, 63, 94), &font_sm);
+    }
+
+    // 8. Bottom Status Bar (h = 24)
+    let sb_bot_rect = Rect::new(client.x, content_bot, client.w, status_h);
+    s.fill_rect(sb_bot_rect, Color::rgb(15, 23, 42));
+    ui::draw::draw_line(s, client.x, content_bot, client.right(), content_bot, Color::rgb(30, 41, 59));
+
+    // Page navigation stepper: < Page 1 of 3 >
+    ui::font::draw_text_font(s, client.x + 12, content_bot + 6, "<", Color::rgb(203, 213, 225), &font_sm);
+    let p_info = format!("Page {} of {}", vellum.page + 1, vellum.total_pages);
+    ui::font::draw_text_font(s, client.x + 26, content_bot + 6, &p_info, Color::rgb(241, 245, 249), &font_sm);
+    ui::font::draw_text_font(s, client.x + 98, content_bot + 6, ">", Color::rgb(203, 213, 225), &font_sm);
+
+    // Dimensions
+    ui::font::draw_text_font(s, client.x + 120, content_bot + 6, "612 x 792 pt", Color::rgb(148, 163, 184), &font_sm);
+
+    // Zoom Controls
+    let z_str = format!("{}%", vellum.zoom_pct);
+    ui::font::draw_text_font(s, client.right() - 84, content_bot + 6, "-", Color::rgb(203, 213, 225), &font_sm);
+    ui::font::draw_text_font(s, client.right() - 68, content_bot + 6, &z_str, Color::rgb(241, 245, 249), &font_sm);
+    ui::font::draw_text_font(s, client.right() - 32, content_bot + 6, "+", Color::rgb(203, 213, 225), &font_sm);
+
+    // 9. Modal About Dialog (if open)
+    if vellum.show_about {
+        s.fill_rect(client, Color::rgba(0, 0, 0, 160));
+
+        let ab_w = 420.min(client.w - 32);
+        let ab_h = 240.min(client.h - 32);
+        let ab_x = client.x + (client.w - ab_w) / 2;
+        let ab_y = client.y + (client.h - ab_h) / 2;
+        let ab_rect = Rect::new(ab_x, ab_y, ab_w, ab_h);
+
+        ui::draw::draw_rounded_rect(s, ab_rect, 8, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, ab_rect, 2, Color::rgb(56, 189, 248));
+
+        // Header
+        ui::draw::draw_rounded_rect(s, Rect::new(ab_x + 16, ab_y + 14, 26, 26), 5, Color::rgb(14, 165, 233));
+        ui::font::draw_text_font(s, ab_x + 24, ab_y + 17, "V", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 14, "VELLUM PDF STUDIO", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 28, "v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248), &font_sm);
+
+        ui::draw::draw_line(s, ab_x + 14, ab_y + 48, ab_x + ab_w - 14, ab_y + 48, Color::rgb(48, 54, 61));
+
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 58, "High-Performance PDF Reader, Editor & Authoring Suite", Color::rgb(226, 232, 240), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 76, "Engine Architecture: Adobe Edit + macOS Preview + Evince Read", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 98, "Pure Rust 1.99.1 | Zero C/C++ | Zero External Binaries", Color::rgb(74, 222, 128), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 116, "Full PDF 1.7 Spec: XRef, FlateDecode, Vector Paths, Forms & Redact", Color::rgb(245, 158, 11), &font_sm);
+
+        // Dismiss Button
+        let btn_close = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
+        ui::draw::draw_rounded_rect(s, btn_close, 4, Color::rgb(14, 165, 233));
+        ui::font::draw_text_font(s, btn_close.x + 18, btn_close.y + 5, "Dismiss", Color::WHITE, &font_sm);
     }
 }
 
@@ -8126,7 +8840,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 10);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 11);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -8724,5 +9438,110 @@ mod tests {
         wm.on_key(10);
         let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l3.contains("demuxed") || l3.contains("4K UHD"), "Terminal player movie.mkv output: {}", l3);
+    }
+
+    #[test]
+    fn test_wm_vellum_pdf_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial State
+        assert_eq!(wm.vellum_app.page, 0);
+        assert_eq!(wm.vellum_app.total_pages, 3);
+        assert_eq!(wm.vellum_app.mode, 0); // Read
+        assert_eq!(wm.vellum_app.zoom_pct, 100);
+        assert!(wm.vellum_app.sidebar_open);
+        assert!(!wm.vellum_app.night_mode);
+        assert!(!wm.vellum_app.search_open);
+
+        // 2. Unit Logic
+        wm.vellum_app.next_page();
+        assert_eq!(wm.vellum_app.page, 1);
+        wm.vellum_app.prev_page();
+        assert_eq!(wm.vellum_app.page, 0);
+
+        wm.vellum_app.zoom_in();
+        assert!(wm.vellum_app.zoom_pct > 100);
+        wm.vellum_app.zoom_out();
+        assert_eq!(wm.vellum_app.zoom_pct, 100);
+
+        wm.vellum_app.set_mode(1); // Annotate
+        assert_eq!(wm.vellum_app.mode, 1);
+        assert_eq!(wm.vellum_app.active_tool, 2); // Highlight default
+        wm.vellum_app.set_tool(5); // Pen
+        assert_eq!(wm.vellum_app.active_tool, 5);
+        wm.vellum_app.set_color(2); // Cyan
+        assert_eq!(wm.vellum_app.active_color, 2);
+
+        wm.vellum_app.toggle_night();
+        assert!(wm.vellum_app.night_mode);
+        wm.vellum_app.toggle_night();
+        assert!(!wm.vellum_app.night_mode);
+
+        wm.vellum_app.toggle_search();
+        assert!(wm.vellum_app.search_open);
+        wm.vellum_app.toggle_search();
+        assert!(!wm.vellum_app.search_open);
+
+        // 3. Launch via Desktop Shortcut 7 (Vellum)
+        assert_eq!(DESKTOP_SHORTCUTS[7].label, "Vellum");
+        let vellum_icon = wm.desktop_icon_rect(7).expect("Vellum desktop shortcut should exist");
+        wm.on_left_press(vellum_icon.x + 10, vellum_icon.y + 10);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 10, "Clicking Vellum desktop icon should launch window 10");
+
+        // 4. Interactive clicks inside window 10
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // Click Annotate tab (x: 90, y: 15)
+        wm.on_left_press(client.x + 90, client.y + 15);
+        assert_eq!(wm.vellum_app.mode, 1, "Clicking Annotate tab should switch to Annotate mode");
+
+        // Click Strikeout tool on markup bar (x: 220, y: 45)
+        wm.on_left_press(client.x + 220, client.y + 45);
+        assert_eq!(wm.vellum_app.active_tool, 4, "Clicking Strike tool should select strikeout");
+
+        // Click Find button on top ribbon (x: client.w - 85, y: 15)
+        wm.on_left_press(client.x + client.w - 85, client.y + 15);
+        assert!(wm.vellum_app.search_open, "Clicking Find button should open Evince search bar");
+
+        // Click Next search hit (x: client.w - 45, y: 48)
+        wm.on_left_press(client.x + client.w - 45, client.y + 48);
+        assert_eq!(wm.vellum_app.match_idx, 2, "Clicking Next hit should advance match counter");
+
+        // Click Night mode toggle (x: client.w - 45, y: 15)
+        wm.on_left_press(client.x + client.w - 45, client.y + 15);
+        assert!(wm.vellum_app.night_mode, "Clicking Night button should toggle night reading mode");
+
+        // Click About button [?] (x: client.w - 15, y: 15)
+        wm.on_left_press(client.x + client.w - 15, client.y + 15);
+        assert!(wm.vellum_app.show_about, "Clicking ? button should show About Vellum modal dialog");
+
+        // Dismiss modal dialog
+        wm.on_left_press(client.x + 100, client.y + 100);
+        assert!(!wm.vellum_app.show_about, "Clicking should dismiss About modal dialog");
+
+        // 5. Terminal shell commands
+        wm.raise(0);
+        for b in b"vellum --info" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("Capabilities") || l1.contains("PDF Inspector") || l1.contains("612 x 792"), "Terminal vellum --info output: {}", l1);
+
+        for b in b"vellum --version" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("Pure Rust 1.99.1") || l2.contains("vellum-core"), "Terminal vellum --version output: {}", l2);
+
+        for b in b"pdf document.pdf" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l3.contains("PDF 1.7 Parsed") || l3.contains("Vellum"), "Terminal pdf command output: {}", l3);
     }
 }
