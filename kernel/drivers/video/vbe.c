@@ -465,7 +465,11 @@ void vbe_enter_graphics(void) {
      * the second time) so that no path can reach the first framebuffer
      * write with the font unsaved. */
     save_text_font_once();
-    dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_ENABLED);
+    dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
+    dispi_write(VBE_DISPI_INDEX_XRES, (uint16_t)g_width);
+    dispi_write(VBE_DISPI_INDEX_YRES, (uint16_t)g_height);
+    dispi_write(VBE_DISPI_INDEX_BPP, (uint16_t)g_bpp);
+    dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
 }
 
 void vbe_exit_graphics(void) {
