@@ -17,8 +17,9 @@ pub const APP_ID_FILES: u8    = 2;
 pub const APP_ID_EDITOR: u8   = 3;
 pub const APP_ID_SYSTEM: u8   = 4;
 pub const APP_ID_SETTINGS: u8 = 5;
-pub const APP_ID_CALENDAR: u8 = 6;
-pub const APP_ID_STORE: u8    = 7;
+pub const APP_ID_CALENDAR: u8   = 6;
+pub const APP_ID_STORE: u8      = 7;
+pub const APP_ID_CALCULATOR: u8 = 8;
 
 pub const MAX_PINNED_APPS: usize = 8;
 
@@ -59,8 +60,9 @@ pub fn app_for_id(id: u8) -> Option<DockApp> {
         APP_ID_EDITOR   => Some(DEFAULT_PINNED_APPS[2]),
         APP_ID_SYSTEM   => Some(DEFAULT_PINNED_APPS[3]),
         APP_ID_SETTINGS => Some(DEFAULT_PINNED_APPS[4]),
-        APP_ID_CALENDAR => Some(DockApp::new(APP_ID_CALENDAR, "Calendar", "CALENDAR.ELF", true)),
-        APP_ID_STORE    => Some(DockApp::new(APP_ID_STORE, "Store", "STORE.ELF", true)),
+        APP_ID_CALENDAR   => Some(DockApp::new(APP_ID_CALENDAR, "Calendar", "CALENDAR.ELF", true)),
+        APP_ID_STORE      => Some(DockApp::new(APP_ID_STORE, "Store", "STORE.ELF", true)),
+        APP_ID_CALCULATOR => Some(DockApp::new(APP_ID_CALCULATOR, "Calculator", "CALC.ELF", true)),
         _ => None,
     }
 }

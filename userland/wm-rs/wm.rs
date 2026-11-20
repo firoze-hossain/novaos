@@ -239,14 +239,15 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 7] = [
-    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",   app_id: 1, icon_type: 0 },
-    DesktopIconSpec { label: "Files",       sublabel: "/root",         app_id: 2, icon_type: 2 },
-    DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",      app_id: 1, icon_type: 1 },
-    DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks",app_id: 6, icon_type: 6 },
-    DesktopIconSpec { label: "App Store",   sublabel: "Packages",      app_id: 4, icon_type: 4 },
-    DesktopIconSpec { label: "Settings",    sublabel: "Control Panel", app_id: 5, icon_type: 5 },
-    DesktopIconSpec { label: "README.txt",  sublabel: "Document",      app_id: 3, icon_type: 3 },
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 8] = [
+    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 1, icon_type: 0 },
+    DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
+    DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
+    DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks", app_id: 6, icon_type: 6 },
+    DesktopIconSpec { label: "Calculator",  sublabel: "Math Studio",    app_id: 7, icon_type: 7 },
+    DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
+    DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
+    DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -468,6 +469,87 @@ pub fn append_str(s: &str, buf: &mut [u8], offset: &mut usize) {
             *offset += 1;
         }
     }
+}
+
+pub fn fast_sqrt64(val: f64) -> f64 {
+    if val <= 0.0 {
+        return 0.0;
+    }
+    let mut x = val;
+    let mut i = 0;
+    while i < 10 {
+        x = 0.5 * (x + val / x);
+        i += 1;
+    }
+    x
+}
+
+pub fn format_f64_into(val: f64, buf: &mut [u8], offset: &mut usize) {
+    if val.is_nan() {
+        append_str("NaN", buf, offset);
+        return;
+    }
+    if val < 0.0 {
+        append_str("-", buf, offset);
+    }
+    let abs_val = if val < 0.0 { -val } else { val };
+    let int_part = abs_val as u64;
+    format_u32(int_part as u32, buf, offset);
+    let frac = abs_val - (int_part as f64);
+    if frac > 1e-5 && *offset < buf.len() {
+        append_str(".", buf, offset);
+        let frac_int = (frac * 10000.0 + 0.5) as u32;
+        let mut digits = [0u8; 4];
+        let mut d_off = 0;
+        format_u32_padded(frac_int, 4, &mut digits, &mut d_off);
+        while d_off > 1 && digits[d_off - 1] == b'0' {
+            d_off -= 1;
+        }
+        for i in 0..d_off {
+            if *offset < buf.len() {
+                buf[*offset] = digits[i];
+                *offset += 1;
+            }
+        }
+    }
+}
+
+pub fn parse_f64_from(slice: &[u8]) -> f64 {
+    let mut val = 0.0;
+    let mut is_neg = false;
+    let mut frac_div = 0.0;
+    for &b in slice {
+        if b == b'-' {
+            is_neg = true;
+        } else if b == b'.' {
+            frac_div = 10.0;
+        } else if b >= b'0' && b <= b'9' {
+            let digit = (b - b'0') as f64;
+            if frac_div > 0.0 {
+                val += digit / frac_div;
+                frac_div *= 10.0;
+            } else {
+                val = val * 10.0 + digit;
+            }
+        }
+    }
+    if is_neg { -val } else { val }
+}
+
+pub fn parse_i64_base(slice: &[u8], base: u32) -> i64 {
+    let mut val: i64 = 0;
+    for &b in slice {
+        let d = match b {
+            b'0'..=b'9' => (b - b'0') as i64,
+            b'a'..=b'f' => (b - b'a' + 10) as i64,
+            b'A'..=b'F' => (b - b'A' + 10) as i64,
+            _ => continue,
+        };
+        if d < base as i64 {
+            val = val.wrapping_mul(base as i64).wrapping_add(d);
+        }
+    }
+    val
 }
 
 pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
@@ -970,6 +1052,843 @@ impl WmCalendarApp {
     }
 }
 
+// --- NovaOS Desktop Unified Calculator Subsystem (macOS + Windows 11 + Ubuntu Synthesized) ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WmCalcMode {
+    Standard = 0,
+    Scientific = 1,
+    Programmer = 2,
+    History = 3,
+}
+
+impl WmCalcMode {
+    pub fn name(&self) -> &'static str {
+        match self {
+            WmCalcMode::Standard => "Standard",
+            WmCalcMode::Scientific => "Scientific",
+            WmCalcMode::Programmer => "Programmer",
+            WmCalcMode::History => "History",
+        }
+    }
+}
+
+pub struct WmCalcApp {
+    pub display: [u8; 32],
+    pub display_len: usize,
+    pub expr_line: [u8; 48],
+    pub expr_len: usize,
+    pub accumulator: f64,
+    pub pending_op: u8,
+    pub clear_on_next: bool,
+    pub mode: WmCalcMode,
+    pub prog_base: u8, // 0: Hex, 1: Dec, 2: Oct, 3: Bin
+    pub memory: f64,
+    pub has_memory: bool,
+    pub is_error: bool,
+    pub history_expr: [[u8; 32]; 4],
+    pub history_expr_len: [usize; 4],
+    pub history_res: [[u8; 16]; 4],
+    pub history_res_len: [usize; 4],
+    pub history_count: usize,
+}
+
+impl WmCalcApp {
+    pub fn new() -> Self {
+        let mut app = WmCalcApp {
+            display: [0u8; 32],
+            display_len: 1,
+            expr_line: [0u8; 48],
+            expr_len: 0,
+            accumulator: 0.0,
+            pending_op: 0,
+            clear_on_next: false,
+            mode: WmCalcMode::Standard,
+            prog_base: 1, // Dec
+            memory: 0.0,
+            has_memory: false,
+            is_error: false,
+            history_expr: [[0u8; 32]; 4],
+            history_expr_len: [0; 4],
+            history_res: [[0u8; 16]; 4],
+            history_res_len: [0; 4],
+            history_count: 0,
+        };
+        app.display[0] = b'0';
+        app.record_history("125 * 8", "= 1000");
+        app.record_history("sqrt(256) + 4", "= 20");
+        app
+    }
+
+    pub fn display_str(&self) -> &str {
+        core::str::from_utf8(&self.display[..self.display_len]).unwrap_or("0")
+    }
+
+    pub fn expr_str(&self) -> &str {
+        core::str::from_utf8(&self.expr_line[..self.expr_len]).unwrap_or("")
+    }
+
+    pub fn set_display_str(&mut self, s: &str) {
+        let b = s.as_bytes();
+        let copy_len = b.len().min(31);
+        self.display[..copy_len].copy_from_slice(&b[..copy_len]);
+        self.display_len = copy_len;
+    }
+
+    pub fn current_val(&self) -> f64 {
+        if self.is_error {
+            0.0
+        } else if self.mode == WmCalcMode::Programmer {
+            self.current_int() as f64
+        } else {
+            parse_f64_from(&self.display[..self.display_len])
+        }
+    }
+
+    pub fn current_int(&self) -> i64 {
+        if self.is_error {
+            return 0;
+        }
+        let base = match self.prog_base {
+            0 => 16,
+            1 => 10,
+            2 => 8,
+            3 => 2,
+            _ => 10,
+        };
+        parse_i64_base(&self.display[..self.display_len], base)
+    }
+
+    pub fn set_current_int(&mut self, val: i64) {
+        self.display_len = 0;
+        let uval = val as u64;
+        match self.prog_base {
+            0 => {
+                let mut buf = [0u8; 32];
+                let mut off = 0;
+                let mut tmp = uval;
+                if tmp == 0 {
+                    append_str("0", &mut buf, &mut off);
+                } else {
+                    let mut digits = [0u8; 16];
+                    let mut d_cnt = 0;
+                    while tmp > 0 && d_cnt < 16 {
+                        let rem = (tmp % 16) as u8;
+                        digits[d_cnt] = if rem < 10 { b'0' + rem } else { b'A' + (rem - 10) };
+                        tmp /= 16;
+                        d_cnt += 1;
+                    }
+                    while d_cnt > 0 {
+                        d_cnt -= 1;
+                        buf[off] = digits[d_cnt];
+                        off += 1;
+                    }
+                }
+                let copy_len = off.min(31);
+                self.display[..copy_len].copy_from_slice(&buf[..copy_len]);
+                self.display_len = copy_len;
+            }
+            1 => {
+                let mut buf = [0u8; 32];
+                let mut off = 0;
+                format_u32(val as u32, &mut buf, &mut off);
+                let copy_len = off.min(31);
+                self.display[..copy_len].copy_from_slice(&buf[..copy_len]);
+                self.display_len = copy_len;
+            }
+            2 => {
+                let mut buf = [0u8; 32];
+                let mut off = 0;
+                let mut tmp = uval;
+                if tmp == 0 {
+                    append_str("0", &mut buf, &mut off);
+                } else {
+                    let mut digits = [0u8; 22];
+                    let mut d_cnt = 0;
+                    while tmp > 0 && d_cnt < 22 {
+                        digits[d_cnt] = b'0' + (tmp % 8) as u8;
+                        tmp /= 8;
+                        d_cnt += 1;
+                    }
+                    while d_cnt > 0 {
+                        d_cnt -= 1;
+                        buf[off] = digits[d_cnt];
+                        off += 1;
+                    }
+                }
+                let copy_len = off.min(31);
+                self.display[..copy_len].copy_from_slice(&buf[..copy_len]);
+                self.display_len = copy_len;
+            }
+            _ => {
+                let mut buf = [0u8; 32];
+                let mut off = 0;
+                let mut tmp = uval;
+                if tmp == 0 {
+                    append_str("0", &mut buf, &mut off);
+                } else {
+                    let mut digits = [0u8; 32];
+                    let mut d_cnt = 0;
+                    while tmp > 0 && d_cnt < 32 {
+                        digits[d_cnt] = b'0' + (tmp % 2) as u8;
+                        tmp /= 2;
+                        d_cnt += 1;
+                    }
+                    while d_cnt > 0 {
+                        d_cnt -= 1;
+                        buf[off] = digits[d_cnt];
+                        off += 1;
+                    }
+                }
+                let copy_len = off.min(31);
+                self.display[..copy_len].copy_from_slice(&buf[..copy_len]);
+                self.display_len = copy_len;
+            }
+        }
+        self.clear_on_next = true;
+    }
+
+    pub fn input_digit(&mut self, digit: u8) {
+        if self.is_error {
+            self.clear();
+        }
+
+        if self.mode == WmCalcMode::Programmer {
+            let valid = match self.prog_base {
+                0 => (digit >= b'0' && digit <= b'9') || (digit >= b'A' && digit <= b'F') || (digit >= b'a' && digit <= b'f'),
+                1 => digit >= b'0' && digit <= b'9',
+                2 => digit >= b'0' && digit <= b'7',
+                3 => digit == b'0' || digit == b'1',
+                _ => true,
+            };
+            if !valid {
+                return;
+            }
+        }
+
+        let ch = if digit >= b'a' && digit <= b'f' { digit - 32 } else { digit };
+
+        if self.clear_on_next || (self.display_len == 1 && self.display[0] == b'0') {
+            self.display[0] = ch;
+            self.display_len = 1;
+            self.clear_on_next = false;
+        } else if self.display_len < 24 {
+            self.display[self.display_len] = ch;
+            self.display_len += 1;
+        }
+    }
+
+    pub fn input_dot(&mut self) {
+        if self.mode == WmCalcMode::Programmer {
+            return;
+        }
+        if self.is_error || self.clear_on_next {
+            self.set_display_str("0.");
+            self.clear_on_next = false;
+            self.is_error = false;
+        } else if !self.display[..self.display_len].contains(&b'.') && self.display_len < 24 {
+            self.display[self.display_len] = b'.';
+            self.display_len += 1;
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.is_error || self.clear_on_next {
+            self.set_display_str("0");
+            self.clear_on_next = false;
+            self.is_error = false;
+            return;
+        }
+        if self.display_len > 1 {
+            self.display_len -= 1;
+            if self.display_len == 1 && self.display[0] == b'-' {
+                self.set_display_str("0");
+            }
+        } else {
+            self.set_display_str("0");
+        }
+    }
+
+    pub fn toggle_sign(&mut self) {
+        if self.is_error || (self.display_len == 1 && self.display[0] == b'0') {
+            return;
+        }
+        if self.mode == WmCalcMode::Programmer {
+            let iv = self.current_int();
+            self.set_current_int(-iv);
+        } else {
+            if self.display[0] == b'-' {
+                for i in 0..self.display_len - 1 {
+                    self.display[i] = self.display[i + 1];
+                }
+                self.display_len -= 1;
+            } else if self.display_len < 30 {
+                for i in (0..self.display_len).rev() {
+                    self.display[i + 1] = self.display[i];
+                }
+                self.display[0] = b'-';
+                self.display_len += 1;
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.set_display_str("0");
+        self.expr_len = 0;
+        self.accumulator = 0.0;
+        self.pending_op = 0;
+        self.clear_on_next = false;
+        self.is_error = false;
+    }
+
+    pub fn clear_entry(&mut self) {
+        self.set_display_str("0");
+        self.clear_on_next = false;
+        self.is_error = false;
+    }
+
+    pub fn apply_op(&mut self, op: u8) {
+        if self.is_error {
+            return;
+        }
+
+        let cur = self.current_val();
+
+        if self.pending_op != 0 && !self.clear_on_next {
+            self.compute_binary(self.accumulator, cur, self.pending_op);
+        } else {
+            self.accumulator = cur;
+        }
+
+        self.pending_op = op;
+        self.expr_len = 0;
+        format_f64_into(self.accumulator, &mut self.expr_line, &mut self.expr_len);
+        let op_sym = match op {
+            b'*' => " * ",
+            b'/' => " / ",
+            b'+' => " + ",
+            b'-' => " - ",
+            b'%' => " % ",
+            b'^' => " ^ ",
+            b'&' => " & ",
+            b'|' => " | ",
+            b'X' => " ^ ",
+            _ => " ",
+        };
+        append_str(op_sym, &mut self.expr_line, &mut self.expr_len);
+        self.clear_on_next = true;
+    }
+
+    fn compute_binary(&mut self, a: f64, b: f64, op: u8) {
+        let res = match op {
+            b'+' => Ok(a + b),
+            b'-' => Ok(a - b),
+            b'*' => Ok(a * b),
+            b'/' => {
+                if b.abs() < 1e-12 {
+                    Err("Divide by 0")
+                } else {
+                    Ok(a / b)
+                }
+            }
+            b'%' => {
+                if b.abs() < 1e-12 {
+                    Err("Divide by 0")
+                } else {
+                    let ia = a as i64;
+                    let ib = b as i64;
+                    if ib == 0 { Err("Divide by 0") } else { Ok((ia % ib) as f64) }
+                }
+            }
+            b'^' => {
+                let mut r = 1.0;
+                let exp = b as i32;
+                if exp >= 0 {
+                    for _ in 0..exp {
+                        r *= a;
+                    }
+                    Ok(r)
+                } else {
+                    for _ in 0..(-exp) {
+                        r *= a;
+                    }
+                    if r.abs() < 1e-12 { Err("Divide by 0") } else { Ok(1.0 / r) }
+                }
+            }
+            b'&' => Ok(((a as i64) & (b as i64)) as f64),
+            b'|' => Ok(((a as i64) | (b as i64)) as f64),
+            b'X' => Ok(((a as i64) ^ (b as i64)) as f64),
+            b'<' => {
+                let sh = (b as i64).clamp(0, 63);
+                Ok(((a as i64) << sh) as f64)
+            }
+            b'>' => {
+                let sh = (b as i64).clamp(0, 63);
+                Ok(((a as i64) >> sh) as f64)
+            }
+            _ => Ok(b),
+        };
+
+        match res {
+            Ok(v) => {
+                self.accumulator = v;
+                if self.mode == WmCalcMode::Programmer {
+                    self.set_current_int(v as i64);
+                } else {
+                    let mut b = [0u8; 32];
+                    let mut off = 0;
+                    format_f64_into(v, &mut b, &mut off);
+                    let copy_len = off.min(31);
+                    self.display[..copy_len].copy_from_slice(&b[..copy_len]);
+                    self.display_len = copy_len;
+                }
+            }
+            Err(e) => {
+                self.set_display_str(e);
+                self.is_error = true;
+                self.pending_op = 0;
+            }
+        }
+    }
+
+    pub fn equals(&mut self) {
+        if self.is_error || self.pending_op == 0 {
+            return;
+        }
+
+        let cur = self.current_val();
+        let op = self.pending_op;
+
+        let mut expr_buf = [0u8; 32];
+        let mut e_off = 0;
+        format_f64_into(self.accumulator, &mut expr_buf, &mut e_off);
+        let op_sym = match op {
+            b'*' => " * ",
+            b'/' => " / ",
+            b'+' => " + ",
+            b'-' => " - ",
+            _ => " ? ",
+        };
+        append_str(op_sym, &mut expr_buf, &mut e_off);
+        format_f64_into(cur, &mut expr_buf, &mut e_off);
+        let expr_str = core::str::from_utf8(&expr_buf[..e_off]).unwrap_or("");
+
+        self.compute_binary(self.accumulator, cur, op);
+
+        if !self.is_error {
+            let mut res_buf = [0u8; 16];
+            let mut r_off = 0;
+            append_str("= ", &mut res_buf, &mut r_off);
+            append_str(self.display_str(), &mut res_buf, &mut r_off);
+            let res_str = core::str::from_utf8(&res_buf[..r_off]).unwrap_or("");
+            self.record_history(expr_str, res_str);
+
+            self.expr_len = 0;
+            append_str(expr_str, &mut self.expr_line, &mut self.expr_len);
+            append_str(" =", &mut self.expr_line, &mut self.expr_len);
+            self.pending_op = 0;
+            self.clear_on_next = true;
+        }
+    }
+
+    pub fn apply_unary(&mut self, op_name: &str) {
+        if self.is_error {
+            return;
+        }
+
+        let val = self.current_val();
+        let mut expr_desc = [0u8; 32];
+        let mut e_off = 0;
+
+        let res = match op_name {
+            "sqrt" => {
+                append_str("sqrt(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                if val < 0.0 {
+                    Err("Negative root")
+                } else {
+                    Ok(fast_sqrt64(val))
+                }
+            }
+            "x^2" => {
+                append_str("sqr(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                Ok(val * val)
+            }
+            "1/x" => {
+                append_str("1/(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                if val.abs() < 1e-12 {
+                    Err("Divide by 0")
+                } else {
+                    Ok(1.0 / val)
+                }
+            }
+            "%" => {
+                append_str(self.display_str(), &mut expr_desc, &mut e_off);
+                append_str("%", &mut expr_desc, &mut e_off);
+                Ok(val / 100.0)
+            }
+            "fact" => {
+                append_str("fact(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                if val < 0.0 || val > 12.0 {
+                    Err("Invalid fact")
+                } else {
+                    let n = val as u64;
+                    let mut f = 1u64;
+                    for i in 2..=n {
+                        f *= i;
+                    }
+                    Ok(f as f64)
+                }
+            }
+            "abs" => {
+                append_str("abs(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                Ok(if val < 0.0 { -val } else { val })
+            }
+            "not" => {
+                append_str("NOT(", &mut expr_desc, &mut e_off);
+                format_f64_into(val, &mut expr_desc, &mut e_off);
+                append_str(")", &mut expr_desc, &mut e_off);
+                let iv = val as i64;
+                Ok((!iv) as f64)
+            }
+            _ => Ok(val),
+        };
+
+        match res {
+            Ok(v) => {
+                if self.mode == WmCalcMode::Programmer {
+                    self.set_current_int(v as i64);
+                } else {
+                    let mut b = [0u8; 32];
+                    let mut off = 0;
+                    format_f64_into(v, &mut b, &mut off);
+                    let copy_len = off.min(31);
+                    self.display[..copy_len].copy_from_slice(&b[..copy_len]);
+                    self.display_len = copy_len;
+                }
+
+                self.expr_len = 0;
+                let copy_e = e_off.min(47);
+                self.expr_line[..copy_e].copy_from_slice(&expr_desc[..copy_e]);
+                self.expr_len = copy_e;
+
+                let e_str = core::str::from_utf8(&expr_desc[..copy_e]).unwrap_or("");
+                let mut r_buf = [0u8; 16];
+                let mut r_off = 0;
+                append_str("= ", &mut r_buf, &mut r_off);
+                let mut d_tmp = [0u8; 32];
+                let dlen = self.display_len;
+                d_tmp[..dlen].copy_from_slice(&self.display[..dlen]);
+                let d_str = core::str::from_utf8(&d_tmp[..dlen]).unwrap_or("");
+                append_str(d_str, &mut r_buf, &mut r_off);
+                let r_str = core::str::from_utf8(&r_buf[..r_off]).unwrap_or("");
+                self.record_history(e_str, r_str);
+                self.clear_on_next = true;
+            }
+            Err(e) => {
+                self.set_display_str(e);
+                self.is_error = true;
+            }
+        }
+    }
+
+    pub fn memory_store(&mut self) {
+        if !self.is_error {
+            self.memory = self.current_val();
+            self.has_memory = true;
+            self.clear_on_next = true;
+        }
+    }
+
+    pub fn memory_recall(&mut self) {
+        if self.has_memory {
+            let mut b = [0u8; 32];
+            let mut off = 0;
+            format_f64_into(self.memory, &mut b, &mut off);
+            let copy_len = off.min(31);
+            self.display[..copy_len].copy_from_slice(&b[..copy_len]);
+            self.display_len = copy_len;
+            self.clear_on_next = true;
+        }
+    }
+
+    pub fn memory_add(&mut self) {
+        if !self.is_error {
+            self.memory += self.current_val();
+            self.has_memory = true;
+            self.clear_on_next = true;
+        }
+    }
+
+    pub fn memory_sub(&mut self) {
+        if !self.is_error {
+            self.memory -= self.current_val();
+            self.has_memory = true;
+            self.clear_on_next = true;
+        }
+    }
+
+    pub fn memory_clear(&mut self) {
+        self.memory = 0.0;
+        self.has_memory = false;
+    }
+
+    pub fn set_mode(&mut self, mode: WmCalcMode) {
+        self.mode = mode;
+    }
+
+    pub fn record_history(&mut self, expr: &str, res: &str) {
+        if self.history_count >= 4 {
+            for i in 0..3 {
+                self.history_expr[i] = self.history_expr[i + 1];
+                self.history_expr_len[i] = self.history_expr_len[i + 1];
+                self.history_res[i] = self.history_res[i + 1];
+                self.history_res_len[i] = self.history_res_len[i + 1];
+            }
+            self.history_count = 3;
+        }
+
+        let idx = self.history_count;
+        let eb = expr.as_bytes();
+        let elen = eb.len().min(31);
+        self.history_expr[idx][..elen].copy_from_slice(&eb[..elen]);
+        self.history_expr_len[idx] = elen;
+
+        let rb = res.as_bytes();
+        let rlen = rb.len().min(15);
+        self.history_res[idx][..rlen].copy_from_slice(&rb[..rlen]);
+        self.history_res_len[idx] = rlen;
+
+        self.history_count += 1;
+    }
+
+    pub fn clear_history(&mut self) {
+        self.history_count = 0;
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let mode_bar_h = 26;
+        if py >= client.y && py < client.y + mode_bar_h {
+            let modes = [WmCalcMode::Standard, WmCalcMode::Scientific, WmCalcMode::Programmer, WmCalcMode::History];
+            let pad = 4;
+            let tab_w = (client.w - pad * 2) / 4;
+            for (i, m) in modes.iter().enumerate() {
+                let tx = client.x + pad + i as i32 * tab_w;
+                let tr = Rect::new(tx, client.y + 2, tab_w - 4, mode_bar_h - 4);
+                if point_in_rect(px, py, tr.x, tr.y, tr.w, tr.h) {
+                    self.set_mode(*m);
+                    return;
+                }
+            }
+            return;
+        }
+
+        let screen_h = if self.mode == WmCalcMode::Programmer { 64 } else { 48 };
+        let screen_y = client.y + mode_bar_h + 4;
+        let mut key_start_y = screen_y + screen_h + 4;
+
+        if self.mode == WmCalcMode::History {
+            let clr_btn = Rect::new(client.x + client.w - 100, key_start_y + 4, 90, 20);
+            if point_in_rect(px, py, clr_btn.x, clr_btn.y, clr_btn.w, clr_btn.h) {
+                self.clear_history();
+            }
+            return;
+        }
+
+        if self.mode == WmCalcMode::Standard || self.mode == WmCalcMode::Scientific {
+            let mem_h = 20;
+            if py >= key_start_y && py < key_start_y + mem_h {
+                let btns = ["MC", "MR", "M+", "M-", "MS"];
+                let btn_w = (client.w - 16) / 5;
+                for (i, &b) in btns.iter().enumerate() {
+                    let bx = client.x + 8 + i as i32 * btn_w;
+                    let br = Rect::new(bx, key_start_y, btn_w - 4, mem_h);
+                    if point_in_rect(px, py, br.x, br.y, br.w, br.h) {
+                        match b {
+                            "MC" => self.memory_clear(),
+                            "MR" => self.memory_recall(),
+                            "M+" => self.memory_add(),
+                            "M-" => self.memory_sub(),
+                            "MS" => self.memory_store(),
+                            _ => {}
+                        }
+                        return;
+                    }
+                }
+            }
+            key_start_y += mem_h + 4;
+        }
+
+        let pad = 4;
+        let avail_h = client.bottom() - key_start_y - 6;
+        if avail_h <= 0 {
+            return;
+        }
+
+        match self.mode {
+            WmCalcMode::Standard => {
+                let grid = [
+                    ["%", "CE", "C", "del"],
+                    ["1/x", "x^2", "sqrt", "/"],
+                    ["7", "8", "9", "*"],
+                    ["4", "5", "6", "-"],
+                    ["1", "2", "3", "+"],
+                    ["+/-", "0", ".", "="],
+                ];
+                let rows = 6;
+                let cols = 4;
+                let btn_w = (client.w - 16 - pad * (cols - 1)) / cols;
+                let btn_h = (avail_h - pad * (rows - 1)) / rows;
+
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let bx = client.x + 8 + c * (btn_w + pad);
+                        let by = key_start_y + r * (btn_h + pad);
+                        let br = Rect::new(bx, by, btn_w, btn_h);
+                        if point_in_rect(px, py, br.x, br.y, br.w, br.h) {
+                            let label = grid[r as usize][c as usize];
+                            match label {
+                                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => self.input_digit(label.as_bytes()[0]),
+                                "." => self.input_dot(),
+                                "+/-" => self.toggle_sign(),
+                                "del" => self.backspace(),
+                                "C" => self.clear(),
+                                "CE" => self.clear_entry(),
+                                "+" => self.apply_op(b'+'),
+                                "-" => self.apply_op(b'-'),
+                                "*" => self.apply_op(b'*'),
+                                "/" => self.apply_op(b'/'),
+                                "%" => self.apply_unary("%"),
+                                "1/x" => self.apply_unary("1/x"),
+                                "x^2" => self.apply_unary("x^2"),
+                                "sqrt" => self.apply_unary("sqrt"),
+                                "=" => self.equals(),
+                                _ => {}
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            WmCalcMode::Scientific => {
+                let grid = [
+                    ["sin", "cos", "tan", "CE", "C"],
+                    ["pi", "e", "^", "sqrt", "/"],
+                    ["ln", "log", "x^2", "1/x", "*"],
+                    ["n!", "7", "8", "9", "-"],
+                    ["|x|", "4", "5", "6", "+"],
+                    ["+/-", "1", "2", "3", "="],
+                ];
+                let rows = 6;
+                let cols = 5;
+                let btn_w = (client.w - 16 - pad * (cols - 1)) / cols;
+                let btn_h = (avail_h - pad * (rows - 1)) / rows;
+
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let bx = client.x + 8 + c * (btn_w + pad);
+                        let by = key_start_y + r * (btn_h + pad);
+                        let br = Rect::new(bx, by, btn_w, btn_h);
+                        if point_in_rect(px, py, br.x, br.y, br.w, br.h) {
+                            let label = grid[r as usize][c as usize];
+                            match label {
+                                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => self.input_digit(label.as_bytes()[0]),
+                                "+/-" => self.toggle_sign(),
+                                "C" => self.clear(),
+                                "CE" => self.clear_entry(),
+                                "+" => self.apply_op(b'+'),
+                                "-" => self.apply_op(b'-'),
+                                "*" => self.apply_op(b'*'),
+                                "/" => self.apply_op(b'/'),
+                                "^" => self.apply_op(b'^'),
+                                "sqrt" => self.apply_unary("sqrt"),
+                                "x^2" => self.apply_unary("x^2"),
+                                "1/x" => self.apply_unary("1/x"),
+                                "n!" => self.apply_unary("fact"),
+                                "|x|" => self.apply_unary("abs"),
+                                "pi" => {
+                                    self.set_display_str("3.14159");
+                                    self.clear_on_next = true;
+                                }
+                                "e" => {
+                                    self.set_display_str("2.71828");
+                                    self.clear_on_next = true;
+                                }
+                                "=" => self.equals(),
+                                _ => {}
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            WmCalcMode::Programmer => {
+                let grid = [
+                    ["AND", "OR", "XOR", "NOT"],
+                    ["<<", ">>", "CE", "C"],
+                    ["A", "B", "7", "8"],
+                    ["C", "D", "4", "5"],
+                    ["E", "F", "1", "2"],
+                    ["HEX", "DEC", "0", "="],
+                ];
+                let rows = 6;
+                let cols = 4;
+                let btn_w = (client.w - 16 - pad * (cols - 1)) / cols;
+                let btn_h = (avail_h - pad * (rows - 1)) / rows;
+
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let bx = client.x + 8 + c * (btn_w + pad);
+                        let by = key_start_y + r * (btn_h + pad);
+                        let br = Rect::new(bx, by, btn_w, btn_h);
+                        if point_in_rect(px, py, br.x, br.y, br.w, br.h) {
+                            if r == 1 && c == 3 {
+                                self.clear();
+                                return;
+                            }
+                            let label = grid[r as usize][c as usize];
+                            match label {
+                                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+                                | "A" | "B" | "C" | "D" | "E" | "F" => self.input_digit(label.as_bytes()[0]),
+                                "CE" => self.clear_entry(),
+                                "AND" => self.apply_op(b'&'),
+                                "OR" => self.apply_op(b'|'),
+                                "XOR" => self.apply_op(b'X'),
+                                "NOT" => self.apply_unary("not"),
+                                "<<" => self.apply_op(b'<'),
+                                ">>" => self.apply_op(b'>'),
+                                "HEX" => {
+                                    let v = self.current_int();
+                                    self.prog_base = 0;
+                                    self.set_current_int(v);
+                                }
+                                "DEC" => {
+                                    let v = self.current_int();
+                                    self.prog_base = 1;
+                                    self.set_current_int(v);
+                                }
+                                "=" => self.equals(),
+                                _ => {}
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            WmCalcMode::History => {}
+        }
+    }
+}
+
 pub const TERM_MAX_LINES: usize = 28;
 pub const TERM_LINE_LEN: usize = 96;
 pub const TERM_INPUT_LEN: usize = 128;
@@ -1132,6 +2051,7 @@ impl WmTerminal {
                 self.push_line("  whoami     - Display active logged-in user credentials", Color::rgb(220, 230, 242));
                 self.push_line("  date       - Print date/time (flags: --tz, --24h, --12h, -u, --sync)", Color::rgb(220, 230, 242));
                 self.push_line("  cal        - Display calendar schedule & upcoming events (--events)", Color::rgb(220, 230, 242));
+                self.push_line("  calc <exp> - Evaluate math expression (e.g. calc 125 * 4, calc sqrt(144))", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -1339,6 +2259,96 @@ impl WmTerminal {
                     self.push_line("Usage: cal [--month | --events]", Color::rgb(88, 166, 255));
                 }
             }
+            "calc" | "calculator" => {
+                if rest.is_empty() || rest == "--help" || rest == "-h" {
+                    self.push_line("NovaOS Calculator (nova-calc) v2.0 - Math & Science Studio", Color::rgb(88, 166, 255));
+                    self.push_line("Usage: calc <expr>  (e.g. 'calc 125 * 4', 'calc 2 ^ 8', 'calc sqrt(144)')", Color::rgb(220, 230, 242));
+                    self.push_line("Supported ops: +, -, *, /, %, ^, sqrt(), abs()", Color::rgb(139, 148, 158));
+                } else {
+                    let trimmed_expr = rest.trim();
+                    let mut evaluated = None;
+
+                    if trimmed_expr.starts_with("sqrt(") && trimmed_expr.ends_with(')') {
+                        let inner = &trimmed_expr[5..trimmed_expr.len() - 1].trim();
+                        let v = parse_f64_from(inner.as_bytes());
+                        if v >= 0.0 {
+                            evaluated = Some(fast_sqrt64(v));
+                        }
+                    } else if trimmed_expr.starts_with("abs(") && trimmed_expr.ends_with(')') {
+                        let inner = &trimmed_expr[4..trimmed_expr.len() - 1].trim();
+                        let v = parse_f64_from(inner.as_bytes());
+                        evaluated = Some(if v < 0.0 { -v } else { v });
+                    } else {
+                        let bytes = trimmed_expr.as_bytes();
+                        let mut op_pos = None;
+                        let mut found_op = 0u8;
+
+                        for &target in &[b'+', b'-', b'*', b'/', b'%', b'^'] {
+                            for (idx, &b) in bytes.iter().enumerate() {
+                                if b == target && idx > 0 {
+                                    op_pos = Some(idx);
+                                    found_op = target;
+                                    break;
+                                }
+                            }
+                            if op_pos.is_some() {
+                                break;
+                            }
+                        }
+
+                        if let Some(pos) = op_pos {
+                            let left_str = trimmed_expr[..pos].trim();
+                            let right_str = trimmed_expr[pos + 1..].trim();
+                            let left = parse_f64_from(left_str.as_bytes());
+                            let right = parse_f64_from(right_str.as_bytes());
+
+                            match found_op {
+                                b'+' => evaluated = Some(left + right),
+                                b'-' => evaluated = Some(left - right),
+                                b'*' => evaluated = Some(left * right),
+                                b'/' => {
+                                    if right.abs() > 1e-12 {
+                                        evaluated = Some(left / right);
+                                    }
+                                }
+                                b'%' => {
+                                    if right.abs() > 1e-12 {
+                                        evaluated = Some(((left as i64) % (right as i64)) as f64);
+                                    }
+                                }
+                                b'^' => {
+                                    let exp = right as i32;
+                                    let mut r = 1.0;
+                                    for _ in 0..exp {
+                                        r *= left;
+                                    }
+                                    evaluated = Some(r);
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            if trimmed_expr == "pi" || trimmed_expr == "PI" {
+                                evaluated = Some(3.14159);
+                            } else if trimmed_expr == "e" || trimmed_expr == "E" {
+                                evaluated = Some(2.71828);
+                            } else {
+                                evaluated = Some(parse_f64_from(bytes));
+                            }
+                        }
+                    }
+
+                    if let Some(val) = evaluated {
+                        let mut res_buf = [0u8; 48];
+                        let mut off = 0;
+                        append_str("= ", &mut res_buf, &mut off);
+                        format_f64_into(val, &mut res_buf, &mut off);
+                        let s = core::str::from_utf8(&res_buf[..off]).unwrap_or("= 0");
+                        self.push_line(s, Color::rgb(63, 185, 80));
+                    } else {
+                        self.push_line("calc: math error or division by zero", Color::rgb(248, 81, 73));
+                    }
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -1419,6 +2429,7 @@ pub struct Wm {
     pub raw_rtc: ffi::RtcTime,
     pub calendar_open: bool,
     pub calendar_app: WmCalendarApp,
+    pub calc_app: WmCalcApp,
 }
 
 impl Wm {
@@ -1474,6 +2485,7 @@ impl Wm {
             raw_rtc: ffi::RtcTime::default(),
             calendar_open: false,
             calendar_app: WmCalendarApp::new(),
+            calc_app: WmCalcApp::new(),
         }
     }
 
@@ -1539,6 +2551,7 @@ impl Wm {
             raw_rtc: ffi::RtcTime::default(),
             calendar_open: false,
             calendar_app: WmCalendarApp::new(),
+            calc_app: WmCalcApp::new(),
         }
     }
 
@@ -1943,7 +2956,7 @@ impl Wm {
 
     /// Computes hit-tested Start Menu application card rectangle.
     pub fn start_menu_item_rect(&self, idx: usize) -> Option<Rect> {
-        if idx >= 6 {
+        if idx >= 8 {
             return None;
         }
         let sm = self.start_menu_rect();
@@ -2008,7 +3021,7 @@ impl Wm {
         if !self.start_menu_open {
             return None;
         }
-        for i in 0..6 {
+        for i in 0..8 {
             if let Some(r) = self.start_menu_item_rect(i) {
                 if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
                     return Some(i);
@@ -2562,9 +3575,11 @@ impl Wm {
                         0 => 1, // Terminal
                         1 => 2, // Files
                         2 => 3, // Editor
-                        3 => 6, // Calendar
-                        4 => 5, // Settings
-                        _ => 4, // Software Store
+                        3 => 7, // Calculator
+                        4 => 6, // Calendar
+                        5 => 5, // Settings
+                        6 => 4, // Software Store
+                        _ => 0, // Diagnostics
                     };
                     self.launch_or_restore(target_app);
                     self.start_menu_open = false;
@@ -2711,6 +3726,12 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.calendar_app.handle_click(px, py, client);
                 }
+            } else if w.label == 7 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.calc_app.handle_click(px, py, client);
+                }
             }
             return;
         }
@@ -2837,6 +3858,8 @@ impl Wm {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 6 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_calendar_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.calendar_app, &palette);
+                } else if w.label == 7 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_calc_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.calc_app, &palette);
                 }
             }
 
@@ -2895,6 +3918,7 @@ impl Wm {
                     4 => "Software Store - Packages",
                     5 => "Settings - Control Panel",
                     6 => "Calendar - NovaOS Schedule & Events",
+                    7 => "Calculator - NovaOS Math Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -3117,17 +4141,19 @@ impl Wm {
         let sec_y = srch_y + 30;
         ui::font::draw_text_font(s, sm.x + 18, sec_y, "PINNED APPLICATIONS", Color::rgba(255, 255, 255, 120), &font_sm);
 
-        // 6. 6 App Cards (2 columns x 3 rows)
-        let apps: [(&str, &str, u8); 6] = [
+        // 6. 8 App Cards (2 columns x 4 rows)
+        let apps: [(&str, &str, u8); 8] = [
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Scratchpad", "Code Editor", 3),
+            ("Calculator", "Math Studio", 7),
             ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
             ("App Store", "Nova Packages", 4),
+            ("Diagnostics", "System Status", 0),
         ];
 
-        for i in 0..6 {
+        for i in 0..8 {
             if let Some(card_rect) = self.start_menu_item_rect(i) {
                 let is_hov = self.hovered_start_item == Some(i);
                 let (title, desc, icon_type) = apps[i];
@@ -3611,6 +4637,53 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             s.fill_rect(Rect::new(dot_cx - 1, dot_y, 3, 3), Color::rgb(139, 92, 246));
             s.fill_rect(Rect::new(dot_cx + 4, dot_y, 3, 3), Color::rgb(245, 158, 11));
         }
+        7 => {
+            // 7: Calculator (Realistic 3D matte slate chassis, LCD screen, warm amber operator keys)
+            let calc_w = (size * 82) / 100;
+            let calc_h = (size * 86) / 100;
+            let calc_x = x + (size - calc_w) / 2;
+            let calc_y = y + (size - calc_h) / 2;
+
+            // Chassis drop shadow
+            s.fill_rect(Rect::new(calc_x + 2, calc_y + 2, calc_w, calc_h), Color::rgba(0, 0, 0, 50));
+
+            // Main chassis (Obsidian / Cosmic Slate)
+            ui::draw::draw_rounded_rect(s, Rect::new(calc_x, calc_y, calc_w, calc_h), 4, Color::rgb(30, 36, 52));
+            ui::draw::draw_rect_outline(s, Rect::new(calc_x, calc_y, calc_w, calc_h), 1, Color::rgb(56, 66, 94));
+
+            // Digital LCD readout screen at top
+            let scr_h = (calc_h * 26) / 100;
+            let scr_w = calc_w - 6;
+            ui::draw::draw_rounded_rect(s, Rect::new(calc_x + 3, calc_y + 3, scr_w, scr_h), 2, Color::rgb(10, 12, 18));
+            ui::draw::draw_rect_outline(s, Rect::new(calc_x + 3, calc_y + 3, scr_w, scr_h), 1, Color::rgb(24, 30, 44));
+
+            // LCD numbers readout
+            let font_sm = Font::small();
+            ui::font::draw_text_font(s, calc_x + scr_w - 18, calc_y + 4, "123", Color::rgb(0, 212, 255), &font_sm);
+
+            // Tactile keypad grid: 3 rows x 3 columns
+            let k_y = calc_y + scr_h + 5;
+            let k_pad = 2;
+            let btn_w = (calc_w - 6 - k_pad * 2) / 3;
+            let btn_h = (calc_h - scr_h - 10 - k_pad * 2) / 3;
+
+            for r in 0..3 {
+                for c in 0..3 {
+                    let bx = calc_x + 3 + c * (btn_w + k_pad);
+                    let by = k_y + r * (btn_h + k_pad);
+                    let is_op = c == 2;
+                    let is_eq = r == 2 && c == 2;
+                    let bg = if is_eq {
+                        Color::rgb(234, 88, 12)  // Ubuntu Auburn '='
+                    } else if is_op {
+                        Color::rgb(217, 119, 6)  // macOS Warm Amber '+'
+                    } else {
+                        Color::rgb(45, 53, 76)   // Slate digit
+                    };
+                    ui::draw::draw_rounded_rect(s, Rect::new(bx, by, btn_w, btn_h), 1, bg);
+                }
+            }
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -3693,6 +4766,17 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.put_pixel(x + 3, y + 7, Color::rgb(14, 165, 233));
             s.put_pixel(x + 6, y + 7, Color::rgb(245, 158, 11));
             s.put_pixel(x + 9, y + 7, Color::rgb(34, 197, 94));
+        }
+        7 => {
+            // Calculator icon: slate chassis, cyan LCD line, warm amber operator dot
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(30, 36, 52));
+            s.fill_rect(Rect::new(x + 2, y + 2, 8, 2), Color::rgb(0, 212, 255));
+            s.put_pixel(x + 3, y + 6, Color::rgb(203, 213, 225));
+            s.put_pixel(x + 5, y + 6, Color::rgb(203, 213, 225));
+            s.put_pixel(x + 8, y + 6, Color::rgb(217, 119, 6));
+            s.put_pixel(x + 3, y + 8, Color::rgb(203, 213, 225));
+            s.put_pixel(x + 5, y + 8, Color::rgb(203, 213, 225));
+            s.put_pixel(x + 8, y + 8, Color::rgb(234, 88, 12));
         }
         _ => {
             // System gear icon
@@ -4238,6 +5322,261 @@ fn draw_calendar_app_client_body<S: Surface + ?Sized>(
                     ey += 32;
                 }
             }
+        }
+    }
+}
+
+/// Renders the complete, interactive NovaOS Calculator Application client body inside Window 7.
+/// Synthesizes Apple Calculator (macOS), Windows 11 Fluent Calculator, and Ubuntu GNOME Calculator.
+fn draw_calc_app_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    calc: &WmCalcApp,
+    palette: &ThemePalette,
+) {
+    let font_sm = Font::small();
+    let font_reg = Font::regular();
+
+    // 1. Cosmic Slate background
+    s.fill_rect(client, Color::rgb(19, 22, 34));
+
+    // 2. Mode Selector Pill Bar
+    let mode_bar_h = 26;
+    s.fill_rect(Rect::new(client.x, client.y, client.w, mode_bar_h), Color::rgb(26, 30, 46));
+    s.fill_rect(Rect::new(client.x, client.y + mode_bar_h - 1, client.w, 1), Color::rgb(40, 48, 72));
+
+    let modes = [WmCalcMode::Standard, WmCalcMode::Scientific, WmCalcMode::Programmer, WmCalcMode::History];
+    let pad = 4;
+    let tab_w = (client.w - pad * 2) / 4;
+    for (i, m) in modes.iter().enumerate() {
+        let tx = client.x + pad + i as i32 * tab_w;
+        let tr = Rect::new(tx, client.y + 2, tab_w - 4, mode_bar_h - 4);
+        let is_act = calc.mode == *m;
+        let tab_col = if is_act { Color::rgb(124, 58, 237) } else { Color::rgb(32, 38, 56) };
+        ui::draw::draw_rounded_rect(s, tr, 4, tab_col);
+        ui::draw::draw_rect_outline(s, tr, 1, Color::rgb(56, 66, 94));
+
+        let name = m.name();
+        let name_sz = font_sm.measure_str(name);
+        let nx = tr.x + (tr.w - name_sz.w) / 2;
+        let ny = tr.y + (tr.h - name_sz.h) / 2;
+        let text_col = if is_act { Color::WHITE } else { palette.text_muted };
+        ui::font::draw_text_font(s, nx, ny, name, text_col, &font_sm);
+    }
+
+    // 3. Digital LCD Screen
+    let screen_h = if calc.mode == WmCalcMode::Programmer { 64 } else { 48 };
+    let screen_y = client.y + mode_bar_h + 4;
+    let screen_rect = Rect::new(client.x + 8, screen_y, client.w - 16, screen_h);
+    ui::draw::draw_rounded_rect(s, screen_rect, 6, Color::rgb(12, 14, 22));
+    ui::draw::draw_rect_outline(s, screen_rect, 1, Color::rgb(40, 48, 72));
+
+    // Memory badge [M]
+    if calc.has_memory {
+        let m_rect = Rect::new(screen_rect.x + 6, screen_rect.y + 6, 18, 14);
+        ui::draw::draw_rounded_rect(s, m_rect, 3, Color::rgb(124, 58, 237));
+        ui::font::draw_text_font(s, m_rect.x + 4, m_rect.y + 1, "M", Color::WHITE, &font_sm);
+    }
+
+    // Mode badge in Programmer
+    if calc.mode == WmCalcMode::Programmer {
+        let base_name = match calc.prog_base {
+            0 => "HEX",
+            1 => "DEC",
+            2 => "OCT",
+            _ => "BIN",
+        };
+        ui::font::draw_text_font(s, screen_rect.x + 28, screen_rect.y + 6, base_name, Color::rgb(245, 158, 11), &font_sm);
+    }
+
+    // Top Expression line
+    let expr_str = calc.expr_str();
+    if !expr_str.is_empty() {
+        let e_sz = font_sm.measure_str(expr_str);
+        let ex = (screen_rect.right() - e_sz.w - 8).max(screen_rect.x + 50);
+        ui::font::draw_text_font(s, ex, screen_rect.y + 5, expr_str, palette.text_muted, &font_sm);
+    }
+
+    // Main readout digits (macOS bold high-contrast display)
+    let disp_str = calc.display_str();
+    let d_sz = font_reg.measure_str(disp_str);
+    let dx = (screen_rect.right() - d_sz.w - 10).max(screen_rect.x + 8);
+    let dy = if calc.mode == WmCalcMode::Programmer { screen_rect.y + 20 } else { screen_rect.y + 22 };
+    ui::font::draw_text_font(s, dx, dy, disp_str, Color::WHITE, &font_reg);
+
+    // Live programmer multi-base conversions
+    if calc.mode == WmCalcMode::Programmer {
+        let iv = calc.current_int();
+        let mut hex_buf = [0u8; 24];
+        let mut h_off = 0;
+        append_str("HEX: ", &mut hex_buf, &mut h_off);
+        let mut h_val = [0u8; 16];
+        let mut hv_off = 0;
+        format_u32(iv as u32, &mut h_val, &mut hv_off);
+        append_str(core::str::from_utf8(&h_val[..hv_off]).unwrap_or("0"), &mut hex_buf, &mut h_off);
+        let h_str = core::str::from_utf8(&hex_buf[..h_off]).unwrap_or("");
+        ui::font::draw_text_font(s, screen_rect.x + 8, screen_rect.y + 44, h_str, palette.text_muted, &font_sm);
+
+        let mut dec_buf = [0u8; 24];
+        let mut d_off = 0;
+        append_str("DEC: ", &mut dec_buf, &mut d_off);
+        format_u32(iv as u32, &mut dec_buf, &mut d_off);
+        let dec_str = core::str::from_utf8(&dec_buf[..d_off]).unwrap_or("");
+        ui::font::draw_text_font(s, screen_rect.x + (screen_rect.w / 2), screen_rect.y + 44, dec_str, palette.text_muted, &font_sm);
+    }
+
+    // 4. Memory Bar or History
+    let mut key_start_y = screen_y + screen_h + 4;
+
+    if calc.mode == WmCalcMode::History {
+        let h_rect = Rect::new(client.x + 8, key_start_y, client.w - 16, client.bottom() - key_start_y - 6);
+        ui::draw::draw_rounded_rect(s, h_rect, 6, Color::rgb(12, 14, 22));
+        ui::draw::draw_rect_outline(s, h_rect, 1, Color::rgb(40, 48, 72));
+
+        ui::font::draw_text_font(s, h_rect.x + 10, h_rect.y + 6, "Calculation History Tape", Color::rgb(245, 158, 11), &font_sm);
+
+        let clr_btn = Rect::new(h_rect.right() - 86, h_rect.y + 4, 78, 18);
+        ui::draw::draw_rounded_rect(s, clr_btn, 3, Color::rgb(45, 53, 76));
+        ui::draw::draw_rect_outline(s, clr_btn, 1, Color::rgb(56, 66, 94));
+        ui::font::draw_text_font(s, clr_btn.x + 6, clr_btn.y + 2, "Clear History", Color::WHITE, &font_sm);
+
+        if calc.history_count == 0 {
+            ui::font::draw_text_font(s, h_rect.x + 12, h_rect.y + 36, "There are no calculations in history yet.", palette.text_muted, &font_sm);
+            return;
+        }
+
+        let item_h = 32;
+        let mut cur_y = h_rect.y + 28;
+        for i in (0..calc.history_count).rev() {
+            if cur_y + item_h > h_rect.bottom() {
+                break;
+            }
+            let item_rect = Rect::new(h_rect.x + 6, cur_y, h_rect.w - 12, item_h - 4);
+            ui::draw::draw_rounded_rect(s, item_rect, 4, Color::rgb(32, 38, 56));
+            ui::draw::draw_rect_outline(s, item_rect, 1, Color::rgb(56, 66, 94));
+
+            let e_str = core::str::from_utf8(&calc.history_expr[i][..calc.history_expr_len[i]]).unwrap_or("");
+            let r_str = core::str::from_utf8(&calc.history_res[i][..calc.history_res_len[i]]).unwrap_or("");
+
+            ui::font::draw_text_font(s, item_rect.x + 8, item_rect.y + 6, e_str, palette.text_muted, &font_sm);
+
+            let r_sz = font_reg.measure_str(r_str);
+            ui::font::draw_text_font(s, item_rect.right() - r_sz.w - 8, item_rect.y + 4, r_str, Color::WHITE, &font_reg);
+
+            cur_y += item_h;
+        }
+        return;
+    }
+
+    if calc.mode == WmCalcMode::Standard || calc.mode == WmCalcMode::Scientific {
+        let mem_h = 20;
+        let btns = ["MC", "MR", "M+", "M-", "MS"];
+        let btn_w = (client.w - 16) / 5;
+        for (i, &b) in btns.iter().enumerate() {
+            let bx = client.x + 8 + i as i32 * btn_w;
+            let br = Rect::new(bx, key_start_y, btn_w - 4, mem_h);
+            ui::draw::draw_rounded_rect(s, br, 3, Color::rgb(45, 53, 76));
+            ui::draw::draw_rect_outline(s, br, 1, Color::rgb(56, 66, 94));
+
+            let b_sz = font_sm.measure_str(b);
+            ui::font::draw_text_font(s, br.x + (br.w - b_sz.w) / 2, br.y + (br.h - b_sz.h) / 2, b, Color::rgb(207, 216, 234), &font_sm);
+        }
+        key_start_y += mem_h + 4;
+    }
+
+    // 5. Keypad Grid
+    let pad = 4;
+    let avail_h = client.bottom() - key_start_y - 6;
+    if avail_h <= 0 {
+        return;
+    }
+
+    let is_sci = calc.mode == WmCalcMode::Scientific;
+    let is_prog = calc.mode == WmCalcMode::Programmer;
+    let cols = if is_sci { 5 } else { 4 };
+    let rows = 6;
+    let btn_w = (client.w - 16 - pad * (cols - 1)) / cols;
+    let btn_h = (avail_h - pad * (rows - 1)) / rows;
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let bx = client.x + 8 + c * (btn_w + pad);
+            let by = key_start_y + r * (btn_h + pad);
+            let br = Rect::new(bx, by, btn_w, btn_h);
+
+            let label = if is_sci {
+                let grid = [
+                    ["sin", "cos", "tan", "CE", "C"],
+                    ["pi", "e", "^", "sqrt", "/"],
+                    ["ln", "log", "x^2", "1/x", "*"],
+                    ["n!", "7", "8", "9", "-"],
+                    ["|x|", "4", "5", "6", "+"],
+                    ["+/-", "1", "2", "3", "="],
+                ];
+                grid[r as usize][c as usize]
+            } else if is_prog {
+                let grid = [
+                    ["AND", "OR", "XOR", "NOT"],
+                    ["<<", ">>", "CE", "C"],
+                    ["A", "B", "7", "8"],
+                    ["C", "D", "4", "5"],
+                    ["E", "F", "1", "2"],
+                    ["HEX", "DEC", "0", "="],
+                ];
+                grid[r as usize][c as usize]
+            } else {
+                let grid = [
+                    ["%", "CE", "C", "del"],
+                    ["1/x", "x^2", "sqrt", "/"],
+                    ["7", "8", "9", "*"],
+                    ["4", "5", "6", "-"],
+                    ["1", "2", "3", "+"],
+                    ["+/-", "0", ".", "="],
+                ];
+                grid[r as usize][c as usize]
+            };
+
+            let is_op = label == "/" || label == "*" || label == "-" || label == "+" || label == "^";
+            let is_equals = label == "=";
+            let is_digit = label.as_bytes().iter().all(|&b| (b >= b'0' && b <= b'9') || b == b'.' || b == b'+' || b == b'-');
+            let is_hex = label.len() == 1 && (label >= "A" && label <= "F");
+
+            let is_active_op = match calc.pending_op {
+                b'+' => label == "+",
+                b'-' => label == "-",
+                b'*' => label == "*",
+                b'/' => label == "/",
+                b'^' => label == "^",
+                _ => false,
+            };
+
+            let bg_col = if is_active_op {
+                Color::rgb(245, 158, 11)
+            } else if is_equals {
+                Color::rgb(234, 88, 12)
+            } else if is_op {
+                Color::rgb(217, 119, 6)
+            } else if is_hex {
+                Color::rgb(124, 58, 237)
+            } else if is_digit {
+                Color::rgb(32, 38, 56)
+            } else {
+                Color::rgb(45, 53, 76)
+            };
+
+            ui::draw::draw_rounded_rect(s, br, 4, bg_col);
+            ui::draw::draw_rect_outline(s, br, 1, Color::rgb(56, 66, 94));
+
+            let text_col = if is_op || is_equals || is_active_op || is_hex {
+                Color::WHITE
+            } else if is_digit {
+                Color::rgb(241, 245, 249)
+            } else {
+                Color::rgb(207, 216, 234)
+            };
+
+            let l_sz = font_sm.measure_str(label);
+            ui::font::draw_text_font(s, br.x + (br.w - l_sz.w) / 2, br.y + (br.h - l_sz.h) / 2, label, text_col, &font_sm);
         }
     }
 }
@@ -5643,7 +6982,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 7);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 8);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -5956,5 +7295,103 @@ mod tests {
         wm.on_key(10);
         let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l2.contains("Thanksgiving") || l2.contains("NovaOS"));
+    }
+
+    #[test]
+    fn test_wm_calc_app_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial Calculator state
+        assert_eq!(wm.calc_app.display_str(), "0");
+        assert_eq!(wm.calc_app.mode, WmCalcMode::Standard);
+        assert_eq!(wm.calc_app.history_count, 2);
+
+        // 2. Arithmetic: 125 + 75 = 200
+        wm.calc_app.input_digit(b'1');
+        wm.calc_app.input_digit(b'2');
+        wm.calc_app.input_digit(b'5');
+        assert_eq!(wm.calc_app.display_str(), "125");
+        wm.calc_app.apply_op(b'+');
+        wm.calc_app.input_digit(b'7');
+        wm.calc_app.input_digit(b'5');
+        assert_eq!(wm.calc_app.display_str(), "75");
+        wm.calc_app.equals();
+        assert_eq!(wm.calc_app.display_str(), "200");
+
+        // 3. Subtraction & Sign Toggle: 200 - 350 = -150
+        wm.calc_app.apply_op(b'-');
+        wm.calc_app.input_digit(b'3');
+        wm.calc_app.input_digit(b'5');
+        wm.calc_app.input_digit(b'0');
+        wm.calc_app.equals();
+        assert_eq!(wm.calc_app.display_str(), "-150");
+        wm.calc_app.toggle_sign();
+        assert_eq!(wm.calc_app.display_str(), "150");
+
+        // 4. Unary operations: sqrt(144) = 12, sqr(12) = 144
+        wm.calc_app.clear();
+        wm.calc_app.input_digit(b'1');
+        wm.calc_app.input_digit(b'4');
+        wm.calc_app.input_digit(b'4');
+        wm.calc_app.apply_unary("sqrt");
+        assert_eq!(wm.calc_app.display_str(), "12");
+        wm.calc_app.apply_unary("x^2");
+        assert_eq!(wm.calc_app.display_str(), "144");
+
+        // 5. Memory Management: Store 50, Add 25, Recall -> 75
+        wm.calc_app.clear();
+        wm.calc_app.input_digit(b'5');
+        wm.calc_app.input_digit(b'0');
+        wm.calc_app.memory_store();
+        assert!(wm.calc_app.has_memory);
+        wm.calc_app.input_digit(b'2');
+        wm.calc_app.input_digit(b'5');
+        wm.calc_app.memory_add();
+        wm.calc_app.clear();
+        wm.calc_app.memory_recall();
+        assert_eq!(wm.calc_app.display_str(), "75");
+        wm.calc_app.memory_clear();
+        assert!(!wm.calc_app.has_memory);
+
+        // 6. Programmer Mode: Hex and Dec conversions
+        wm.calc_app.set_mode(WmCalcMode::Programmer);
+        wm.calc_app.clear();
+        wm.calc_app.prog_base = 0; // Hex
+        wm.calc_app.input_digit(b'F');
+        wm.calc_app.input_digit(b'F');
+        assert_eq!(wm.calc_app.current_int(), 255);
+        wm.calc_app.prog_base = 1; // Dec
+        wm.calc_app.set_current_int(255);
+        assert_eq!(wm.calc_app.display_str(), "255");
+
+        // 7. Desktop Icon Launch: Click Desktop Icon 4 (Calculator)
+        let calc_icon = wm.desktop_icon_rect(4).expect("Calculator desktop icon should exist");
+        wm.on_left_press(calc_icon.x + 10, calc_icon.y + 10);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 7, "Clicking Calculator desktop icon should launch window 7");
+
+        // 8. Interactive Click inside Window 7: Click mode pill for Scientific
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+        let tab_w = (client.w - 8) / 4;
+        // Scientific is tab index 1
+        wm.on_left_press(client.x + 4 + tab_w + 10, client.y + 10);
+        assert_eq!(wm.calc_app.mode, WmCalcMode::Scientific);
+
+        // 9. Shell terminal 'calc 25 * 4' command
+        wm.raise(0);
+        for b in b"calc 25 * 4" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("100"), "Terminal calc 25 * 4 should output 100, got: {}", l1);
+
+        for b in b"calc sqrt(144)" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("12"), "Terminal calc sqrt(144) should output 12, got: {}", l2);
     }
 }

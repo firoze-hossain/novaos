@@ -831,6 +831,14 @@ nova-settings-test:
 nova-calendar-test:
 	@sh tools/tests/run_nova_calendar_tests.sh
 
+# Month 5 - Desktop Experience: Unified Calculator & Math Studio (nova-calc - macOS + Windows 11 + Ubuntu Synthesized)
+# suite on the host: Standard, Scientific, Programmer (Hex/Dec/Oct/Bin), History Tape modes,
+# recursive-descent math parser, bitwise logic, memory store, and BufferSurface rendering.
+nova-calc-test:
+	@sh tools/tests/run_nova_calc_tests.sh
+
+calc-test: nova-calc-test
+
 # Month 5 - Desktop Experience: Graphical Software Store & Package Manager (nova-store - Ubuntu + macOS Synthesized)
 # suite on the host: 7 categories, real-time search, Ed25519 & SHA-256 signature verification,
 # sandbox permission declarations, dependency tree resolution & uninstallation safety,
@@ -1056,4 +1064,4 @@ install-image: $(ISO_FILE) $(DISK_IMG)
 test-custom-boot:
 	./tools/custom-boot/test-custom-boot.sh
 
-.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-calendar-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security test-security-v2 security-v2-test test-matrix release-signoff release release-2.0 test-release-packaging test-sdk sdk-test test-hidpi hidpi-test test-cloud-init cloud-init-test test-installer nova-installer-test test-recovery recovery-test clean setup check-prereqs help install-image test-custom-boot
+.PHONY: all run debug test libc-test fb-test virgl-test test-3d shm-test msg-test audio-test rlimit-test mac-test fw-test klog-test actmon-test pkgrepo-test ui-test novainit-test wm-test files-test settings-test term-test edit-test store-test login-test installer-test crashrep-test firstrun-test paging64-test uefi-test syscall64-test vmm-test sched-test nvme2-test xhci-test vfs-test novafs-test uring-test pagecache-test posix-test drm-test virgl3d-test dmabuf-test compositor-test nova-ui-test nova-shell-test nova-search-test nova-files-test nova-term-test novash-test nova-settings-test nova-calendar-test nova-calc-test calc-test nova-store-test nova-edit-test nova-bundle-test hda-test kernel-server server-profile-test namespace-test cgroups-test novactl-test enterprise-tcp-test wireguard-test novafw-test novasshd-test novad-test novamon-test raid-test novaupdate-test ui-qa test-editions test-security test-security-v2 security-v2-test test-matrix release-signoff release release-2.0 test-release-packaging test-sdk sdk-test test-hidpi hidpi-test test-cloud-init cloud-init-test test-installer nova-installer-test test-recovery recovery-test clean setup check-prereqs help install-image test-custom-boot
