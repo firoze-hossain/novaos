@@ -246,7 +246,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 10] = [
     DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks", app_id: 6, icon_type: 6 },
     DesktopIconSpec { label: "Calculator",  sublabel: "Math Studio",    app_id: 7, icon_type: 7 },
     DesktopIconSpec { label: "Aero Web",    sublabel: "Browser",        app_id: 8, icon_type: 8 },
-    DesktopIconSpec { label: "Nova Player", sublabel: "Media Studio",   app_id: 9, icon_type: 9 },
+    DesktopIconSpec { label: "Spectra",     sublabel: "Media Studio",   app_id: 9, icon_type: 9 },
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
@@ -2346,7 +2346,7 @@ impl WmTerminal {
                 self.push_line("  cal        - Display calendar schedule & upcoming events (--events)", Color::rgb(220, 230, 242));
                 self.push_line("  calc <exp> - Evaluate math expression (e.g. calc 125 * 4, calc sqrt(144))", Color::rgb(220, 230, 242));
                 self.push_line("  browser    - Launch Aero Web Browser (or 'aero <url>', '--shields')", Color::rgb(220, 230, 242));
-                self.push_line("  player     - Launch Nova Media Player (or 'player <file>', '--info')", Color::rgb(220, 230, 242));
+                self.push_line("  spectra    - Launch Spectra Media Studio (or 'spectra <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -2665,23 +2665,23 @@ impl WmTerminal {
                     self.push_line("[OK] 200 OK - Aero Engine rendered frame (Shields: Protected)", Color::rgb(240, 246, 252));
                 }
             }
-            "player" | "media" | "vlc" => {
+            "spectra" | "player" | "media" | "vlc" => {
                 if rest.is_empty() || rest == "--help" || rest == "-h" {
-                    self.push_line("Nova Player v1.0.0 (Pure Rust Media Engine)", Color::rgb(56, 189, 248));
+                    self.push_line("Spectra v1.0.0 (Pure Rust Media Engine)", Color::rgb(56, 189, 248));
                     self.push_line("NovaOS Default Media Player: 4K UHD, 8K HDR, 32-Band Equalizer", Color::rgb(88, 166, 255));
-                    self.push_line("Usage: player [file | --info | --visualizer | --version]", Color::rgb(220, 230, 242));
-                    self.push_line("Active Media: video/cyberpunk_metropolis_4k.mkv (4K UHD 60 FPS)", Color::rgb(63, 185, 80));
+                    self.push_line("Usage: spectra [file | --info | --visualizer | --version]", Color::rgb(220, 230, 242));
+                    self.push_line("Active Media: video/synthetic_skyline_4k.mkv (4K UHD 60 FPS)", Color::rgb(63, 185, 80));
                 } else if rest == "--info" || rest == "-i" {
-                    self.push_line("Nova Player Media Telemetry & Codec Inspector:", Color::rgb(56, 189, 248));
+                    self.push_line("Spectra Media Telemetry & Codec Inspector:", Color::rgb(56, 189, 248));
                     self.push_line("  * Video Pipeline: 4K UHD (3840x2160) @ 60 FPS", Color::rgb(63, 185, 80));
                     self.push_line("  * Hardware Scaling: Bilinear Multi-Resolution Letterbox", Color::rgb(56, 189, 248));
                     self.push_line("  * Codecs: H.264/AVC, AV1 8K, VP9, FLAC 24/96, MP3 320k", Color::rgb(74, 222, 128));
                     self.push_line("  * Audio Equalizer: 32-Band Dynamic Spectrum (Boost: 125%)", Color::rgb(88, 166, 255));
                 } else if rest == "--version" || rest == "-v" {
-                    self.push_line("Nova Player 1.0.0 (pc-novaos-elf, Pure Rust Engine)", Color::rgb(88, 166, 255));
-                    self.push_line("Architecture: nova-player-core + nova-player-ui (Zero C/C++, Zero FFmpeg)", Color::rgb(220, 230, 242));
+                    self.push_line("Spectra 1.0.0 (pc-novaos-elf, Pure Rust Engine)", Color::rgb(88, 166, 255));
+                    self.push_line("Architecture: spectra-core + spectra-ui (Zero C/C++, Zero FFmpeg)", Color::rgb(220, 230, 242));
                 } else {
-                    self.push_line("Loading media into Nova Player:", Color::rgb(88, 166, 255));
+                    self.push_line("Loading media into Spectra:", Color::rgb(88, 166, 255));
                     self.push_line(rest, Color::rgb(63, 185, 80));
                     self.push_line("[OK] Stream format demuxed: 4K UHD @ 60 FPS (Audio: Stereo PCM 48kHz)", Color::rgb(240, 246, 252));
                 }
@@ -4279,7 +4279,7 @@ impl Wm {
                     6 => "Calendar - NovaOS Schedule & Events",
                     7 => "Calculator - NovaOS Math Studio",
                     8 => "Aero Browser - Fast & Private Web",
-                    9 => "Nova Player - Ultra HD Media Studio",
+                    9 => "Spectra - Ultra HD Media Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -4507,7 +4507,7 @@ impl Wm {
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Aero Browser", "Fast Web Engine", 8),
-            ("Nova Player", "Ultra HD Media", 9),
+            ("Spectra", "Ultra HD Media", 9),
             ("Calculator", "Math Studio", 7),
             ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
@@ -6192,7 +6192,7 @@ fn draw_player_client_body<S: Surface + ?Sized>(
 
     // Track metadata
     let tracks: [(&str, &str, &str, &str); 4] = [
-        ("Cyberpunk Metropolis 2077", "4K UHD 60 FPS", "AV1 HDR10+", "03:00"),
+        ("Synthetic Skyline 4K", "4K UHD 60 FPS", "AV1 HDR10+", "03:00"),
         ("Deep Space Accretion Disk", "8K FUHD 60 FPS", "HEVC 10-Bit", "04:15"),
         ("Ocean Aurora Borealis", "1080p 60 FPS", "VP9 Pro", "02:45"),
         ("Synthwave Sunset Overdrive", "FLAC 24/96", "Hi-Res Audio", "03:30"),
@@ -8336,11 +8336,12 @@ mod tests {
         wm.player_app.toggle_playlist();
         assert!(!wm.player_app.show_playlist);
 
-        // 3. Launch via Desktop Shortcut 6 (Nova Player)
-        let player_icon = wm.desktop_icon_rect(6).expect("Nova Player desktop shortcut should exist");
+        // 3. Launch via Desktop Shortcut 6 (Spectra)
+        assert_eq!(DESKTOP_SHORTCUTS[6].label, "Spectra");
+        let player_icon = wm.desktop_icon_rect(6).expect("Spectra desktop shortcut should exist");
         wm.on_left_press(player_icon.x + 10, player_icon.y + 10);
         let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
-        assert_eq!(wm.windows[top_win_idx].label, 9, "Clicking player desktop icon should launch window 9");
+        assert_eq!(wm.windows[top_win_idx].label, 9, "Clicking Spectra desktop icon should launch window 9");
 
         // 4. Interactive clicks inside window 9
         let w = &wm.windows[top_win_idx];
@@ -8381,12 +8382,12 @@ mod tests {
         let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l1.contains("Equalizer") || l1.contains("32-Band"), "Terminal player --info output: {}", l1);
 
-        for b in b"player --version" {
+        for b in b"spectra --version" {
             wm.on_key(*b as i32);
         }
         wm.on_key(10);
         let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
-        assert!(l2.contains("Pure Rust Engine") || l2.contains("nova-player-core"), "Terminal player --version output: {}", l2);
+        assert!(l2.contains("Pure Rust Engine") || l2.contains("spectra-core"), "Terminal spectra --version output: {}", l2);
 
         for b in b"player movie.mkv" {
             wm.on_key(*b as i32);
