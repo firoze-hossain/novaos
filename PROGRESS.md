@@ -11630,6 +11630,29 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - `make test-editions`: All 48 partition & package checks passed.
    - `make test-64bit`: 100% 64-bit Long Mode & dual-architecture checks passed.
 
+## Phase 102 - Window Manager Frame Presentation Hardening: Immediate Pre-Loop Frame Present
+
+**Status: Complete.** Diagnosed and resolved black screen when launching `wm` from shell in QEMU.
+
+### Root Cause Analysis:
+1. When `wm` acquired the VBE display via `sys_fb_acquire`, the kernel VBE driver (`kernel/drivers/video/fb.c:110`) explicitly cleared the linear framebuffer to zero (black) before switching video modes.
+2. The initial desktop chrome was only rendered and presented inside the interactive event loop (`loop { ... }`) after polling keyboard input (`sys_read_key`) and mouse state (`sys_mouse_read`).
+3. If input polling or process scheduling delayed the first iteration, or if compiler optimization reordered stack frame variables during the first render pass, the display remained pure black indefinitely.
+
+### Key Fixes:
+1. **Immediate Initial Frame Present (`userland/wm-rs/wm.rs`)**:
+   - Added an explicit pre-loop frame render and `sys_fb_present(&present_req)` immediately after display acquisition, window layout positioning, and RTC synchronization.
+   - Guarantees the full desktop, wallpaper, taskbar, dock icons, and in-window terminal are presented to the screen on frame 0 before the interactive event loop begins polling input.
+2. **Synchronized Release Fixtures & Disk Images**:
+   - Recompiled `tools/fixtures/WM.ELF`, `tools/fixtures/CALC.ELF`, and `tools/fixtures/CALENDAR.ELF`.
+   - Rebuilt `disk.img` and `disk-server.img`.
+3. **Automated Verification**:
+   - Verified interactive boot in QEMU: screen renders 785,958 non-zero pixels (99.94% coverage, 280 unique colors) with 0 black screen occurrences.
+   - Interactive typing test in NovaOS terminal confirmed responsive keyboard input and continuous screen redraws (1,451 pixels updated per command).
+   - `make test`: All 344 boot assertions passed.
+   - `make test-server`: All 272 server assertions passed.
+   - `tools/tests/run_ui_qa_pass.sh`: All 15/15 UI test suites passed.
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-

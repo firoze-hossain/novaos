@@ -6489,6 +6489,24 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     wm.raise(0);
     wm.sync_rtc();
 
+    // Render and present the initial frame immediately so the screen is never left black
+    {
+        let pixel_slice = unsafe { core::slice::from_raw_parts_mut(pixels_ptr, total_pixels) };
+        let mut surface = ui::draw::BufferSurface32::new_with_pitch(pixel_slice, screen_w, screen_h, screen_w);
+        wm.render(&mut surface);
+        let present_req = ffi::NovaFbPresent {
+            handle: fb_handle,
+            src_x: 0,
+            src_y: 0,
+            width: screen_w,
+            height: screen_h,
+            dst_x: 0,
+            dst_y: 0,
+            flags: 0,
+        };
+        unsafe { ffi::sys_fb_present(&present_req) };
+    }
+
     let mut frame_count: u32 = 0;
     loop {
         frame_count = frame_count.wrapping_add(1);
