@@ -4538,6 +4538,7 @@ fn mouse(dx: i32, dy: i32, left: bool) -> ffi::MouseState {
 }
 
 /// Verification suite checking window management logic and framebuffer surface rendering.
+#[inline(never)]
 pub fn run_selftest() -> i32 {
     let mut code = 0;
     let mut wm = Wm::new();
@@ -4678,13 +4679,13 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 8 (Month 2 Compositor): Verify cursor themes and redesigned window chrome
-    let mut wm_hires = Wm::new_for_display(1024, 768);
-    wm_hires.raise(0); // Make window 0 active/topmost
+    wm = Wm::new_for_display(1024, 768);
+    wm.raise(0); // Make window 0 active/topmost
 
     // Reuse test_buf (500 * 70 = 35,000 u32s <= 64,000) for testing high-res chrome
     test_buf[..500 * 70].fill(0);
     let mut hr_surface = ui::draw::BufferSurface32::new(&mut test_buf[..500 * 70], 500, 70);
-    wm_hires.render(&mut hr_surface);
+    wm.render(&mut hr_surface);
 
     // 1. Verify titlebar top highlight sheen exists on active window 0 (x=40..400, y=40..68)
     let sheen_pixel = hr_surface.buffer[40 * 500 + 100];
@@ -4711,11 +4712,11 @@ pub fn run_selftest() -> i32 {
     }
 
     // 3. Verify dynamic cursor shape detection across various screen contexts
-    let shape_desktop = wm_hires.cursor_shape_at(5, 5);
-    let shape_taskbar = wm_hires.cursor_shape_at(100, 750);
-    let shape_titlebar = wm_hires.cursor_shape_at(100, 50);
-    let shape_close_btn = wm_hires.cursor_shape_at(385, 48);
-    let shape_console = wm_hires.cursor_shape_at(100, 100);
+    let shape_desktop = wm.cursor_shape_at(5, 5);
+    let shape_taskbar = wm.cursor_shape_at(100, 750);
+    let shape_titlebar = wm.cursor_shape_at(100, 50);
+    let shape_close_btn = wm.cursor_shape_at(385, 48);
+    let shape_console = wm.cursor_shape_at(100, 100);
 
     let shapes_ok = shape_desktop == CursorShape::Arrow
         && shape_taskbar == CursorShape::Pointer
@@ -4737,18 +4738,18 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 9 (Month 3 Core desktop apps): Persistent top menu bar and app menu dispatch
-    let mut wm_mb = Wm::new_for_display(1024, 768);
-    wm_mb.raise(0); // Focus Window 0 (Terminal)
+    wm = Wm::new_for_display(1024, 768);
+    wm.raise(0); // Focus Window 0 (Terminal)
 
     // 1. Verify menubar title reflects active focused window
-    let mb_term = wm_mb.current_menubar();
+    let mb_term = wm.current_menubar();
     let is_terminal = mb_term.app_name == "Terminal" && mb_term.menus.len() == 4;
 
-    wm_mb.raise(1); // Focus Window 1 (Files)
-    let mb_files = wm_mb.current_menubar();
+    wm.raise(1); // Focus Window 1 (Files)
+    let mb_files = wm.current_menubar();
     let is_files = mb_files.app_name == "Files" && mb_files.menus.len() == 4;
 
-    wm_mb.raise(0); // Restore Window 0 (Terminal)
+    wm.raise(0); // Restore Window 0 (Terminal)
 
     // 2. Locate File menu item (menu 0)
     let font = Font::regular();
@@ -4756,44 +4757,44 @@ pub fn run_selftest() -> i32 {
     let star_x = 8;
     let app_sz = font.measure_str("Terminal");
     let start_x = star_x + star_size + 8 + app_sz.w + 18;
-    let file_rect = ui::menu::measure_menubar_item(&mb_term, 0, start_x, 0, wm_mb.menubar_h, &font)
+    let file_rect = ui::menu::measure_menubar_item(&mb_term, 0, start_x, 0, wm.menubar_h, &font)
         .unwrap_or(Rect::new(0, 0, 0, 0));
 
-    let file_hit = wm_mb.menubar_item_at(file_rect.x + 4, file_rect.y + 4) == Some(0);
-    let shape_menu = wm_mb.cursor_shape_at(file_rect.x + 4, file_rect.y + 4);
+    let file_hit = wm.menubar_item_at(file_rect.x + 4, file_rect.y + 4) == Some(0);
+    let shape_menu = wm.cursor_shape_at(file_rect.x + 4, file_rect.y + 4);
 
     // 3. Click File menu item to open dropdown
-    wm_mb.cursor_x = file_rect.x + 4;
-    wm_mb.cursor_y = file_rect.y + 4;
-    wm_mb.apply_mouse(mouse(0, 0, true));
-    wm_mb.apply_mouse(mouse(0, 0, false));
-    let dropdown_opened = wm_mb.active_menu == Some(0) && wm_mb.active_dropdown_rect().is_some();
+    wm.cursor_x = file_rect.x + 4;
+    wm.cursor_y = file_rect.y + 4;
+    wm.apply_mouse(mouse(0, 0, true));
+    wm.apply_mouse(mouse(0, 0, false));
+    let dropdown_opened = wm.active_menu == Some(0) && wm.active_dropdown_rect().is_some();
 
     // 4. Locate and click "Quit Terminal" item (item 4, action 105)
-    let drop_rect = wm_mb.active_dropdown_rect().unwrap_or(Rect::new(0, 0, 0, 0));
+    let drop_rect = wm.active_dropdown_rect().unwrap_or(Rect::new(0, 0, 0, 0));
     let quit_item_y = drop_rect.y + 4 + 22 + 22 + 6 + 22 + 10;
-    let quit_hit = wm_mb.dropdown_item_at(drop_rect.x + 10, quit_item_y) == Some(4);
-    let shape_drop_item = wm_mb.cursor_shape_at(drop_rect.x + 10, quit_item_y);
+    let quit_hit = wm.dropdown_item_at(drop_rect.x + 10, quit_item_y) == Some(4);
+    let shape_drop_item = wm.cursor_shape_at(drop_rect.x + 10, quit_item_y);
 
-    wm_mb.cursor_x = drop_rect.x + 10;
-    wm_mb.cursor_y = quit_item_y;
-    wm_mb.apply_mouse(mouse(0, 0, true));
-    wm_mb.apply_mouse(mouse(0, 0, false));
+    wm.cursor_x = drop_rect.x + 10;
+    wm.cursor_y = quit_item_y;
+    wm.apply_mouse(mouse(0, 0, true));
+    wm.apply_mouse(mouse(0, 0, false));
 
-    let dropdown_closed = wm_mb.active_menu.is_none();
-    let menu_event = wm_mb.take_menu_event();
+    let dropdown_closed = wm.active_menu.is_none();
+    let menu_event = wm.take_menu_event();
     let event_ok = menu_event == Some(MenuClickEvent {
         window_id: 0,
         menu_index: 0,
         item_index: 4,
         action_id: ui::menu::ACTION_FILE_QUIT,
     });
-    let event_drained = wm_mb.take_menu_event().is_none();
+    let event_drained = wm.take_menu_event().is_none();
 
     // 5. Render menubar into BufferSurface32
     test_buf[..1024 * 30].fill(0);
     let mut menu_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 30], 1024, 30);
-    wm_mb.render(&mut menu_surf);
+    wm.render(&mut menu_surf);
 
     let mb_bg = palette.surface_sunken.to_xrgb();
     let p_corner = menu_surf.buffer[0];
@@ -4812,67 +4813,67 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 10 (Month 3 Core desktop apps): Dock with app pinning and window switching
-    let mut wm_dock = Wm::new_for_display(1024, 768);
+    wm = Wm::new_for_display(1024, 768);
 
     // 1. Verify default pinned applications
-    let p_term = wm_dock.is_app_pinned(APP_ID_TERMINAL);
-    let p_files = wm_dock.is_app_pinned(APP_ID_FILES);
-    let p_edit = wm_dock.is_app_pinned(APP_ID_EDITOR);
-    let p_sys = wm_dock.is_app_pinned(APP_ID_SYSTEM);
-    let p_set = wm_dock.is_app_pinned(APP_ID_SETTINGS);
-    let initial_count_ok = wm_dock.dock_count == 5;
+    let p_term = wm.is_app_pinned(APP_ID_TERMINAL);
+    let p_files = wm.is_app_pinned(APP_ID_FILES);
+    let p_edit = wm.is_app_pinned(APP_ID_EDITOR);
+    let p_sys = wm.is_app_pinned(APP_ID_SYSTEM);
+    let p_set = wm.is_app_pinned(APP_ID_SETTINGS);
+    let initial_count_ok = wm.dock_count == 5;
 
     // 2. Verify window switching and minimize/restore toggle
     // Initially Window 3 (System) is active (topmost in z_order)
-    let init_active = wm_dock.active_window() == Some(3);
+    let init_active = wm.active_window() == Some(3);
     // Clicking active Window 3 item in dock minimizes it!
-    wm_dock.on_dock_item_click(3);
-    let win3_minimized = wm_dock.windows[3].is_minimized;
-    let min_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Minimize { window_id: 3 });
+    wm.on_dock_item_click(3);
+    let win3_minimized = wm.windows[3].is_minimized;
+    let min_event_ok = wm.take_dock_event() == Some(DockEvent::Minimize { window_id: 3 });
 
     // Clicking minimized Window 3 item in dock restores and raises it!
-    wm_dock.on_dock_item_click(3);
-    let win3_restored = !wm_dock.windows[3].is_minimized && wm_dock.active_window() == Some(3);
-    let res_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Restore { window_id: 3 });
+    wm.on_dock_item_click(3);
+    let win3_restored = !wm.windows[3].is_minimized && wm.active_window() == Some(3);
+    let res_event_ok = wm.take_dock_event() == Some(DockEvent::Restore { window_id: 3 });
 
     // 3. Focus switching between open windows
     // Clicking Window 1 (Files) raises it
-    wm_dock.on_dock_item_click(1);
-    let win1_focused = wm_dock.active_window() == Some(1);
-    let switch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Switch { window_id: 1 });
+    wm.on_dock_item_click(1);
+    let win1_focused = wm.active_window() == Some(1);
+    let switch_event_ok = wm.take_dock_event() == Some(DockEvent::Switch { window_id: 1 });
 
     // 4. Launch-on-click for pinned unlaunched app (Settings, App 5)
-    let set_init_running = wm_dock.dock_items()[4].unwrap().is_running;
-    wm_dock.on_dock_item_click(4);
-    let launch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Launch {
+    let set_init_running = wm.dock_items()[4].unwrap().is_running;
+    wm.on_dock_item_click(4);
+    let launch_event_ok = wm.take_dock_event() == Some(DockEvent::Launch {
         app_id: APP_ID_SETTINGS,
         exec_path: "SETTINGS.ELF",
     });
 
     // 5. Window close and re-launch
     // Close Window 2 (Editor)
-    wm_dock.close_window(2);
-    let win2_closed = !wm_dock.windows[2].is_open;
-    let edit_pinned_after_close = wm_dock.is_app_pinned(APP_ID_EDITOR);
-    let edit_not_running = !wm_dock.dock_items()[2].unwrap().is_running;
+    wm.close_window(2);
+    let win2_closed = !wm.windows[2].is_open;
+    let edit_pinned_after_close = wm.is_app_pinned(APP_ID_EDITOR);
+    let edit_not_running = !wm.dock_items()[2].unwrap().is_running;
 
     // Launch Editor by clicking its dock item
-    wm_dock.on_dock_item_click(2);
-    let win2_reopened = wm_dock.windows[2].is_open && wm_dock.active_window() == Some(2);
-    let relaunch_event_ok = wm_dock.take_dock_event() == Some(DockEvent::Launch {
+    wm.on_dock_item_click(2);
+    let win2_reopened = wm.windows[2].is_open && wm.active_window() == Some(2);
+    let relaunch_event_ok = wm.take_dock_event() == Some(DockEvent::Launch {
         app_id: APP_ID_EDITOR,
         exec_path: "EDIT.ELF",
     });
 
     // 6. Dynamic Pinning and Unpinning
     let custom_app = DockApp::new(6, "Calc", "CALC.ELF", true);
-    let pin_ok = wm_dock.pin_app(custom_app) && wm_dock.is_app_pinned(6) && wm_dock.dock_count == 6;
-    let unpin_ok = wm_dock.unpin_app(6) && !wm_dock.is_app_pinned(6) && wm_dock.dock_count == 5;
+    let pin_ok = wm.pin_app(custom_app) && wm.is_app_pinned(6) && wm.dock_count == 6;
+    let unpin_ok = wm.unpin_app(6) && !wm.is_app_pinned(6) && wm.dock_count == 5;
 
     // 7. Dock surface rasterization
     test_buf[..1024 * 40].fill(0);
     let mut dock_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 40], 1024, 40);
-    wm_dock.render(&mut dock_surf);
+    wm.render(&mut dock_surf);
     let dock_non_zero = dock_surf.buffer.iter().filter(|&&p| p != 0).count();
     let render_ok = dock_non_zero > 100;
 
@@ -4889,30 +4890,30 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 11 (Month 5 Power-user & system apps): Accessibility basics - font scaling and high-contrast mode
-    let mut wm_acc = Wm::new_for_display(1024, 768);
+    wm = Wm::new_for_display(1024, 768);
 
     // 1. Verify accessibility configuration application
     let mut acc_cfg = AccessibilityConfig::high_contrast();
     acc_cfg.font_scale = FontScale::Large; // 150%
-    wm_acc.apply_accessibility_config(acc_cfg);
+    wm.apply_accessibility_config(acc_cfg);
 
     // 2. Geometry invariants with scaled font
-    let titlebar_scaled_ok = wm_acc.titlebar_h >= 32;
-    let taskbar_scaled_ok = wm_acc.taskbar_h >= 48;
-    let menubar_scaled_ok = wm_acc.menubar_h >= 30;
+    let titlebar_scaled_ok = wm.titlebar_h >= 32;
+    let taskbar_scaled_ok = wm.taskbar_h >= 48;
+    let menubar_scaled_ok = wm.menubar_h >= 30;
 
     // 3. High-contrast palette invariants (WCAG AAA >= 7.0:1)
-    let pal_hc = wm_acc.access_cfg.effective_palette();
-    let is_hc_theme = wm_acc.access_cfg.theme.is_high_contrast();
+    let pal_hc = wm.access_cfg.effective_palette();
+    let is_hc_theme = wm.access_cfg.theme.is_high_contrast();
     let text_cr = ui::color::contrast_ratio(pal_hc.text_primary, pal_hc.window_bg);
     let accent_cr = ui::color::contrast_ratio(pal_hc.accent_primary, pal_hc.desktop_bg);
     let contrast_ok = is_hc_theme && text_cr >= 70 && accent_cr >= 70 && pal_hc.desktop_bg == Color::BLACK;
 
     // 4. Compositor rendering with high-contrast theme and font scaling
-    wm_acc.raise(0); // Window 0 active
+    wm.raise(0); // Window 0 active
     test_buf[..1024 * 90].fill(0);
     let mut acc_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 90], 1024, 90);
-    wm_acc.render(&mut acc_surf);
+    wm.render(&mut acc_surf);
 
     let desktop_pixel = acc_surf.buffer[37 * 1024 + 5];
     let is_black_desktop = desktop_pixel == pal_hc.desktop_bg.to_xrgb();
@@ -4920,7 +4921,7 @@ pub fn run_selftest() -> i32 {
     // Active window 0 is at x=40, y=40, w=360, titlebar_h >= 32
     let mut found_white_titlebar = false;
     let mut found_yellow_border = false;
-    for y in 40..wm_acc.titlebar_h + 40 {
+    for y in 40..wm.titlebar_h + 40 {
         for x in 40..400 {
             let p = acc_surf.buffer[(y * 1024 + x) as usize];
             if p == 0x00FFFFFF {
@@ -4932,7 +4933,7 @@ pub fn run_selftest() -> i32 {
     }
 
     // 5. High-contrast cursor theme
-    let cur_theme = wm_acc.access_cfg.effective_cursor_theme();
+    let cur_theme = wm.access_cfg.effective_cursor_theme();
     let cur_hc_ok = cur_theme == CursorTheme::HighContrast;
 
     // 6. Serialization roundtrip for ACCESS.CFG
@@ -4951,7 +4952,7 @@ pub fn run_selftest() -> i32 {
     }
 
     // Case 12 (Month 5 Power-user & system apps): Multi-window productivity polish - refining window snapping
-    let case12_code = selftest_case_12_snapping_polish(test_buf);
+    let case12_code = selftest_case_12_snapping_polish(&mut wm, test_buf);
     code |= case12_code;
 
     if code == 0 {
@@ -4961,70 +4962,70 @@ pub fn run_selftest() -> i32 {
 }
 
 #[inline(never)]
-fn selftest_case_12_snapping_polish(test_buf: &mut [u32]) -> i32 {
-    let mut wm_snap = Wm::new_for_display(1024, 768);
-    let work = wm_snap.work_area();
+fn selftest_case_12_snapping_polish(wm: &mut Wm, test_buf: &mut [u32]) -> i32 {
+    *wm = Wm::new_for_display(1024, 768);
+    let work = wm.work_area();
     let work_ok = work.x == 0 && work.y == 24 && work.w == 1024 && work.h == 708;
 
     // 1. Quadrant tiling: snap windows into all 4 quadrants
-    wm_snap.snap_window(0, SnapState::TopLeft);
-    wm_snap.snap_window(1, SnapState::TopRight);
-    wm_snap.snap_window(2, SnapState::BottomLeft);
-    wm_snap.snap_window(3, SnapState::BottomRight);
+    wm.snap_window(0, SnapState::TopLeft);
+    wm.snap_window(1, SnapState::TopRight);
+    wm.snap_window(2, SnapState::BottomLeft);
+    wm.snap_window(3, SnapState::BottomRight);
 
-    let quad0_ok = wm_snap.windows[0].x == 0 && wm_snap.windows[0].y == 24
-        && wm_snap.windows[0].w == 512 && wm_snap.windows[0].h == 354;
-    let quad1_ok = wm_snap.windows[1].x == 512 && wm_snap.windows[1].y == 24
-        && wm_snap.windows[1].w == 512 && wm_snap.windows[1].h == 354;
-    let quad2_ok = wm_snap.windows[2].x == 0 && wm_snap.windows[2].y == 378
-        && wm_snap.windows[2].w == 512 && wm_snap.windows[2].h == 354;
-    let quad3_ok = wm_snap.windows[3].x == 512 && wm_snap.windows[3].y == 378
-        && wm_snap.windows[3].w == 512 && wm_snap.windows[3].h == 354;
+    let quad0_ok = wm.windows[0].x == 0 && wm.windows[0].y == 24
+        && wm.windows[0].w == 512 && wm.windows[0].h == 354;
+    let quad1_ok = wm.windows[1].x == 512 && wm.windows[1].y == 24
+        && wm.windows[1].w == 512 && wm.windows[1].h == 354;
+    let quad2_ok = wm.windows[2].x == 0 && wm.windows[2].y == 378
+        && wm.windows[2].w == 512 && wm.windows[2].h == 354;
+    let quad3_ok = wm.windows[3].x == 512 && wm.windows[3].y == 378
+        && wm.windows[3].w == 512 && wm.windows[3].h == 354;
 
     // Smoother edges invariant: all 4 quadrants combined cover the entire work area with 0 gap and 0 overlap
-    let gapless_w = wm_snap.windows[0].w + wm_snap.windows[1].w == work.w;
-    let gapless_h = wm_snap.windows[0].h + wm_snap.windows[2].h == work.h;
+    let gapless_w = wm.windows[0].w + wm.windows[1].w == work.w;
+    let gapless_h = wm.windows[0].h + wm.windows[2].h == work.h;
     let quads_ok = quad0_ok && quad1_ok && quad2_ok && quad3_ok && gapless_w && gapless_h;
 
     // 2. Maximize toggle and restoration
-    let orig_geom = wm_snap.windows[0].pre_snap;
-    wm_snap.toggle_maximize(0);
-    let max_ok = wm_snap.windows[0].snap == SnapState::Maximize
-        && wm_snap.windows[0].x == 0 && wm_snap.windows[0].y == 24
-        && wm_snap.windows[0].w == 1024 && wm_snap.windows[0].h == 708;
+    let orig_geom = wm.windows[0].pre_snap;
+    wm.toggle_maximize(0);
+    let max_ok = wm.windows[0].snap == SnapState::Maximize
+        && wm.windows[0].x == 0 && wm.windows[0].y == 24
+        && wm.windows[0].w == 1024 && wm.windows[0].h == 708;
 
-    wm_snap.toggle_maximize(0);
-    let restore_ok = wm_snap.windows[0].snap == SnapState::Normal
-        && (wm_snap.windows[0].x, wm_snap.windows[0].y, wm_snap.windows[0].w, wm_snap.windows[0].h) == orig_geom;
+    wm.toggle_maximize(0);
+    let restore_ok = wm.windows[0].snap == SnapState::Normal
+        && (wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h) == orig_geom;
 
     // 3. Automated side-by-side split tiling
-    wm_snap.tile_windows(TileMode::SideBySide);
-    let top_win = wm_snap.z_order[MAX_WINDOWS - 1];
-    let second_win = wm_snap.z_order[MAX_WINDOWS - 2];
-    let sbs_ok = wm_snap.windows[top_win].snap == SnapState::Left
-        && wm_snap.windows[second_win].snap == SnapState::Right;
+    wm.tile_windows(TileMode::SideBySide);
+    let top_win = wm.z_order[MAX_WINDOWS - 1];
+    let second_win = wm.z_order[MAX_WINDOWS - 2];
+    let sbs_ok = wm.windows[top_win].snap == SnapState::Left
+        && wm.windows[second_win].snap == SnapState::Right;
 
     // 4. Snap preview ghost outline rendering on BufferSurface32
-    wm_snap.preview_snap = Some(SnapState::TopRight);
+    wm.preview_snap = Some(SnapState::TopRight);
     test_buf[..1024 * 50].fill(0);
     let mut snap_surf = ui::draw::BufferSurface32::new(&mut test_buf[..1024 * 50], 1024, 50);
-    wm_snap.render(&mut snap_surf);
+    wm.render(&mut snap_surf);
     // Preview outline for TopRight is at x=512+3..1024-3, y=24+3..50
     let preview_pixel = snap_surf.buffer[27 * 1024 + 520];
     let palette = Theme::Dark.palette();
     let preview_rendered = preview_pixel != 0 && preview_pixel != palette.desktop_bg.to_xrgb();
 
     // 5. Proportional un-snapping
-    wm_snap.raise(0);
-    wm_snap.snap_window(0, SnapState::Left);
-    wm_snap.cursor_x = 256; // 50% across the 512px snapped window
-    wm_snap.cursor_y = 35;
-    wm_snap.on_left_press(256, 35);
-    let was_dragging = wm_snap.dragging == Some(0);
-    let unsnap_proportional_ok = wm_snap.windows[0].snap == SnapState::Normal
-        && (wm_snap.cursor_x - wm_snap.windows[0].x - wm_snap.windows[0].w / 2).abs() <= 5
+    wm.raise(0);
+    wm.snap_window(0, SnapState::Left);
+    wm.cursor_x = 256; // 50% across the 512px snapped window
+    wm.cursor_y = 35;
+    wm.on_left_press(256, 35);
+    let was_dragging = wm.dragging == Some(0);
+    let unsnap_proportional_ok = wm.windows[0].snap == SnapState::Normal
+        && (wm.cursor_x - wm.windows[0].x - wm.windows[0].w / 2).abs() <= 5
         && was_dragging;
-    wm_snap.apply_mouse(mouse(0, 0, false)); // release drag
+    wm.apply_mouse(mouse(0, 0, false)); // release drag
 
     if work_ok && quads_ok && max_ok && restore_ok && sbs_ok && preview_rendered && unsnap_proportional_ok {
         unsafe { ffi::sys_write(b"[wm-selftest] PASS: multi-window productivity polish and window snapping\n\0".as_ptr()) };

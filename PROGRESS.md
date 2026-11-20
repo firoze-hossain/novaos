@@ -11605,6 +11605,31 @@ Month 5 ("Driver breadth & performance") wraps up with SMP scaling validation be
    - All 14 UI test suites passing in `tools/tests/run_ui_qa_pass.sh`.
    - Rebuilt `tools/fixtures/WM.ELF`, `tools/fixtures/CALENDAR.ELF`, `disk.img`, and `novaos.iso`.
 
+## Phase 101 - Month 6 Release Hardening: User Stack Headroom & WM Selftest Stack Optimization
+
+**Status: Complete.** Diagnosed and resolved a subtle ring-3 userland stack overflow in QEMU headless boot smoke test (`make test`).
+
+### Root Cause Analysis:
+1. `userland/wm-rs/wm.rs`'s `run_selftest()` had 5 distinct `Wm` struct instances declared as stack locals across Cases 8 through 12 (`wm_hires`, `wm_mb`, `wm_dock`, `wm_acc`, `wm_snap`), while `run_selftest()` itself was inlined into `main()`.
+2. As `struct Wm` expanded with rich features (terminal emulator buffer, calendar schedule engine, dock apps, access config), each instance weighed ~4.5 KB. Inlining into `main()` resulted in a 26 KB stack allocation at `main()` prologue (`sub $0x66c8, %esp`).
+3. Inside `selftest_case_12_snapping_polish`, calling `Wm::new_for_display` pushed `%esp` past the 32 KB `USER_STACK_SIZE` boundary to `0x3FFFFBBC`, triggering an unmapped page fault (`eip=0x8060041`) that caused the kernel to panic and terminated subsequent userland smoke tests.
+
+### Key Fixes:
+1. **Window Manager Stack Optimization (`userland/wm-rs/wm.rs`)**:
+   - Marked `run_selftest()` with `#[inline(never)]`, decoupling `main()`'s stack frame (~4.9 KB) from the selftest runner.
+   - Refactored `run_selftest()` to reuse a single `let mut wm = ...` instance sequentially across Cases 8, 9, 10, 11, and 12 (`selftest_case_12_snapping_polish(&mut wm, test_buf)`), eliminating redundant stack structures and slashing total selftest stack frame down to ~9.4 KB.
+2. **Kernel User Stack Expansion (`kernel/task/process.h`)**:
+   - Increased `USER_STACK_SIZE` from 32 KB (`32 * 1024`) to 64 KB (`64 * 1024`), doubling available stack space and providing an 8x-12x safety margin for complex ring-3 user applications.
+3. **Release Artifact Synchronization**:
+   - Rebuilt `tools/fixtures/WM.ELF` and `tools/fixtures/CALENDAR.ELF`.
+   - Rebuilt `build/novaos.bin`, `novaos.iso`, `disk.img`, and `disk-server.img`.
+4. **100% Test Pass Rate Verified**:
+   - `make test`: All 344/344 boot assertions passed (0 failures, 0 panics).
+   - `make test-server`: All 272/272 server boot assertions passed.
+   - `tools/tests/run_ui_qa_pass.sh`: All 14/14 UI test suites passed.
+   - `make test-editions`: All 48 partition & package checks passed.
+   - `make test-64bit`: 100% 64-bit Long Mode & dual-architecture checks passed.
+
 ## Future Directions
 
 Immediate CI priority: continue using this phase's own full-
