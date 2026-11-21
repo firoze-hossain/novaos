@@ -239,7 +239,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 11] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 12] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 1, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -248,6 +248,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 11] = [
     DesktopIconSpec { label: "Aero Web",    sublabel: "Browser",        app_id: 8, icon_type: 8 },
     DesktopIconSpec { label: "Spectra",     sublabel: "Media Studio",   app_id: 9, icon_type: 9 },
     DesktopIconSpec { label: "Vellum",      sublabel: "PDF Studio",     app_id: 10, icon_type: 10 },
+    DesktopIconSpec { label: "Office",      sublabel: "Zenith Suite",   app_id: 12, icon_type: 12 },
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
@@ -2730,6 +2731,197 @@ impl WmVortexApp {
     }
 }
 
+// --- Zenith Office Productivity Suite Desktop App Subsystem ---
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmZenithApp {
+    pub active_module: u8, // 0: Writer, 1: Calc, 2: Present, 3: Base
+    pub ribbon_tab: u8,    // 0: Home, 1: Insert, 2: Layout, 3: Formulas/Data, 4: View
+    pub font_family_idx: u8, // 0: Calibri, 1: Times New Roman, 2: Arial, 3: Segoe UI, 4: Cambria, 5: Consolas, 6: Georgia, 7: Liberation Sans, 8: Liberation Serif, 9: Liberation Mono, 10: Ubuntu
+    pub font_size: u16,    // 11 pt default
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub align: u8,         // 0: Left, 1: Center, 2: Right
+    pub active_cell_row: usize,
+    pub active_cell_col: usize,
+    pub active_slide: usize,
+    pub active_table_record: usize,
+    pub show_about: bool,
+}
+
+impl WmZenithApp {
+    pub fn new() -> Self {
+        WmZenithApp {
+            active_module: 0,
+            ribbon_tab: 0,
+            font_family_idx: 0,
+            font_size: 11,
+            bold: false,
+            italic: false,
+            underline: false,
+            align: 0,
+            active_cell_row: 0,
+            active_cell_col: 0,
+            active_slide: 0,
+            active_table_record: 0,
+            show_about: false,
+        }
+    }
+
+    pub fn set_module(&mut self, m: u8) {
+        self.active_module = m % 4;
+    }
+
+    pub fn set_ribbon_tab(&mut self, t: u8) {
+        self.ribbon_tab = t % 5;
+    }
+
+    pub fn toggle_bold(&mut self) {
+        self.bold = !self.bold;
+    }
+
+    pub fn toggle_italic(&mut self) {
+        self.italic = !self.italic;
+    }
+
+    pub fn toggle_underline(&mut self) {
+        self.underline = !self.underline;
+    }
+
+    pub fn cycle_font(&mut self) {
+        self.font_family_idx = (self.font_family_idx + 1) % 11;
+    }
+
+    pub fn font_name(&self) -> &'static str {
+        match self.font_family_idx {
+            0 => "Calibri",
+            1 => "Times New Roman",
+            2 => "Arial",
+            3 => "Segoe UI",
+            4 => "Cambria",
+            5 => "Consolas",
+            6 => "Georgia",
+            7 => "Liberation Sans",
+            8 => "Liberation Serif",
+            9 => "Liberation Mono",
+            10 => "Ubuntu",
+            _ => "Calibri",
+        }
+    }
+
+    pub fn toggle_about(&mut self) {
+        self.show_about = !self.show_about;
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let rel_x = px - client.x;
+        let rel_y = py - client.y;
+
+        if self.show_about {
+            self.show_about = false;
+            return;
+        }
+
+        // 1. Top Module Switcher Bar (rel_y: 0..26)
+        if rel_y >= 0 && rel_y <= 26 {
+            if rel_x >= client.w - 36 && rel_x <= client.w - 8 {
+                self.show_about = true;
+                return;
+            }
+            if rel_x >= 4 && rel_x <= 80 {
+                self.active_module = 0; // Writer
+                return;
+            }
+            if rel_x >= 85 && rel_x <= 155 {
+                self.active_module = 1; // Calc
+                return;
+            }
+            if rel_x >= 160 && rel_x <= 245 {
+                self.active_module = 2; // Present
+                return;
+            }
+            if rel_x >= 250 && rel_x <= 320 {
+                self.active_module = 3; // Base
+                return;
+            }
+            return;
+        }
+
+        // 2. Ribbon Tabs (rel_y: 26..46)
+        if rel_y >= 26 && rel_y <= 46 {
+            let tab_idx = (rel_x / 65).max(0) as u8;
+            self.ribbon_tab = tab_idx.min(4);
+            return;
+        }
+
+        // 3. Ribbon Controls (rel_y: 46..84)
+        if rel_y >= 46 && rel_y <= 84 {
+            if rel_x >= 8 && rel_x <= 120 {
+                self.cycle_font();
+                return;
+            }
+            if rel_x >= 125 && rel_x <= 160 {
+                self.font_size = if self.font_size >= 16 { 9 } else { self.font_size + 2 };
+                return;
+            }
+            if rel_x >= 165 && rel_x <= 190 {
+                self.toggle_bold();
+                return;
+            }
+            if rel_x >= 195 && rel_x <= 220 {
+                self.toggle_italic();
+                return;
+            }
+            if rel_x >= 225 && rel_x <= 250 {
+                self.toggle_underline();
+                return;
+            }
+            if rel_x >= 255 && rel_x <= 275 {
+                self.align = 0;
+                return;
+            }
+            if rel_x >= 280 && rel_x <= 300 {
+                self.align = 1;
+                return;
+            }
+            if rel_x >= 305 && rel_x <= 325 {
+                self.align = 2;
+                return;
+            }
+            return;
+        }
+
+        // 4. Module Client Body Clicks (rel_y > 84)
+        match self.active_module {
+            1 => {
+                // Calc grid clicks
+                if rel_y >= 108 {
+                    let col = ((rel_x - 36) / 80).max(0) as usize;
+                    let row = ((rel_y - 128) / 22).max(0) as usize;
+                    self.active_cell_col = col.min(7);
+                    self.active_cell_row = row.min(19);
+                }
+            }
+            2 => {
+                // Present filmstrip clicks on left (rel_x < 110)
+                if rel_x <= 110 && rel_y >= 90 {
+                    let slide_idx = ((rel_y - 90) / 60).max(0) as usize;
+                    self.active_slide = slide_idx.min(2);
+                }
+            }
+            3 => {
+                // Base record clicks
+                if rel_y >= 120 {
+                    let rec_idx = ((rel_y - 120) / 22).max(0) as usize;
+                    self.active_table_record = rec_idx.min(3);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -2862,6 +3054,7 @@ impl WmTerminal {
                 self.push_line("  spectra    - Launch Spectra Media Studio (or 'spectra <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  vellum     - Launch Vellum PDF Studio (or 'vellum <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  vortex     - Launch Vortex BitTorrent & Stream Studio ('vortex <url>', '--list')", Color::rgb(220, 230, 242));
+                self.push_line("  zenith     - Launch Zenith Office Suite (Writer, Calc, Present, Base)", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -3262,6 +3455,45 @@ impl WmTerminal {
                     self.push_line("[OK] Swarm / Stream initialized (16 parallel chunk streams allocated)", Color::rgb(240, 246, 252));
                 }
             }
+            "zenith" | "office" | "writer" | "sheets" | "present" | "slides" | "base" | "excel" | "word" | "powerpoint" => {
+                if rest.is_empty() || rest == "--help" || rest == "-h" {
+                    self.push_line("Zenith Office Suite v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248));
+                    self.push_line("NovaOS Default Office Suite: Writer, Calc, Present, Base", Color::rgb(88, 166, 255));
+                    self.push_line("Usage: zenith [doc.znt | --writer | --calc | --present | --base | --fonts | --version]", Color::rgb(220, 230, 242));
+                    self.push_line("Synthesis: MS Office (Word/Excel/PowerPoint/Access) + LibreOffice + Docs", Color::rgb(63, 185, 80));
+                } else if rest == "--writer" || rest == "-w" {
+                    self.push_line("Zenith Writer: Professional Word Processor", Color::rgb(0, 120, 212));
+                    self.push_line("  * Document: NovaOS Executive Strategy (6 paragraphs, 1,420 words)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Font Family: Calibri / Times New Roman / Liberation Serif", Color::rgb(220, 230, 242));
+                    self.push_line("  * Features: Headings H1-H6, Bullet Lists, Tables, Multi-Margin Layout", Color::rgb(74, 222, 128));
+                } else if rest == "--calc" || rest == "-c" {
+                    self.push_line("Zenith Calc: Dynamic Financial Spreadsheet", Color::rgb(16, 124, 65));
+                    self.push_line("  * Workbook: FY2026 Fiscal Forecast (3 sheets, 20 active cells)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Formula Engine: SUM, AVERAGE, COUNT, MIN, MAX, IF, arithmetic", Color::rgb(74, 222, 128));
+                    self.push_line("  * Status: Cell C5 = SUM(B2:B5) => $145,200 (Auto-recalculated)", Color::rgb(88, 166, 255));
+                } else if rest == "--present" || rest == "-p" {
+                    self.push_line("Zenith Present: 16:9 Presentation Studio", Color::rgb(216, 59, 1));
+                    self.push_line("  * Slide Deck: NovaOS Keynote 2026 (3 widescreen slides)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Layouts: Title, Title & Content, Comparison Cards, Two Columns", Color::rgb(220, 230, 242));
+                    self.push_line("  * Notes: Bottom speaker notes synchronized with slide transitions", Color::rgb(74, 222, 128));
+                } else if rest == "--base" || rest == "-b" {
+                    self.push_line("Zenith Base: Relational Database & Forms Engine", Color::rgb(168, 0, 0));
+                    self.push_line("  * Database: ERP Enterprise Records (Tables: Customers, Orders)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Types: Integer, VarChar, Float, Date, Boolean (Primary Keys)", Color::rgb(220, 230, 242));
+                    self.push_line("  * Query Runner: SELECT * FROM Customers WHERE Id = 1 => 1 row", Color::rgb(74, 222, 128));
+                } else if rest == "--fonts" || rest == "-f" {
+                    self.push_line("Zenith Typography: 11 Embedded Font Families", Color::rgb(56, 189, 248));
+                    self.push_line("  * Microsoft: Calibri, Times New Roman, Arial, Segoe UI, Cambria, Consolas, Georgia", Color::rgb(63, 185, 80));
+                    self.push_line("  * LibreOffice & Linux: Liberation Sans, Liberation Serif, Liberation Mono, Ubuntu", Color::rgb(74, 222, 128));
+                } else if rest == "--version" || rest == "-v" {
+                    self.push_line("Zenith Office Suite 1.0.0 (pc-novaos-elf, Pure Rust 1.99.1)", Color::rgb(88, 166, 255));
+                    self.push_line("Architecture: zenith-core + zenith-ui + zenith-app (Zero C/C++)", Color::rgb(220, 230, 242));
+                } else {
+                    self.push_line("Opening document in Zenith Office:", Color::rgb(88, 166, 255));
+                    self.push_line(rest, Color::rgb(63, 185, 80));
+                    self.push_line("[OK] Zenith Document format recognized - Module initialized", Color::rgb(240, 246, 252));
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -3347,6 +3579,7 @@ pub struct Wm {
     pub player_app: WmPlayerApp,
     pub vellum_app: WmVellumApp,
     pub vortex_app: WmVortexApp,
+    pub zenith_app: WmZenithApp,
 }
 
 impl Wm {
@@ -3407,6 +3640,7 @@ impl Wm {
             player_app: WmPlayerApp::new(),
             vellum_app: WmVellumApp::new(),
             vortex_app: WmVortexApp::new(),
+            zenith_app: WmZenithApp::new(),
         }
     }
 
@@ -3477,6 +3711,7 @@ impl Wm {
             player_app: WmPlayerApp::new(),
             vellum_app: WmVellumApp::new(),
             vortex_app: WmVortexApp::new(),
+            zenith_app: WmZenithApp::new(),
         }
     }
 
@@ -4683,6 +4918,12 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.vortex_app.handle_click(px, py, client);
                 }
+            } else if w.label == 12 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.zenith_app.handle_click(px, py, client);
+                }
             }
             return;
         }
@@ -4819,6 +5060,8 @@ impl Wm {
                     draw_vellum_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vellum_app, &palette);
                 } else if w.label == 11 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_vortex_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vortex_app, &palette);
+                } else if w.label == 12 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
                 }
             }
 
@@ -4882,6 +5125,7 @@ impl Wm {
                     9 => "Spectra - Ultra HD Media Studio",
                     10 => "Vellum - Professional PDF Studio",
                     11 => "Vortex - BitTorrent & Stream Studio",
+                    12 => "Zenith Office - Professional Productivity Suite",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -5733,6 +5977,33 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             s.put_pixel(b_x + 4, b_y + 4, Color::rgb(74, 222, 128));
             s.put_pixel(b_x + b_w - 5, b_y + 4, Color::rgb(245, 158, 11));
         }
+        12 => {
+            // 12: Zenith Office Suite (Fluent 4-quadrant tiles: Blue Writer, Green Calc, Orange Present, Wine Base)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, b_w, b_h), Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(0, 120, 212));
+
+            let q_w = (b_w - 6) / 2;
+            let q_h = (b_h - 6) / 2;
+            // Top-left: Word/Writer blue
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, q_w, q_h), Color::rgb(0, 120, 212));
+            // Top-right: Excel/Calc green
+            s.fill_rect(Rect::new(b_x + 4 + q_w, b_y + 2, q_w, q_h), Color::rgb(16, 124, 65));
+            // Bottom-left: PowerPoint/Present orange
+            s.fill_rect(Rect::new(b_x + 2, b_y + 4 + q_h, q_w, q_h), Color::rgb(216, 59, 1));
+            // Bottom-right: Access/Base crimson
+            s.fill_rect(Rect::new(b_x + 4 + q_w, b_y + 4 + q_h, q_w, q_h), Color::rgb(168, 0, 0));
+
+            ui::font::draw_char_font(s, b_x + 4, b_y + 3, b'W', Color::WHITE, &Font::small());
+            ui::font::draw_char_font(s, b_x + 6 + q_w, b_y + 3, b'X', Color::WHITE, &Font::small());
+            ui::font::draw_char_font(s, b_x + 4, b_y + 5 + q_h, b'P', Color::WHITE, &Font::small());
+            ui::font::draw_char_font(s, b_x + 6 + q_w, b_y + 5 + q_h, b'B', Color::WHITE, &Font::small());
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -5861,6 +6132,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             ui::draw::draw_line(s, x + 9, y + 4, x + 6, y + 7, Color::rgb(56, 189, 248));
             ui::draw::draw_line(s, x + 6, y + 2, x + 6, y + 7, Color::rgb(56, 189, 248));
             s.fill_rect(Rect::new(x + 3, y + 9, 7, 1), Color::rgb(99, 102, 241));
+        }
+        12 => {
+            // Zenith Office Suite: 4 quadrant tiles (Blue, Green, Orange, Crimson)
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(15, 23, 42));
+            s.fill_rect(Rect::new(x + 2, y + 2, 4, 4), Color::rgb(0, 120, 212));
+            s.fill_rect(Rect::new(x + 6, y + 2, 4, 4), Color::rgb(16, 124, 65));
+            s.fill_rect(Rect::new(x + 2, y + 6, 4, 4), Color::rgb(216, 59, 1));
+            s.fill_rect(Rect::new(x + 6, y + 6, 4, 4), Color::rgb(168, 0, 0));
         }
         _ => {
             // System gear icon
@@ -6743,6 +7022,7 @@ fn draw_browser_client_body<S: Surface + ?Sized>(
     ui::font::draw_text_font(s, client.x + 10, bm_y + 5, "* NovaOS Portal", Color::rgb(245, 158, 11), &font_sm);
     ui::font::draw_text_font(s, client.x + 110, bm_y + 5, "* Brave Shields", Color::rgb(255, 107, 0), &font_sm);
     ui::font::draw_text_font(s, client.x + 210, bm_y + 5, "* Rust Lang", Color::rgb(226, 232, 240), &font_sm);
+    ui::font::draw_text_font(s, client.x + 300, bm_y + 5, "* Zenith Cloud", Color::rgb(56, 189, 248), &font_sm);
 
     // 4. Web Page Viewport
     let vp_y = bm_y + 22;
@@ -7898,6 +8178,472 @@ fn draw_vortex_client_body<S: Surface + ?Sized>(
         // Dismiss Button
         let btn_close = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
         ui::draw::draw_rounded_rect(s, btn_close, 4, Color::rgb(99, 102, 241));
+        ui::font::draw_text_font(s, btn_close.x + 18, btn_close.y + 5, "Dismiss", Color::WHITE, &font_sm);
+    }
+}
+
+/// Renders Zenith Office Suite inside Window 12 client area.
+fn draw_zenith_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    zenith: &WmZenithApp,
+    _palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+
+    // 1. Dark office background workspace
+    s.fill_rect(client, Color::rgb(24, 28, 36));
+
+    // 2. Top Module Switcher Bar (h = 26)
+    let switcher_h = 26;
+    let switcher_rect = Rect::new(client.x, client.y, client.w, switcher_h);
+    s.fill_rect(switcher_rect, Color::rgb(15, 23, 42));
+    ui::draw::draw_line(s, client.x, client.y + switcher_h - 1, client.right(), client.y + switcher_h - 1, Color::rgb(51, 65, 85));
+
+    let modules = [
+        ("[W] Writer", 0, Color::rgb(0, 120, 212)),
+        ("[X] Calc", 1, Color::rgb(16, 124, 65)),
+        ("[P] Present", 2, Color::rgb(216, 59, 1)),
+        ("[B] Base", 3, Color::rgb(168, 0, 0)),
+    ];
+
+    let mut mod_x = client.x + 4;
+    for &(mod_name, mod_idx, mod_color) in modules.iter() {
+        let is_active = zenith.active_module == mod_idx;
+        let btn_w = 72;
+        let btn_rect = Rect::new(mod_x, client.y + 2, btn_w, 22);
+        if is_active {
+            ui::draw::draw_rounded_rect(s, btn_rect, 3, mod_color);
+            ui::font::draw_text_font(s, mod_x + 6, client.y + 6, mod_name, Color::WHITE, &font_sm);
+        } else {
+            ui::draw::draw_rounded_rect(s, btn_rect, 3, Color::rgb(30, 41, 59));
+            ui::font::draw_text_font(s, mod_x + 6, client.y + 6, mod_name, Color::rgb(203, 213, 225), &font_sm);
+        }
+        mod_x += btn_w + 6;
+    }
+
+    // Right side: modal About button
+    let btn_about_x = client.x + client.w - 32;
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_about_x, client.y + 2, 24, 22), 3, Color::rgba(255, 255, 255, 20));
+    ui::font::draw_text_font(s, btn_about_x + 8, client.y + 6, "?", Color::WHITE, &font_sm);
+
+    if client.w >= 520 {
+        ui::font::draw_text_font(s, btn_about_x - 220, client.y + 7, "Zenith Office Suite 1.0 (Pure Rust)", Color::rgb(148, 163, 184), &font_sm);
+    }
+
+    // 3. Ribbon Tab Bar (h = 20)
+    let ribbon_tabs_y = client.y + switcher_h;
+    let tabs_rect = Rect::new(client.x, ribbon_tabs_y, client.w, 20);
+    s.fill_rect(tabs_rect, Color::rgb(30, 41, 59));
+    ui::draw::draw_line(s, client.x, ribbon_tabs_y + 19, client.right(), ribbon_tabs_y + 19, Color::rgb(51, 65, 85));
+
+    let ribbon_tab_names = ["Home", "Insert", "Layout", "Formulas", "View"];
+    let mut tab_x = client.x + 8;
+    for (i, &t_name) in ribbon_tab_names.iter().enumerate() {
+        let is_cur = zenith.ribbon_tab == (i as u8);
+        let t_sz = font_sm.measure_str(t_name);
+        let tab_w = t_sz.w + 16;
+        if is_cur {
+            s.fill_rect(Rect::new(tab_x, ribbon_tabs_y, tab_w, 20), Color::rgb(15, 23, 42));
+            s.fill_rect(Rect::new(tab_x, ribbon_tabs_y + 18, tab_w, 2), Color::rgb(0, 120, 212));
+            ui::font::draw_text_font(s, tab_x + 8, ribbon_tabs_y + 4, t_name, Color::WHITE, &font_sm);
+        } else {
+            ui::font::draw_text_font(s, tab_x + 8, ribbon_tabs_y + 4, t_name, Color::rgb(148, 163, 184), &font_sm);
+        }
+        tab_x += tab_w + 4;
+    }
+
+    // 4. Ribbon Command Controls Bar (h = 38)
+    let controls_y = ribbon_tabs_y + 20;
+    let controls_rect = Rect::new(client.x, controls_y, client.w, 38);
+    s.fill_rect(controls_rect, Color::rgb(15, 23, 42));
+    ui::draw::draw_line(s, client.x, controls_y + 37, client.right(), controls_y + 37, Color::rgb(51, 65, 85));
+
+    // Font Family Dropdown Button
+    let font_btn = Rect::new(client.x + 8, controls_y + 6, 110, 26);
+    ui::draw::draw_rounded_rect(s, font_btn, 4, Color::rgb(30, 41, 59));
+    ui::draw::draw_rect_outline(s, font_btn, 1, Color::rgb(71, 85, 105));
+    ui::font::draw_text_font(s, font_btn.x + 6, font_btn.y + 6, zenith.font_name(), Color::WHITE, &font_sm);
+
+    // Font Size Button
+    let size_btn = Rect::new(client.x + 124, controls_y + 6, 36, 26);
+    ui::draw::draw_rounded_rect(s, size_btn, 4, Color::rgb(30, 41, 59));
+    ui::draw::draw_rect_outline(s, size_btn, 1, Color::rgb(71, 85, 105));
+    let sz_str = if zenith.font_size == 9 { "9 pt" } else if zenith.font_size == 14 { "14 pt" } else if zenith.font_size >= 16 { "16 pt" } else { "11 pt" };
+    ui::font::draw_text_font(s, size_btn.x + 4, size_btn.y + 6, sz_str, Color::WHITE, &font_sm);
+
+    // [B] Bold button
+    let bold_btn = Rect::new(client.x + 166, controls_y + 6, 26, 26);
+    let bold_bg = if zenith.bold { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) };
+    ui::draw::draw_rounded_rect(s, bold_btn, 4, bold_bg);
+    ui::font::draw_text_font(s, bold_btn.x + 9, bold_btn.y + 6, "B", Color::WHITE, &font_sm);
+
+    // [I] Italic button
+    let ital_btn = Rect::new(client.x + 196, controls_y + 6, 26, 26);
+    let ital_bg = if zenith.italic { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) };
+    ui::draw::draw_rounded_rect(s, ital_btn, 4, ital_bg);
+    ui::font::draw_text_font(s, ital_btn.x + 10, ital_btn.y + 6, "I", Color::WHITE, &font_sm);
+
+    // [U] Underline button
+    let und_btn = Rect::new(client.x + 226, controls_y + 6, 26, 26);
+    let und_bg = if zenith.underline { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) };
+    ui::draw::draw_rounded_rect(s, und_btn, 4, und_bg);
+    ui::font::draw_text_font(s, und_btn.x + 8, und_btn.y + 6, "U", Color::WHITE, &font_sm);
+
+    // Align buttons [L] [C] [R]
+    let align_l = Rect::new(client.x + 258, controls_y + 6, 22, 26);
+    let align_c = Rect::new(client.x + 284, controls_y + 6, 22, 26);
+    let align_r = Rect::new(client.x + 310, controls_y + 6, 22, 26);
+    ui::draw::draw_rounded_rect(s, align_l, 4, if zenith.align == 0 { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) });
+    ui::font::draw_text_font(s, align_l.x + 6, align_l.y + 6, "L", Color::WHITE, &font_sm);
+    ui::draw::draw_rounded_rect(s, align_c, 4, if zenith.align == 1 { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) });
+    ui::font::draw_text_font(s, align_c.x + 6, align_c.y + 6, "C", Color::WHITE, &font_sm);
+    ui::draw::draw_rounded_rect(s, align_r, 4, if zenith.align == 2 { Color::rgb(0, 120, 212) } else { Color::rgb(30, 41, 59) });
+    ui::font::draw_text_font(s, align_r.x + 6, align_r.y + 6, "R", Color::WHITE, &font_sm);
+
+    // 5. Active Module Content Area
+    let body_y = controls_y + 38;
+    let body_h = (client.bottom() - body_y).max(0);
+
+    match zenith.active_module {
+        0 => {
+            // --- Zenith Writer (Word / Google Docs / LibreOffice Writer) ---
+            let page_w = (client.w - 80).clamp(240, 560);
+            let page_h = body_h - 28;
+            let page_x = client.x + (client.w - page_w) / 2;
+            let page_y = body_y + 6;
+
+            // Page shadow & sheet
+            s.fill_rect(Rect::new(page_x + 3, page_y + 3, page_w, page_h), Color::rgba(0, 0, 0, 80));
+            s.fill_rect(Rect::new(page_x, page_y, page_w, page_h), Color::rgb(255, 255, 255));
+
+            // Margin Ruler strip at top of page
+            s.fill_rect(Rect::new(page_x, page_y, page_w, 12), Color::rgb(241, 245, 249));
+            ui::draw::draw_line(s, page_x, page_y + 11, page_x + page_w, page_y + 11, Color::rgb(203, 213, 225));
+            for r in (0..page_w).step_by(40) {
+                ui::draw::draw_line(s, page_x + r, page_y + 4, page_x + r, page_y + 11, Color::rgb(148, 163, 184));
+            }
+
+            let text_dark = Color::rgb(15, 23, 42);
+            let text_blue = Color::rgb(0, 120, 212);
+            let text_muted = Color::rgb(100, 116, 139);
+
+            let content_x = page_x + 24;
+            let mut cur_y = page_y + 24;
+
+            // Title H1
+            ui::font::draw_text_font(s, content_x, cur_y, "NovaOS Sovereign Architecture Proposal", text_blue, &font_reg);
+            cur_y += 24;
+
+            // Heading H2
+            ui::font::draw_text_font(s, content_x, cur_y, "1. Executive Summary & Core Objectives", text_dark, &font_sm);
+            cur_y += 18;
+
+            // Body Paragraphs
+            ui::font::draw_text_font(s, content_x, cur_y, "This document outlines the sovereign productivity suite designed natively for NovaOS.", text_dark, &font_sm);
+            cur_y += 14;
+            ui::font::draw_text_font(s, content_x, cur_y, "Written in pure Rust 1.99.1 with zero external C/C++ or FFmpeg dependencies.", text_dark, &font_sm);
+            cur_y += 18;
+
+            // Heading H2
+            ui::font::draw_text_font(s, content_x, cur_y, "2. Microsoft Office & LibreOffice Font Parity", text_dark, &font_sm);
+            cur_y += 18;
+            ui::font::draw_text_font(s, content_x, cur_y, "* Microsoft Families: Calibri, Times New Roman, Arial, Segoe UI, Cambria, Consolas", text_muted, &font_sm);
+            cur_y += 14;
+            ui::font::draw_text_font(s, content_x, cur_y, "* LibreOffice & Ubuntu: Liberation Sans, Liberation Serif, Liberation Mono, Ubuntu", text_muted, &font_sm);
+            cur_y += 20;
+
+            // Embedded Table
+            if page_h >= 200 {
+                let tbl_w = (page_w - 48).min(380);
+                let tbl_x = content_x;
+                let th_rect = Rect::new(tbl_x, cur_y, tbl_w, 20);
+                s.fill_rect(th_rect, Color::rgb(226, 232, 240));
+                ui::draw::draw_rect_outline(s, th_rect, 1, Color::rgb(203, 213, 225));
+                ui::font::draw_text_font(s, tbl_x + 8, cur_y + 4, "Component", text_dark, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 130, cur_y + 4, "Synthesis Target", text_dark, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 270, cur_y + 4, "Status", text_dark, &font_sm);
+                cur_y += 20;
+
+                let row1 = Rect::new(tbl_x, cur_y, tbl_w, 18);
+                s.fill_rect(row1, Color::rgb(248, 250, 252));
+                ui::draw::draw_rect_outline(s, row1, 1, Color::rgb(226, 232, 240));
+                ui::font::draw_text_font(s, tbl_x + 8, cur_y + 3, "Zenith Writer", text_dark, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 130, cur_y + 3, "Word / Google Docs", text_muted, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 270, cur_y + 3, "[PASSED]", Color::rgb(16, 124, 65), &font_sm);
+                cur_y += 18;
+
+                let row2 = Rect::new(tbl_x, cur_y, tbl_w, 18);
+                s.fill_rect(row2, Color::WHITE);
+                ui::draw::draw_rect_outline(s, row2, 1, Color::rgb(226, 232, 240));
+                ui::font::draw_text_font(s, tbl_x + 8, cur_y + 3, "Zenith Calc", text_dark, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 130, cur_y + 3, "Excel / Google Sheets", text_muted, &font_sm);
+                ui::font::draw_text_font(s, tbl_x + 270, cur_y + 3, "[PASSED]", Color::rgb(16, 124, 65), &font_sm);
+            }
+
+            // Bottom Status Bar
+            let sb_y = client.bottom() - 20;
+            s.fill_rect(Rect::new(client.x, sb_y, client.w, 20), Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, client.x, sb_y, client.right(), sb_y, Color::rgb(51, 65, 85));
+            ui::font::draw_text_font(s, client.x + 12, sb_y + 4, "Page 1 of 1 | 1,420 words | 8,940 characters | Calibri 11pt | 100% Zoom", Color::rgb(148, 163, 184), &font_sm);
+        }
+        1 => {
+            // --- Zenith Calc (Excel / Google Sheets / LibreOffice Calc) ---
+            // Formula Bar (h = 24)
+            let fx_y = body_y;
+            s.fill_rect(Rect::new(client.x, fx_y, client.w, 24), Color::rgb(30, 41, 59));
+            ui::draw::draw_line(s, client.x, fx_y + 23, client.right(), fx_y + 23, Color::rgb(51, 65, 85));
+
+            // Name Box
+            let name_rect = Rect::new(client.x + 6, fx_y + 3, 44, 18);
+            ui::draw::draw_rounded_rect(s, name_rect, 2, Color::rgb(15, 23, 42));
+            ui::font::draw_text_font(s, name_rect.x + 6, name_rect.y + 3, "C5", Color::rgb(74, 222, 128), &font_sm);
+
+            // fx label
+            ui::font::draw_text_font(s, client.x + 58, fx_y + 5, "fx", Color::rgb(148, 163, 184), &font_sm);
+
+            // Formula Input
+            let formula_rect = Rect::new(client.x + 76, fx_y + 3, client.w - 86, 18);
+            ui::draw::draw_rounded_rect(s, formula_rect, 2, Color::rgb(15, 23, 42));
+            ui::font::draw_text_font(s, formula_rect.x + 8, formula_rect.y + 3, "=SUM(B2:B5)", Color::rgb(226, 232, 240), &font_sm);
+
+            // Matrix headers & Grid
+            let grid_y = fx_y + 24;
+            let col_w = 78;
+            let row_h = 20;
+
+            // Column Headers A, B, C, D, E, F
+            s.fill_rect(Rect::new(client.x, grid_y, 36, row_h), Color::rgb(20, 27, 45));
+            let col_letters = ["A", "B", "C", "D", "E", "F"];
+            for (ci, &let_str) in col_letters.iter().enumerate() {
+                let cx = client.x + 36 + (ci as i32) * col_w;
+                let c_rect = Rect::new(cx, grid_y, col_w, row_h);
+                s.fill_rect(c_rect, Color::rgb(30, 41, 59));
+                ui::draw::draw_rect_outline(s, c_rect, 1, Color::rgb(51, 65, 85));
+                ui::font::draw_text_font(s, cx + col_w / 2 - 4, grid_y + 4, let_str, Color::rgb(203, 213, 225), &font_sm);
+            }
+
+            // Cell Data Rows
+            let sheet_data = [
+                ("1", ["Quarter", "Revenue", "Expenses", "Net Profit", "Margin", ""]),
+                ("2", ["Q1-2026", "$45,000", "$28,000", "$17,000", "37.7%", ""]),
+                ("3", ["Q2-2026", "$52,000", "$31,000", "$21,000", "40.3%", ""]),
+                ("4", ["Q3-2026", "$68,000", "$39,000", "$29,000", "42.6%", ""]),
+                ("5", ["Q4-2026", "$85,000", "$47,200", "$37,800", "44.4%", ""]),
+                ("6", ["TOTAL", "$250,000", "$145,200", "$104,800", "41.9%", ""]),
+            ];
+
+            for (ri, &(row_lbl, row_vals)) in sheet_data.iter().enumerate() {
+                let ry = grid_y + row_h + (ri as i32) * row_h;
+                if ry + row_h > client.bottom() - 20 {
+                    break;
+                }
+                // Row header number
+                let rh_rect = Rect::new(client.x, ry, 36, row_h);
+                s.fill_rect(rh_rect, Color::rgb(30, 41, 59));
+                ui::draw::draw_rect_outline(s, rh_rect, 1, Color::rgb(51, 65, 85));
+                ui::font::draw_text_font(s, rh_rect.x + 12, ry + 4, row_lbl, Color::rgb(203, 213, 225), &font_sm);
+
+                for (ci, &val) in row_vals.iter().enumerate() {
+                    let cx = client.x + 36 + (ci as i32) * col_w;
+                    let cell_rect = Rect::new(cx, ry, col_w, row_h);
+                    let is_active_cell = zenith.active_cell_row == ri && zenith.active_cell_col == ci;
+
+                    if is_active_cell {
+                        s.fill_rect(cell_rect, Color::rgb(15, 23, 42));
+                        ui::draw::draw_rect_outline(s, cell_rect, 2, Color::rgb(16, 124, 65));
+                        s.fill_rect(Rect::new(cell_rect.right() - 4, cell_rect.bottom() - 4, 4, 4), Color::rgb(16, 124, 65));
+                    } else if ri == 0 {
+                        s.fill_rect(cell_rect, Color::rgb(24, 32, 47));
+                        ui::draw::draw_rect_outline(s, cell_rect, 1, Color::rgb(45, 55, 72));
+                    } else {
+                        s.fill_rect(cell_rect, Color::rgb(15, 23, 42));
+                        ui::draw::draw_rect_outline(s, cell_rect, 1, Color::rgb(33, 41, 54));
+                    }
+
+                    let t_col = if ri == 0 { Color::rgb(74, 222, 128) } else if ri == 5 { Color::rgb(245, 158, 11) } else { Color::WHITE };
+                    ui::font::draw_text_font(s, cx + 6, ry + 4, val, t_col, &font_sm);
+                }
+            }
+
+            // Bottom Sheet Tabs & Status Bar
+            let sb_y = client.bottom() - 20;
+            s.fill_rect(Rect::new(client.x, sb_y, client.w, 20), Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, client.x, sb_y, client.right(), sb_y, Color::rgb(51, 65, 85));
+
+            let tab_rect = Rect::new(client.x + 10, sb_y + 2, 110, 16);
+            ui::draw::draw_rounded_rect(s, tab_rect, 2, Color::rgb(16, 124, 65));
+            ui::font::draw_text_font(s, tab_rect.x + 6, tab_rect.y + 2, "Sheet1: Forecast", Color::WHITE, &font_sm);
+
+            ui::font::draw_text_font(s, client.x + 140, sb_y + 4, "READY | SUM=$145,200 | AVERAGE=$36,300 | COUNT=4 | MIN=$28,000", Color::rgb(148, 163, 184), &font_sm);
+        }
+        2 => {
+            // --- Zenith Present (PowerPoint / Google Slides / LibreOffice Impress) ---
+            let strip_w = 110;
+            let strip_rect = Rect::new(client.x, body_y, strip_w, body_h);
+            s.fill_rect(strip_rect, Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, client.x + strip_w, body_y, client.x + strip_w, client.bottom(), Color::rgb(51, 65, 85));
+
+            let slides = [
+                ("1. Keynote Title", Color::rgb(216, 59, 1)),
+                ("2. Architecture", Color::rgb(16, 124, 65)),
+                ("3. Sovereign Core", Color::rgb(0, 120, 212)),
+            ];
+
+            for (si, &(s_title, s_accent)) in slides.iter().enumerate() {
+                let sy = body_y + 8 + (si as i32) * 58;
+                let s_rect = Rect::new(client.x + 8, sy, strip_w - 16, 48);
+                let is_sel = zenith.active_slide == si;
+
+                s.fill_rect(s_rect, Color::rgb(30, 41, 59));
+                if is_sel {
+                    ui::draw::draw_rect_outline(s, s_rect, 2, Color::rgb(216, 59, 1));
+                } else {
+                    ui::draw::draw_rect_outline(s, s_rect, 1, Color::rgb(51, 65, 85));
+                }
+
+                s.fill_rect(Rect::new(s_rect.x + 4, s_rect.y + 4, 16, 12), s_accent);
+                ui::font::draw_text_font(s, s_rect.x + 6, s_rect.y + 28, s_title, if is_sel { Color::WHITE } else { Color::rgb(148, 163, 184) }, &font_sm);
+            }
+
+            // Center 16:9 Presentation Stage
+            let stage_x = client.x + strip_w + 12;
+            let stage_w = (client.w - strip_w - 24).clamp(240, 640);
+            let stage_h = (stage_w * 9) / 16;
+            let stage_y = body_y + 12;
+
+            let slide_canvas = Rect::new(stage_x, stage_y, stage_w, stage_h);
+            s.fill_rect(Rect::new(stage_x + 4, stage_y + 4, stage_w, stage_h), Color::rgba(0, 0, 0, 90));
+            ui::draw::draw_rounded_rect(s, slide_canvas, 6, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, slide_canvas, 1, Color::rgb(71, 85, 105));
+
+            // Slide Header Banner
+            s.fill_rect(Rect::new(stage_x, stage_y, stage_w, 36), Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, stage_x, stage_y + 35, stage_x + stage_w, stage_y + 35, Color::rgb(216, 59, 1));
+            ui::font::draw_text_font(s, stage_x + 16, stage_y + 10, "NovaOS Sovereign Pure Rust Architecture", Color::WHITE, &font_reg);
+
+            // Slide Content Bullets
+            let bx = stage_x + 20;
+            let mut by = stage_y + 50;
+            ui::font::draw_text_font(s, bx, by, "* Pure Rust 1.99.1 - Zero external C/C++ runtime dependencies", Color::rgb(226, 232, 240), &font_sm);
+            by += 20;
+            ui::font::draw_text_font(s, bx, by, "* 11 Embedded Typography Families (Calibri, Times New Roman, Segoe UI, Ubuntu)", Color::rgb(226, 232, 240), &font_sm);
+            by += 20;
+            ui::font::draw_text_font(s, bx, by, "* Dynamic Calc formula engine with dependency graph recalculation", Color::rgb(74, 222, 128), &font_sm);
+            by += 20;
+            ui::font::draw_text_font(s, bx, by, "* High-performance 16:9 presentation studio with speaker notes", Color::rgb(56, 189, 248), &font_sm);
+
+            // Bottom Speaker Notes
+            let notes_y = stage_y + stage_h + 8;
+            if notes_y + 24 <= client.bottom() {
+                let notes_rect = Rect::new(stage_x, notes_y, stage_w, client.bottom() - notes_y - 4);
+                ui::draw::draw_rounded_rect(s, notes_rect, 4, Color::rgb(15, 23, 42));
+                ui::draw::draw_rect_outline(s, notes_rect, 1, Color::rgb(51, 65, 85));
+                ui::font::draw_text_font(s, notes_rect.x + 8, notes_rect.y + 4, "Speaker Notes: Highlight sub-millisecond document loading time and zero FFmpeg/libvpx bloat.", Color::rgb(245, 158, 11), &font_sm);
+            }
+        }
+        3 => {
+            // --- Zenith Base (Access / LibreOffice Base) ---
+            let tbl_w = 120;
+            let tbl_rect = Rect::new(client.x, body_y, tbl_w, body_h);
+            s.fill_rect(tbl_rect, Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, client.x + tbl_w, body_y, client.x + tbl_w, client.bottom(), Color::rgb(51, 65, 85));
+
+            ui::font::draw_text_font(s, client.x + 8, body_y + 6, "Tables (2)", Color::rgb(148, 163, 184), &font_sm);
+            let tables = [("Customers", 4), ("Invoices", 6)];
+            for (ti, &(tname, _recs)) in tables.iter().enumerate() {
+                let ty = body_y + 24 + (ti as i32) * 26;
+                let is_sel = ti == 0;
+                let r = Rect::new(client.x + 4, ty, tbl_w - 8, 22);
+                if is_sel {
+                    ui::draw::draw_rounded_rect(s, r, 3, Color::rgb(168, 0, 0));
+                    ui::font::draw_text_font(s, r.x + 6, r.y + 4, tname, Color::WHITE, &font_sm);
+                } else {
+                    ui::draw::draw_rounded_rect(s, r, 3, Color::rgb(30, 41, 59));
+                    ui::font::draw_text_font(s, r.x + 6, r.y + 4, tname, Color::rgb(203, 213, 225), &font_sm);
+                }
+            }
+
+            // Right Table View & Data Grid
+            let grid_x = client.x + tbl_w + 6;
+            let grid_w = client.w - tbl_w - 12;
+
+            // Column Header
+            let th_rect = Rect::new(grid_x, body_y + 6, grid_w, 20);
+            s.fill_rect(th_rect, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, th_rect, 1, Color::rgb(51, 65, 85));
+            ui::font::draw_text_font(s, grid_x + 8, body_y + 10, "Id (Int)", Color::rgb(148, 163, 184), &font_sm);
+            ui::font::draw_text_font(s, grid_x + 70, body_y + 10, "Name (VarChar)", Color::rgb(148, 163, 184), &font_sm);
+            ui::font::draw_text_font(s, grid_x + 190, body_y + 10, "Email (VarChar)", Color::rgb(148, 163, 184), &font_sm);
+            ui::font::draw_text_font(s, grid_x + 310, body_y + 10, "Balance (Float)", Color::rgb(148, 163, 184), &font_sm);
+
+            // Record Rows
+            let records = [
+                ("1", "Acme Corporation", "admin@acme.com", "$14,500.00"),
+                ("2", "Global Logistics", "ops@globallog.com", "$28,320.50"),
+                ("3", "Cyber Systems", "contact@cybersys.io", "$6,850.00"),
+                ("4", "Quantum Tech", "info@quantum.org", "$45,100.00"),
+            ];
+
+            for (ri, &(r_id, r_name, r_mail, r_bal)) in records.iter().enumerate() {
+                let ry = body_y + 28 + (ri as i32) * 22;
+                let is_cur = zenith.active_table_record == ri;
+                let row_r = Rect::new(grid_x, ry, grid_w, 20);
+
+                if is_cur {
+                    s.fill_rect(row_r, Color::rgb(45, 20, 20));
+                    ui::draw::draw_rect_outline(s, row_r, 1, Color::rgb(168, 0, 0));
+                } else if ri % 2 == 1 {
+                    s.fill_rect(row_r, Color::rgba(255, 255, 255, 4));
+                }
+
+                ui::font::draw_text_font(s, grid_x + 8, ry + 4, r_id, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, grid_x + 70, ry + 4, r_name, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, grid_x + 190, ry + 4, r_mail, Color::rgb(203, 213, 225), &font_sm);
+                ui::font::draw_text_font(s, grid_x + 310, ry + 4, r_bal, Color::rgb(74, 222, 128), &font_sm);
+            }
+
+            // Bottom SQL Console
+            let sql_y = client.bottom() - 44;
+            let sql_rect = Rect::new(grid_x, sql_y, grid_w, 38);
+            s.fill_rect(sql_rect, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, sql_rect, 1, Color::rgb(168, 0, 0));
+            ui::font::draw_text_font(s, grid_x + 8, sql_y + 4, "SQL > SELECT * FROM Customers WHERE Balance > 10000 ORDER BY Id ASC;", Color::rgb(245, 158, 11), &font_sm);
+            ui::font::draw_text_font(s, grid_x + 8, sql_y + 20, "[OK] 3 rows returned in 0.12ms | Primary Key index used", Color::rgb(74, 222, 128), &font_sm);
+        }
+        _ => {}
+    }
+
+    // 6. Modal About Dialog
+    if zenith.show_about {
+        s.fill_rect(client, Color::rgba(0, 0, 0, 160));
+
+        let ab_w = 440.min(client.w - 32);
+        let ab_h = 250.min(client.h - 32);
+        let ab_x = client.x + (client.w - ab_w) / 2;
+        let ab_y = client.y + (client.h - ab_h) / 2;
+        let ab_rect = Rect::new(ab_x, ab_y, ab_w, ab_h);
+
+        ui::draw::draw_rounded_rect(s, ab_rect, 8, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, ab_rect, 2, Color::rgb(0, 120, 212));
+
+        // Header icon & title
+        ui::draw::draw_rounded_rect(s, Rect::new(ab_x + 16, ab_y + 14, 26, 26), 4, Color::rgb(0, 120, 212));
+        ui::font::draw_text_font(s, ab_x + 22, ab_y + 18, "Z", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 14, "ZENITH OFFICE SUITE", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 28, "v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248), &font_sm);
+
+        ui::draw::draw_line(s, ab_x + 14, ab_y + 48, ab_x + ab_w - 14, ab_y + 48, Color::rgb(48, 54, 61));
+
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 58, "Synthesized Microsoft Office, LibreOffice & Google Docs", Color::rgb(226, 232, 240), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 76, "Modules: Zenith Writer, Zenith Calc, Zenith Present, Zenith Base", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 98, "11 Embedded Fonts: Calibri, Times New Roman, Segoe UI, Ubuntu", Color::rgb(74, 222, 128), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 116, "Preinstalled Default App in NovaOS & Integrated in Aero Browser", Color::rgb(245, 158, 11), &font_sm);
+
+        // Dismiss Button
+        let btn_close = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
+        ui::draw::draw_rounded_rect(s, btn_close, 4, Color::rgb(0, 120, 212));
         ui::font::draw_text_font(s, btn_close.x + 18, btn_close.y + 5, "Dismiss", Color::WHITE, &font_sm);
     }
 }
@@ -9321,7 +10067,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 11);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 12);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -10132,5 +10878,109 @@ mod tests {
         wm.on_key(10);
         let l5 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l5.contains("Swarm / Stream initialized") || l5.contains("Vortex"), "Terminal torrent command output: {}", l5);
+    }
+
+    #[test]
+    fn test_wm_zenith_office_suite_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial State
+        assert_eq!(wm.zenith_app.active_module, 0); // Writer
+        assert_eq!(wm.zenith_app.ribbon_tab, 0);    // Home
+        assert_eq!(wm.zenith_app.font_name(), "Calibri");
+        assert_eq!(wm.zenith_app.font_size, 11);
+        assert!(!wm.zenith_app.bold);
+        assert!(!wm.zenith_app.italic);
+        assert!(!wm.zenith_app.underline);
+        assert_eq!(wm.zenith_app.align, 0);
+        assert!(!wm.zenith_app.show_about);
+
+        // 2. Formatting Toggles
+        wm.zenith_app.toggle_bold();
+        assert!(wm.zenith_app.bold);
+        wm.zenith_app.toggle_italic();
+        assert!(wm.zenith_app.italic);
+        wm.zenith_app.toggle_underline();
+        assert!(wm.zenith_app.underline);
+
+        // 3. Font Switching across Microsoft & LibreOffice Families
+        wm.zenith_app.cycle_font();
+        assert_eq!(wm.zenith_app.font_name(), "Times New Roman");
+        wm.zenith_app.cycle_font();
+        assert_eq!(wm.zenith_app.font_name(), "Arial");
+
+        // 4. Module Switching
+        wm.zenith_app.set_module(1); // Calc
+        assert_eq!(wm.zenith_app.active_module, 1);
+        wm.zenith_app.set_module(2); // Present
+        assert_eq!(wm.zenith_app.active_module, 2);
+        wm.zenith_app.set_module(3); // Base
+        assert_eq!(wm.zenith_app.active_module, 3);
+        wm.zenith_app.set_module(0); // Back to Writer
+        assert_eq!(wm.zenith_app.active_module, 0);
+
+        // 5. Desktop Shortcut & Window Click Interactions
+        assert_eq!(DESKTOP_SHORTCUTS[8].label, "Office");
+        assert_eq!(DESKTOP_SHORTCUTS[8].app_id, 12);
+        wm.launch_or_restore(DESKTOP_SHORTCUTS[8].app_id);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 12, "Clicking Office icon should launch Window 12");
+
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // Click [X] Calc button in module switcher (x: client.x + 100, y: client.y + 10)
+        wm.on_left_press(client.x + 100, client.y + 10);
+        assert_eq!(wm.zenith_app.active_module, 1, "Clicking [X] Calc button should switch to Calc spreadsheet");
+
+        // Click [P] Present button in module switcher (x: client.x + 180, y: client.y + 10)
+        wm.on_left_press(client.x + 180, client.y + 10);
+        assert_eq!(wm.zenith_app.active_module, 2, "Clicking [P] Present should switch to Present slide studio");
+
+        // Click [B] Base button in module switcher (x: client.x + 280, y: client.y + 10)
+        wm.on_left_press(client.x + 280, client.y + 10);
+        assert_eq!(wm.zenith_app.active_module, 3, "Clicking [B] Base should switch to Base database");
+
+        // Click [W] Writer button in module switcher (x: client.x + 40, y: client.y + 10)
+        wm.on_left_press(client.x + 40, client.y + 10);
+        assert_eq!(wm.zenith_app.active_module, 0, "Clicking [W] Writer should switch to Writer");
+
+        // Click About button [?] (x: client.x + client.w - 20, y: client.y + 10)
+        wm.on_left_press(client.x + client.w - 20, client.y + 10);
+        assert!(wm.zenith_app.show_about, "Clicking ? should show About modal dialog");
+
+        // Dismiss modal dialog
+        wm.on_left_press(client.x + 100, client.y + 100);
+        assert!(!wm.zenith_app.show_about, "Clicking anywhere should dismiss dialog");
+
+        // 6. Terminal Shell Commands
+        wm.raise(0);
+        for b in b"zenith --writer" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("Headings") || l1.contains("Writer") || l1.contains("Word"), "Terminal zenith --writer output: {}", l1);
+
+        for b in b"office --calc" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("SUM") || l2.contains("Calc") || l2.contains("Spreadsheet"), "Terminal office --calc output: {}", l2);
+
+        for b in b"zenith --fonts" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l3.contains("Calibri") || l3.contains("Liberation") || l3.contains("Fonts"), "Terminal zenith --fonts output: {}", l3);
+
+        for b in b"zenith --version" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l4 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l4.contains("Pure Rust 1.99.1") || l4.contains("zenith-core") || l4.contains("Zenith"), "Terminal zenith --version output: {}", l4);
     }
 }

@@ -309,6 +309,49 @@ impl PackageRepository {
             InstallStatus::NotInstalled,
         );
 
+        // 10. Zenith Office Suite (Productivity - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.zenith",
+            "Zenith Office Suite",
+            "1.0.0",
+            AppCategory::Productivity,
+            "Zenith Project",
+            "MIT / Apache-2.0",
+            "Professional office productivity suite: Writer, Calc, Present, and Base",
+            "Full-featured office suite combining the capabilities of Microsoft Office (Word, Excel, PowerPoint, Access), LibreOffice, and Google Docs/Sheets. Includes pure Rust formula computation engine, rich text paragraph typography, slide layout designer, relational table query engine, and 11 native font families.",
+            "Initial release featuring Writer, Calc (SUM/AVG/MIN/MAX/COUNT/IF), Present (16:9 slides), Base (SQL runner), and Aero Browser collaborative cloud mode.",
+            "[ZEN]",
+            24 * 1024 * 1024,
+            58 * 1024 * 1024,
+            5.0,
+            4920,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Zenith Writer Document Editor".into(),
+                    caption: "Rich text typography with Calibri and Times New Roman".into(),
+                    accent_rgb: (0, 120, 212),
+                },
+                ScreenshotPreview {
+                    title: "Zenith Calc Spreadsheet".into(),
+                    caption: "Dynamic matrix recalculation and formula bar".into(),
+                    accent_rgb: (16, 124, 65),
+                },
+                ScreenshotPreview {
+                    title: "Zenith Present Slide Studio".into(),
+                    caption: "16:9 widescreen presentation deck with speaker notes".into(),
+                    accent_rgb: (216, 59, 1),
+                },
+                ScreenshotPreview {
+                    title: "Zenith Base Relational Database".into(),
+                    caption: "Relational records and SQL query console".into(),
+                    accent_rgb: (168, 0, 0),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

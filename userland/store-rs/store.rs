@@ -454,6 +454,20 @@ impl Store {
             VerificationStatus::VerifiedHmacSha256,
             &[0; 32],
         );
+
+        // 8. Zenith (Productivity - Default Preinstalled Office Suite)
+        self.add_package(
+            "Zenith",
+            "1.0",
+            "Office suite: Writer, Calc, Present, Base",
+            "ZENITH.PKG",
+            "ZENITH.APP",
+            Category::Productivity,
+            420,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
     }
 
     /// Scans the FAT32 filesystem for `.PKG` files and verifies their cryptographic signatures.

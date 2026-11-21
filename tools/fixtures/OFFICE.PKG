@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.zenith"
+name = "Zenith Office Suite"
+version = "1.0.0"
+category = "Productivity"
+app_filename = "ZENITH.ELF"
+summary = "Sovereign pure-Rust office suite: Writer, Calc, Present & Base"
