@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.vortex"
+name = "Vortex Studio"
+version = "1.0.0"
+category = "Internet"
+app_filename = "VORTEX.ELF"
+summary = "BitTorrent client & IDM stream download accelerator"

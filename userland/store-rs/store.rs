@@ -440,6 +440,20 @@ impl Store {
             VerificationStatus::VerifiedHmacSha256,
             &[0; 32],
         );
+
+        // 7. Vortex (Utilities)
+        self.add_package(
+            "Vortex",
+            "1.0",
+            "BitTorrent client & IDM stream accelerator",
+            "VORTEX.PKG",
+            "VORTEX.APP",
+            Category::Utilities,
+            180,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
     }
 
     /// Scans the FAT32 filesystem for `.PKG` files and verifies their cryptographic signatures.

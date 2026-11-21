@@ -2609,6 +2609,127 @@ impl WmVellumApp {
     }
 }
 
+// --- Vortex Studio Desktop App Subsystem ---
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmVortexApp {
+    pub filter: u8, // 0: All, 1: Torrents, 2: Streams, 3: Active, 4: Completed
+    pub selected_task: usize, // 0: NovaOS Torrent, 1: YouTube Stream, 2: Linux Kernel Torrent, 3: Vimeo Stream
+    pub inspector_tab: u8, // 0: Visualizer (Piece Grid or Chunk Bars), 1: Peers & Connections, 2: Info
+    pub show_about: bool,
+    pub download_rate_mb: u32,
+    pub upload_rate_mb: u32,
+    pub active_tasks: u8,
+    pub completed_tasks: u8,
+    pub torrent_pieces_done: u16,
+    pub torrent_pieces_total: u16,
+    pub stream_chunks_done: u8,
+    pub stream_chunks_total: u8,
+}
+
+impl WmVortexApp {
+    pub fn new() -> Self {
+        WmVortexApp {
+            filter: 0,
+            selected_task: 0,
+            inspector_tab: 0,
+            show_about: false,
+            download_rate_mb: 31,
+            upload_rate_mb: 3,
+            active_tasks: 2,
+            completed_tasks: 2,
+            torrent_pieces_done: 962,
+            torrent_pieces_total: 1300,
+            stream_chunks_done: 5,
+            stream_chunks_total: 8,
+        }
+    }
+
+    pub fn set_filter(&mut self, f: u8) {
+        self.filter = f % 5;
+    }
+
+    pub fn set_selected_task(&mut self, idx: usize) {
+        self.selected_task = idx % 4;
+    }
+
+    pub fn set_inspector_tab(&mut self, tab: u8) {
+        self.inspector_tab = tab % 3;
+    }
+
+    pub fn toggle_about(&mut self) {
+        self.show_about = !self.show_about;
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) {
+        let rel_x = px - client.x;
+        let rel_y = py - client.y;
+
+        // 1. If About dialog is open, click anywhere dismisses it
+        if self.show_about {
+            self.show_about = false;
+            return;
+        }
+
+        // 2. Toolbar clicks (rel_y: 0..40)
+        if rel_y >= 0 && rel_y <= 40 {
+            // ? About button: client.w - 36 .. client.w - 8
+            if rel_x >= client.w - 36 && rel_x <= client.w - 8 {
+                self.show_about = true;
+                return;
+            }
+            // + Torrent: 70..140
+            if rel_x >= 70 && rel_x <= 140 {
+                self.torrent_pieces_done = 962;
+                self.selected_task = 0;
+                return;
+            }
+            // + Add URL / Stream: 145..200
+            if rel_x >= 145 && rel_x <= 200 {
+                self.selected_task = 1;
+                return;
+            }
+            // Resume: 205..260
+            if rel_x >= 205 && rel_x <= 260 {
+                self.download_rate_mb = 31;
+                return;
+            }
+            // Pause: 265..315
+            if rel_x >= 265 && rel_x <= 315 {
+                self.download_rate_mb = 0;
+                return;
+            }
+            // Delete: 320..370
+            if rel_x >= 320 && rel_x <= 370 {
+                self.selected_task = 0;
+                return;
+            }
+            return;
+        }
+
+        // 3. Sidebar Category Clicks (rel_x in 0..110, rel_y in 50..180)
+        if rel_x >= 0 && rel_x <= 110 && rel_y >= 50 && rel_y <= 180 {
+            let cat_idx = ((rel_y - 50) / 24).max(0) as u8;
+            self.filter = cat_idx.min(4);
+            return;
+        }
+
+        // 4. Main Queue Table Clicks (rel_x > 110, rel_y in 50..170)
+        if rel_x > 110 && rel_y >= 50 && rel_y <= 170 {
+            let row_idx = ((rel_y - 50) / 26).max(0) as usize;
+            self.selected_task = row_idx.min(3);
+            return;
+        }
+
+        // 5. Bottom Inspector Tab Clicks (rel_y in 170..200)
+        if rel_y >= 170 && rel_y <= 200 {
+            let tab_idx = ((rel_x - 110) / 80).max(0) as u8;
+            self.inspector_tab = tab_idx.min(2);
+            return;
+        }
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -2740,6 +2861,7 @@ impl WmTerminal {
                 self.push_line("  browser    - Launch Aero Web Browser (or 'aero <url>', '--shields')", Color::rgb(220, 230, 242));
                 self.push_line("  spectra    - Launch Spectra Media Studio (or 'spectra <file>', '--info')", Color::rgb(220, 230, 242));
                 self.push_line("  vellum     - Launch Vellum PDF Studio (or 'vellum <file>', '--info')", Color::rgb(220, 230, 242));
+                self.push_line("  vortex     - Launch Vortex BitTorrent & Stream Studio ('vortex <url>', '--list')", Color::rgb(220, 230, 242));
                 self.push_line("  echo <msg> - Print message to standard output", Color::rgb(220, 230, 242));
                 self.push_line("  clear      - Clear terminal screen back to clean prompt", Color::rgb(220, 230, 242));
                 self.push_line("  about      - Information about NovaOS 2.0 release", Color::rgb(220, 230, 242));
@@ -3105,6 +3227,41 @@ impl WmTerminal {
                     self.push_line("[OK] PDF 1.7 Parsed - Display list generated (18 text spans)", Color::rgb(240, 246, 252));
                 }
             }
+            "vortex" | "torrent" | "idm" => {
+                if rest.is_empty() || rest == "--help" || rest == "-h" {
+                    self.push_line("Vortex Studio v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248));
+                    self.push_line("Unified BitTorrent Client & Intelligent Stream Accelerator", Color::rgb(88, 166, 255));
+                    self.push_line("Usage: vortex [file.torrent | magnet:? | url | --list | --sniff | --info | --version]", Color::rgb(220, 230, 242));
+                    self.push_line("App Store: Registered in nova-store (Internet Category) | Status: Available", Color::rgb(63, 185, 80));
+                } else if rest == "--list" || rest == "-l" {
+                    self.push_line("Vortex Active Queue (4 tasks running):", Color::rgb(56, 189, 248));
+                    self.push_line("  * [TORRENT] NovaOS-2.0-Enterprise.iso  74.0% | 14.1 MB/s | 54 Peers", Color::rgb(63, 185, 80));
+                    self.push_line("  * [STREAM]  YouTube: NovaOS Kernel [FHD] 62.3% | 17.5 MB/s | 8 Streams", Color::rgb(251, 146, 60));
+                    self.push_line("  * [TORRENT] Linux-Kernel-6.12.tar.xz  100.0% | Seeding   | 120 Peers", Color::rgb(56, 189, 248));
+                    self.push_line("  * [STREAM]  Vimeo: Rust Concurrency   100.0% | Complete  | 4 Streams", Color::rgb(74, 222, 128));
+                    self.push_line("Swarm Aggregation: Download: 31.6 MB/s | Seeding: 3.4 MB/s", Color::rgb(240, 246, 252));
+                } else if rest == "--sniff" || rest == "-s" {
+                    self.push_line("[*] Browser Video Sniffer: Active (Aero Browser Bridge)", Color::rgb(56, 189, 248));
+                    self.push_line("[+] Detected Web Stream: YouTube Video (MPEG-4 AVC)", Color::rgb(63, 185, 80));
+                    self.push_line("  * 1080p Full HD (88.4 MB) -> Ready to accelerate (8 parallel chunks)", Color::rgb(220, 230, 242));
+                    self.push_line("  * 720p High Def (42.2 MB) -> Ready to accelerate (4 chunks)", Color::rgb(220, 230, 242));
+                    self.push_line("  * Audio MP3 Only (6.4 MB) -> Direct download stream", Color::rgb(220, 230, 242));
+                    self.push_line("[+] Pop-up Floating Badge: Injected beside video element.", Color::rgb(74, 222, 128));
+                } else if rest == "--info" || rest == "-i" {
+                    self.push_line("Vortex BitTorrent Telemetry & Swarm Inspector:", Color::rgb(56, 189, 248));
+                    self.push_line("  * Swarm Target: NovaOS 2.0 Enterprise Desktop (x86_64)", Color::rgb(63, 185, 80));
+                    self.push_line("  * Info Hash: 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12", Color::rgb(56, 189, 248));
+                    self.push_line("  * Piece Map: 962 / 1,300 pieces verified (74.0%)", Color::rgb(74, 222, 128));
+                    self.push_line("  * Acceleration: IDM-style 16-channel range splitting active", Color::rgb(88, 166, 255));
+                } else if rest == "--version" || rest == "-v" {
+                    self.push_line("Vortex Studio 1.0.0 (pc-novaos-elf, Pure Rust 1.99.1)", Color::rgb(88, 166, 255));
+                    self.push_line("Architecture: Transmission/uTorrent Swarm + IDM Range Accelerator", Color::rgb(220, 230, 242));
+                } else {
+                    self.push_line("Opening target in Vortex Studio:", Color::rgb(88, 166, 255));
+                    self.push_line(rest, Color::rgb(63, 185, 80));
+                    self.push_line("[OK] Swarm / Stream initialized (16 parallel chunk streams allocated)", Color::rgb(240, 246, 252));
+                }
+            }
             "echo" => {
                 self.push_line(rest, Color::rgb(240, 246, 252));
             }
@@ -3189,6 +3346,7 @@ pub struct Wm {
     pub browser_app: WmBrowserApp,
     pub player_app: WmPlayerApp,
     pub vellum_app: WmVellumApp,
+    pub vortex_app: WmVortexApp,
 }
 
 impl Wm {
@@ -3248,6 +3406,7 @@ impl Wm {
             browser_app: WmBrowserApp::new(),
             player_app: WmPlayerApp::new(),
             vellum_app: WmVellumApp::new(),
+            vortex_app: WmVortexApp::new(),
         }
     }
 
@@ -3317,6 +3476,7 @@ impl Wm {
             browser_app: WmBrowserApp::new(),
             player_app: WmPlayerApp::new(),
             vellum_app: WmVellumApp::new(),
+            vortex_app: WmVortexApp::new(),
         }
     }
 
@@ -4517,6 +4677,12 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.vellum_app.handle_click(px, py, client);
                 }
+            } else if w.label == 11 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.vortex_app.handle_click(px, py, client);
+                }
             }
             return;
         }
@@ -4651,6 +4817,8 @@ impl Wm {
                     draw_player_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.player_app, &palette);
                 } else if w.label == 10 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_vellum_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vellum_app, &palette);
+                } else if w.label == 11 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_vortex_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vortex_app, &palette);
                 }
             }
 
@@ -4713,6 +4881,7 @@ impl Wm {
                     8 => "Aero Browser - Fast & Private Web",
                     9 => "Spectra - Ultra HD Media Studio",
                     10 => "Vellum - Professional PDF Studio",
+                    11 => "Vortex - BitTorrent & Stream Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -5544,6 +5713,26 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             s.fill_rect(Rect::new(p_x + 3, p_y + 14, p_w - 8, 2), Color::rgb(148, 163, 184));
             ui::font::draw_text_font(s, p_x + 3, p_y + 7, "V", Color::rgb(14, 165, 233), &Font::small());
         }
+        11 => {
+            // 11: Vortex BitTorrent & Stream Studio (Electric indigo/cyan badge with vortex chevron)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, b_w, b_h), Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(99, 102, 241));
+
+            let mid_x = b_x + b_w / 2;
+            let mid_y = b_y + b_h / 2;
+            ui::draw::draw_line(s, mid_x - 5, mid_y - 3, mid_x, mid_y + 3, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, mid_x + 5, mid_y - 3, mid_x, mid_y + 3, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, mid_x, mid_y - 6, mid_x, mid_y + 3, Color::rgb(56, 189, 248));
+            s.fill_rect(Rect::new(mid_x - 5, mid_y + 6, 11, 2), Color::rgb(99, 102, 241));
+            s.put_pixel(b_x + 4, b_y + 4, Color::rgb(74, 222, 128));
+            s.put_pixel(b_x + b_w - 5, b_y + 4, Color::rgb(245, 158, 11));
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -5664,6 +5853,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 3, y + 3, 6, 6), Color::WHITE);
             s.put_pixel(x + 5, y + 5, Color::rgb(14, 165, 233));
             s.put_pixel(x + 6, y + 5, Color::rgb(14, 165, 233));
+        }
+        11 => {
+            // Vortex BitTorrent & Stream Studio: Electric indigo/cyan badge with download chevron
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(15, 23, 42));
+            ui::draw::draw_line(s, x + 3, y + 4, x + 6, y + 7, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, x + 9, y + 4, x + 6, y + 7, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, x + 6, y + 2, x + 6, y + 7, Color::rgb(56, 189, 248));
+            s.fill_rect(Rect::new(x + 3, y + 9, 7, 1), Color::rgb(99, 102, 241));
         }
         _ => {
             // System gear icon
@@ -6579,6 +6776,30 @@ fn draw_browser_client_body<S: Surface + ?Sized>(
                     ui::draw::draw_rect_outline(s, Rect::new(cx, vp_y + 90, card_w, 40), 1, Color::rgb(51, 65, 85));
                     ui::font::draw_text_font(s, cx + 14, vp_y + 104, cname, Color::WHITE, &font_sm);
                 }
+
+                if vp_h >= 170 {
+                    let vid_x = client.x + 30;
+                    let vid_y = vp_y + 140;
+                    let vid_w = (client.w - 60).min(380).max(180);
+                    let vid_h = 58;
+                    if vid_y + vid_h <= vp_y + vp_h - 6 {
+                        ui::draw::draw_rounded_rect(s, Rect::new(vid_x, vid_y, vid_w, vid_h), 6, Color::rgb(20, 24, 38));
+                        ui::draw::draw_rect_outline(s, Rect::new(vid_x, vid_y, vid_w, vid_h), 1, Color::rgb(51, 65, 85));
+                        ui::font::draw_text_font(s, vid_x + 10, vid_y + 8, "HTML5 Stream: NovaOS 2.0 Keynote", Color::rgb(240, 246, 252), &font_sm);
+                        ui::font::draw_text_font(s, vid_x + 10, vid_y + 26, "Duration: 12:45 | 1080p FHD (MPEG-4 AVC)", Color::rgb(148, 163, 184), &font_sm);
+
+                        // Floating IDM / Vortex Stream Sniffer Badge
+                        let badge_w = 175;
+                        let badge_h = 20;
+                        let badge_x = vid_x + vid_w - badge_w - 6;
+                        let badge_y = vid_y + 6;
+                        if badge_x > vid_x + 100 {
+                            ui::draw::draw_rounded_rect(s, Rect::new(badge_x, badge_y, badge_w, badge_h), 4, Color::rgb(14, 165, 233));
+                            ui::draw::draw_rect_outline(s, Rect::new(badge_x, badge_y, badge_w, badge_h), 1, Color::WHITE);
+                            ui::font::draw_text_font(s, badge_x + 6, badge_y + 3, "[v] Download Video | 1080p v", Color::WHITE, &font_sm);
+                        }
+                    }
+                }
             }
             1 => {
                 ui::font::draw_text_font(s, client.x + 30, vp_y + 18, "Brave Privacy Shields Telemetry", Color::rgb(255, 107, 0), &font_reg);
@@ -7417,6 +7638,266 @@ fn draw_vellum_client_body<S: Surface + ?Sized>(
         // Dismiss Button
         let btn_close = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
         ui::draw::draw_rounded_rect(s, btn_close, 4, Color::rgb(14, 165, 233));
+        ui::font::draw_text_font(s, btn_close.x + 18, btn_close.y + 5, "Dismiss", Color::WHITE, &font_sm);
+    }
+}
+
+/// Renders Vortex BitTorrent & Stream Studio inside Window 11 client area.
+fn draw_vortex_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    vortex: &WmVortexApp,
+    _palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+
+    // 1. Studio Workspace Canvas
+    s.fill_rect(client, Color::rgb(15, 23, 42));
+
+    // 2. Top Ribbon Toolbar (h = 36)
+    let ribbon_h = 36;
+    let ribbon_rect = Rect::new(client.x, client.y, client.w, ribbon_h);
+    s.fill_rect(ribbon_rect, Color::rgb(20, 27, 45));
+    ui::draw::draw_line(s, client.x, client.y + ribbon_h - 1, client.right(), client.y + ribbon_h - 1, Color::rgb(51, 65, 85));
+
+    // Logo & Brand
+    let logo_x = client.x + 8;
+    let logo_y = client.y + 6;
+    ui::draw::draw_rounded_rect(s, Rect::new(logo_x, logo_y, 24, 24), 4, Color::rgb(99, 102, 241));
+    ui::draw::draw_line(s, logo_x + 5, logo_y + 9, logo_x + 12, logo_y + 16, Color::WHITE);
+    ui::draw::draw_line(s, logo_x + 19, logo_y + 9, logo_x + 12, logo_y + 16, Color::WHITE);
+    ui::draw::draw_line(s, logo_x + 12, logo_y + 5, logo_x + 12, logo_y + 16, Color::WHITE);
+    ui::font::draw_text_font(s, logo_x + 30, client.y + 10, "VORTEX", Color::rgb(241, 245, 249), &font_reg);
+
+    // Toolbar Buttons
+    // + Torrent
+    let btn_tor = Rect::new(client.x + 72, client.y + 6, 68, 24);
+    ui::draw::draw_rounded_rect(s, btn_tor, 4, Color::rgb(30, 41, 59));
+    ui::draw::draw_rect_outline(s, btn_tor, 1, Color::rgb(99, 102, 241));
+    ui::font::draw_text_font(s, btn_tor.x + 6, btn_tor.y + 5, "+ Torrent", Color::rgb(199, 210, 254), &font_sm);
+
+    // + Stream
+    let btn_stm = Rect::new(client.x + 146, client.y + 6, 54, 24);
+    ui::draw::draw_rounded_rect(s, btn_stm, 4, Color::rgb(30, 41, 59));
+    ui::draw::draw_rect_outline(s, btn_stm, 1, Color::rgb(245, 158, 11));
+    ui::font::draw_text_font(s, btn_stm.x + 6, btn_stm.y + 5, "+ Stream", Color::rgb(253, 230, 138), &font_sm);
+
+    // Resume
+    let btn_res = Rect::new(client.x + 206, client.y + 6, 54, 24);
+    ui::draw::draw_rounded_rect(s, btn_res, 4, Color::rgb(30, 41, 59));
+    ui::font::draw_text_font(s, btn_res.x + 6, btn_res.y + 5, "> Resume", Color::rgb(74, 222, 128), &font_sm);
+
+    // Pause
+    let btn_pau = Rect::new(client.x + 266, client.y + 6, 48, 24);
+    ui::draw::draw_rounded_rect(s, btn_pau, 4, Color::rgb(30, 41, 59));
+    ui::font::draw_text_font(s, btn_pau.x + 6, btn_pau.y + 5, "|| Pause", Color::rgb(251, 146, 60), &font_sm);
+
+    // Delete
+    let btn_del = Rect::new(client.x + 320, client.y + 6, 48, 24);
+    ui::draw::draw_rounded_rect(s, btn_del, 4, Color::rgb(30, 41, 59));
+    ui::font::draw_text_font(s, btn_del.x + 8, btn_del.y + 5, "X Del", Color::rgb(248, 113, 113), &font_sm);
+
+    // Global speed badge & About button on right
+    let btn_about_x = client.x + client.w - 36;
+    ui::draw::draw_rounded_rect(s, Rect::new(btn_about_x, client.y + 6, 26, 24), 4, Color::rgba(255, 255, 255, 16));
+    ui::font::draw_text_font(s, btn_about_x + 9, client.y + 10, "?", Color::rgb(203, 213, 225), &font_sm);
+
+    if client.w >= 540 {
+        let spd_text = if vortex.download_rate_mb > 0 { "v 31.6 MB/s | ^ 3.4 MB/s" } else { "v 0.0 KB/s | ^ 0.0 KB/s" };
+        ui::font::draw_text_font(s, btn_about_x - 170, client.y + 11, spd_text, Color::rgb(56, 189, 248), &font_sm);
+    }
+
+    // 3. Category Sidebar (w = 110)
+    let side_w = 110;
+    let side_rect = Rect::new(client.x, client.y + ribbon_h, side_w, client.h - ribbon_h);
+    s.fill_rect(side_rect, Color::rgb(15, 23, 42));
+    ui::draw::draw_line(s, client.x + side_w, client.y + ribbon_h, client.x + side_w, client.bottom(), Color::rgb(51, 65, 85));
+
+    let categories = [
+        ("All Transfers (4)", 0),
+        ("Torrents (2)", 1),
+        ("Video Streams (2)", 2),
+        ("Active (2)", 3),
+        ("Completed (2)", 4),
+    ];
+    for (i, &(cat_name, cat_idx)) in categories.iter().enumerate() {
+        let is_sel = vortex.filter == cat_idx;
+        let cy = client.y + ribbon_h + 8 + (i as i32) * 26;
+        let c_rect = Rect::new(client.x + 4, cy, side_w - 8, 22);
+        if is_sel {
+            ui::draw::draw_rounded_rect(s, c_rect, 4, Color::rgb(30, 41, 59));
+            s.fill_rect(Rect::new(client.x + 4, cy + 3, 3, 16), Color::rgb(99, 102, 241));
+            ui::font::draw_text_font(s, client.x + 10, cy + 4, cat_name, Color::WHITE, &font_sm);
+        } else {
+            ui::font::draw_text_font(s, client.x + 10, cy + 4, cat_name, Color::rgb(148, 163, 184), &font_sm);
+        }
+    }
+
+    // 4. Main Queue Table (x: client.x + side_w .. client.right(), y: ribbon_h .. 170)
+    let table_x = client.x + side_w + 1;
+    let table_w = client.w - side_w - 1;
+    let table_h = (client.h - ribbon_h - 110).max(80);
+
+    // Header row
+    let th_y = client.y + ribbon_h;
+    s.fill_rect(Rect::new(table_x, th_y, table_w, 22), Color::rgb(20, 27, 45));
+    ui::draw::draw_line(s, table_x, th_y + 21, client.right(), th_y + 21, Color::rgb(51, 65, 85));
+    ui::font::draw_text_font(s, table_x + 8, th_y + 5, "Transfer Name", Color::rgb(148, 163, 184), &font_sm);
+    if table_w >= 300 {
+        ui::font::draw_text_font(s, table_x + 180, th_y + 5, "Size", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, table_x + 230, th_y + 5, "Progress", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, table_x + 310, th_y + 5, "Speed", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, table_x + 380, th_y + 5, "Peers / Streams", Color::rgb(148, 163, 184), &font_sm);
+    }
+
+    // 4 Task Rows
+    let tasks = [
+        ("[TORRENT] NovaOS-2.0-Enterprise.iso", "840 MB", 74, "14.1 MB/s", "54 Peers", Color::rgb(74, 222, 128)),
+        ("[STREAM] YouTube: NovaOS Keynote FHD", "184 MB", 62, "17.5 MB/s", "8 Chunks", Color::rgb(251, 146, 60)),
+        ("[TORRENT] Linux-Kernel-6.12.tar.xz", "142 MB", 100, "Seeding", "120 Peers", Color::rgb(56, 189, 248)),
+        ("[STREAM] Vimeo: Concurrency In Depth", "96 MB", 100, "Complete", "4 Chunks", Color::rgb(168, 85, 247)),
+    ];
+
+    for (idx, &(t_name, t_size, t_pct, t_spd, t_extra, p_col)) in tasks.iter().enumerate() {
+        let row_y = th_y + 22 + (idx as i32) * 26;
+        if row_y + 24 > client.y + ribbon_h + table_h {
+            break;
+        }
+        let is_sel = vortex.selected_task == idx;
+        let row_rect = Rect::new(table_x, row_y, table_w, 24);
+        if is_sel {
+            s.fill_rect(row_rect, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, row_rect, 1, Color::rgb(99, 102, 241));
+        } else if idx % 2 == 1 {
+            s.fill_rect(row_rect, Color::rgba(255, 255, 255, 4));
+        }
+
+        ui::font::draw_text_font(s, table_x + 8, row_y + 5, t_name, if is_sel { Color::WHITE } else { Color::rgb(226, 232, 240) }, &font_sm);
+        if table_w >= 300 {
+            ui::font::draw_text_font(s, table_x + 180, row_y + 5, t_size, Color::rgb(148, 163, 184), &font_sm);
+
+            // Mini progress bar
+            let p_w = 60;
+            let p_rect = Rect::new(table_x + 230, row_y + 7, p_w, 10);
+            ui::draw::draw_rounded_rect(s, p_rect, 2, Color::rgb(15, 23, 42));
+            let fill_w = (p_w * t_pct) / 100;
+            if fill_w > 0 {
+                s.fill_rect(Rect::new(p_rect.x, p_rect.y, fill_w, p_rect.h), p_col);
+            }
+
+            ui::font::draw_text_font(s, table_x + 310, row_y + 5, t_spd, p_col, &font_sm);
+            ui::font::draw_text_font(s, table_x + 380, row_y + 5, t_extra, Color::rgb(203, 213, 225), &font_sm);
+        }
+    }
+
+    // 5. Bottom Inspector Panel
+    let insp_y = client.y + ribbon_h + table_h;
+    let insp_h = client.bottom() - insp_y;
+    if insp_h >= 60 {
+        s.fill_rect(Rect::new(table_x, insp_y, table_w, insp_h), Color::rgb(15, 23, 42));
+        ui::draw::draw_line(s, table_x, insp_y, client.right(), insp_y, Color::rgb(51, 65, 85));
+
+        // Inspector Tab Bar
+        let tabs = ["Visualizer", "Peers & Streams", "Metadata & Info"];
+        let mut tx = table_x + 8;
+        for (t_idx, &t_title) in tabs.iter().enumerate() {
+            let is_act = vortex.inspector_tab == (t_idx as u8);
+            let t_col = if is_act { Color::rgb(99, 102, 241) } else { Color::rgb(148, 163, 184) };
+            ui::font::draw_text_font(s, tx, insp_y + 6, t_title, t_col, &font_sm);
+            if is_act {
+                s.fill_rect(Rect::new(tx, insp_y + 20, 68, 2), Color::rgb(99, 102, 241));
+            }
+            tx += 80;
+        }
+
+        let content_y = insp_y + 26;
+        match vortex.inspector_tab {
+            0 => {
+                // Visualizer tab
+                if vortex.selected_task == 0 || vortex.selected_task == 2 {
+                    // Transmission / uTorrent style 2D Piece Grid
+                    ui::font::draw_text_font(s, table_x + 8, content_y, "BitTorrent Piece Map: 962 / 1,300 pieces verified (SHA-1 verified, Rarest-First scheduler)", Color::rgb(74, 222, 128), &font_sm);
+                    let grid_y = content_y + 16;
+                    let block_w = 12;
+                    let block_h = 8;
+                    let cols = ((table_w - 20) / (block_w + 2)).min(28).max(4);
+                    for i in 0..(cols * 3) {
+                        let col = i % cols;
+                        let row = i / cols;
+                        let bx = table_x + 8 + col * (block_w + 2);
+                        let by = grid_y + row * (block_h + 2);
+                        let col_val = if i < (cols * 2) {
+                            Color::rgb(34, 197, 94) // Done
+                        } else if i < (cols * 2 + 3) {
+                            Color::rgb(245, 158, 11) // In flight
+                        } else {
+                            Color::rgb(30, 41, 59) // Pending
+                        };
+                        s.fill_rect(Rect::new(bx, by, block_w, block_h), col_val);
+                    }
+                } else {
+                    // IDM Multi-threaded Range Connection Bars
+                    ui::font::draw_text_font(s, table_x + 8, content_y, "IDM Multi-threaded Range Accelerator: 8 active chunk streams, 17.5 MB/s bandwidth", Color::rgb(56, 189, 248), &font_sm);
+                    let bar_w = ((table_w - 30) / 8).max(20);
+                    let bar_y = content_y + 18;
+                    for c in 0..8 {
+                        let bx = table_x + 8 + c * (bar_w + 2);
+                        let b_rect = Rect::new(bx, bar_y, bar_w, 18);
+                        ui::draw::draw_rounded_rect(s, b_rect, 2, Color::rgb(30, 41, 59));
+                        let pct = if c < 5 { 100 } else if c == 5 { 60 } else { 25 };
+                        let f_w = (bar_w * pct) / 100;
+                        if f_w > 0 {
+                            s.fill_rect(Rect::new(bx, bar_y, f_w, 18), Color::rgb(14, 165, 233));
+                        }
+                    }
+                }
+            }
+            1 => {
+                // Peers & Connections
+                ui::font::draw_text_font(s, table_x + 8, content_y, "* Swarm: 198.51.100.24:6881 [Transmission 4.0] 4.2 MB/s | Encrypted MSE/PE", Color::rgb(226, 232, 240), &font_sm);
+                ui::font::draw_text_font(s, table_x + 8, content_y + 16, "* Swarm: 203.0.113.88:51413 [Vortex Swarm]    5.8 MB/s | Encrypted MSE/PE", Color::rgb(74, 222, 128), &font_sm);
+                ui::font::draw_text_font(s, table_x + 8, content_y + 32, "* Swarm: 192.0.2.77:6881    [libtorrent 2.0]   3.1 MB/s | Encrypted MSE/PE", Color::rgb(56, 189, 248), &font_sm);
+            }
+            _ => {
+                // Info & Metadata
+                ui::font::draw_text_font(s, table_x + 8, content_y, "InfoHash: 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12 | BEP-0003 & BEP-0009 Magnet", Color::rgb(245, 158, 11), &font_sm);
+                ui::font::draw_text_font(s, table_x + 8, content_y + 16, "Pieces: 1,300 x 512 KB | Output Destination: /root/Downloads", Color::rgb(226, 232, 240), &font_sm);
+                ui::font::draw_text_font(s, table_x + 8, content_y + 32, "Announce: udp://tracker.opentrackr.org:1337/announce (Working, 54 seeders)", Color::rgb(74, 222, 128), &font_sm);
+            }
+        }
+    }
+
+    // 6. Modal About Dialog
+    if vortex.show_about {
+        s.fill_rect(client, Color::rgba(0, 0, 0, 160));
+
+        let ab_w = 420.min(client.w - 32);
+        let ab_h = 240.min(client.h - 32);
+        let ab_x = client.x + (client.w - ab_w) / 2;
+        let ab_y = client.y + (client.h - ab_h) / 2;
+        let ab_rect = Rect::new(ab_x, ab_y, ab_w, ab_h);
+
+        ui::draw::draw_rounded_rect(s, ab_rect, 8, Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, ab_rect, 2, Color::rgb(99, 102, 241));
+
+        // Header
+        ui::draw::draw_rounded_rect(s, Rect::new(ab_x + 16, ab_y + 14, 26, 26), 5, Color::rgb(99, 102, 241));
+        ui::draw::draw_line(s, ab_x + 21, ab_y + 23, ab_x + 29, ab_y + 31, Color::WHITE);
+        ui::draw::draw_line(s, ab_x + 37, ab_y + 23, ab_x + 29, ab_y + 31, Color::WHITE);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 14, "VORTEX STUDIO", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, ab_x + 52, ab_y + 28, "v1.0.0 (Pure Rust 1.99.1)", Color::rgb(56, 189, 248), &font_sm);
+
+        ui::draw::draw_line(s, ab_x + 14, ab_y + 48, ab_x + ab_w - 14, ab_y + 48, Color::rgb(48, 54, 61));
+
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 58, "Unified BitTorrent Client & Intelligent Stream Accelerator", Color::rgb(226, 232, 240), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 76, "Engine Architecture: Transmission Swarm + IDM Range Slicing", Color::rgb(148, 163, 184), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 98, "Pure Rust 1.99.1 | Zero C/C++ | Zero External Binaries", Color::rgb(74, 222, 128), &font_sm);
+        ui::font::draw_text_font(s, ab_x + 16, ab_y + 116, "Registered in NovaOS App Store (Internet Category)", Color::rgb(245, 158, 11), &font_sm);
+
+        // Dismiss Button
+        let btn_close = Rect::new(ab_x + (ab_w - 80) / 2, ab_y + ab_h - 36, 80, 24);
+        ui::draw::draw_rounded_rect(s, btn_close, 4, Color::rgb(99, 102, 241));
         ui::font::draw_text_font(s, btn_close.x + 18, btn_close.y + 5, "Dismiss", Color::WHITE, &font_sm);
     }
 }
@@ -9543,5 +10024,113 @@ mod tests {
         wm.on_key(10);
         let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l3.contains("PDF 1.7 Parsed") || l3.contains("Vellum"), "Terminal pdf command output: {}", l3);
+    }
+
+    #[test]
+    fn test_wm_vortex_torrent_stream_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial State
+        assert_eq!(wm.vortex_app.filter, 0);
+        assert_eq!(wm.vortex_app.selected_task, 0);
+        assert_eq!(wm.vortex_app.inspector_tab, 0);
+        assert!(!wm.vortex_app.show_about);
+        assert_eq!(wm.vortex_app.download_rate_mb, 31);
+        assert_eq!(wm.vortex_app.torrent_pieces_done, 962);
+        assert_eq!(wm.vortex_app.torrent_pieces_total, 1300);
+
+        // 2. Unit Logic
+        wm.vortex_app.set_filter(2);
+        assert_eq!(wm.vortex_app.filter, 2);
+        wm.vortex_app.set_filter(0);
+
+        wm.vortex_app.set_selected_task(1);
+        assert_eq!(wm.vortex_app.selected_task, 1);
+
+        wm.vortex_app.set_inspector_tab(2);
+        assert_eq!(wm.vortex_app.inspector_tab, 2);
+
+        wm.vortex_app.toggle_about();
+        assert!(wm.vortex_app.show_about);
+        wm.vortex_app.toggle_about();
+        assert!(!wm.vortex_app.show_about);
+
+        // 3. Launch via App Store / Launch API (Window 11)
+        wm.launch_or_restore(11);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 11, "launch_or_restore(11) should activate Window 11");
+
+        let w = &wm.windows[top_win_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // 4. Interactive clicks inside Window 11
+        // Click Pause button (x: client.x + 280, y: client.y + 15)
+        wm.on_left_press(client.x + 280, client.y + 15);
+        assert_eq!(wm.vortex_app.download_rate_mb, 0, "Clicking Pause should set rate to 0");
+
+        // Click Resume button (x: client.x + 220, y: client.y + 15)
+        wm.on_left_press(client.x + 220, client.y + 15);
+        assert_eq!(wm.vortex_app.download_rate_mb, 31, "Clicking Resume should restore download rate");
+
+        // Click + Stream button (x: client.x + 160, y: client.y + 15)
+        wm.on_left_press(client.x + 160, client.y + 15);
+        assert_eq!(wm.vortex_app.selected_task, 1, "Clicking + Stream should select stream task");
+
+        // Click + Torrent button (x: client.x + 90, y: client.y + 15)
+        wm.on_left_press(client.x + 90, client.y + 15);
+        assert_eq!(wm.vortex_app.selected_task, 0, "Clicking + Torrent should select torrent task");
+
+        // Click Sidebar Category (x: client.x + 30, y: client.y + 75 -> cat 1 Torrents)
+        wm.on_left_press(client.x + 30, client.y + 75);
+        assert_eq!(wm.vortex_app.filter, 1, "Clicking Sidebar category should change filter");
+
+        // Click Inspector tab 1 (x: client.x + 200, y: client.y + 185)
+        wm.on_left_press(client.x + 200, client.y + 185);
+        assert_eq!(wm.vortex_app.inspector_tab, 1, "Clicking Inspector tab should switch tab");
+
+        // Click About button [?] (x: client.x + client.w - 20, y: client.y + 15)
+        wm.on_left_press(client.x + client.w - 20, client.y + 15);
+        assert!(wm.vortex_app.show_about, "Clicking ? button should show About dialog");
+
+        // Dismiss modal dialog
+        wm.on_left_press(client.x + 100, client.y + 100);
+        assert!(!wm.vortex_app.show_about, "Clicking anywhere should dismiss dialog");
+
+        // 5. Terminal shell commands
+        wm.raise(0);
+        for b in b"vortex --list" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l1 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l1.contains("Swarm Aggregation") || l1.contains("MB/s"), "Terminal vortex --list output: {}", l1);
+
+        for b in b"vortex --sniff" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l2 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l2.contains("Sniffer") || l2.contains("Badge"), "Terminal vortex --sniff output: {}", l2);
+
+        for b in b"vortex --info" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l3 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l3.contains("Acceleration") || l3.contains("IDM") || l3.contains("Info Hash"), "Terminal vortex --info output: {}", l3);
+
+        for b in b"vortex --version" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l4 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l4.contains("Pure Rust") || l4.contains("Architecture") || l4.contains("Transmission") || l4.contains("Vortex"), "Terminal vortex --version output: {}", l4);
+
+        for b in b"torrent linux.torrent" {
+            wm.on_key(*b as i32);
+        }
+        wm.on_key(10);
+        let l5 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
+        assert!(l5.contains("Swarm / Stream initialized") || l5.contains("Vortex"), "Terminal torrent command output: {}", l5);
     }
 }

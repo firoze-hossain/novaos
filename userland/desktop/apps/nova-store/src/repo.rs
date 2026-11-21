@@ -271,6 +271,44 @@ impl PackageRepository {
             InstallStatus::NotInstalled,
         );
 
+        // 9. Vortex BitTorrent & Stream Studio (Internet)
+        self.register_signed_package(
+            "org.novaos.vortex",
+            "Vortex Studio",
+            "1.0.0",
+            AppCategory::Internet,
+            "Vortex Open Source Project",
+            "MIT / Apache-2.0",
+            "Unified BitTorrent client, video stream sniffer, and download accelerator",
+            "Vortex unifies BitTorrent swarm downloads with IDM-style multi-threaded video stream sniffing and acceleration. Features parallel torrent swarms, magnet links, browser video sniffer popup badge, HLS m3u8 stream grabber, and real-time piece visualizers.",
+            "Initial release featuring pure Rust BitTorrent engine, multi-stream HTTP range chunking, and Aero Browser sniffer bridge.",
+            "[VTX]",
+            18 * 1024 * 1024,
+            42 * 1024 * 1024,
+            4.9,
+            2850,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Torrent Swarm & Piece Visualizer".into(),
+                    caption: "Real-time piece map grid and peer statistics".into(),
+                    accent_rgb: (2, 132, 199),
+                },
+                ScreenshotPreview {
+                    title: "IDM Multi-Thread Stream Acceleration".into(),
+                    caption: "Parallel HTTP range chunks with live transfer speeds".into(),
+                    accent_rgb: (16, 185, 129),
+                },
+                ScreenshotPreview {
+                    title: "Browser Video Sniffer Overlay".into(),
+                    caption: "Floating pop-up download badge over web video players".into(),
+                    accent_rgb: (251, 146, 60),
+                },
+            ],
+            InstallStatus::NotInstalled,
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {
