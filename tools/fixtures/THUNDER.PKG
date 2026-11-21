@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.thundercall"
+name = "ThunderCall Client"
+version = "1.0.0"
+category = "Internet"
+app_filename = "THUNDER.ELF"
+summary = "High-performance API development and testing platform"

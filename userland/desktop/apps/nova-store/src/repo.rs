@@ -352,6 +352,105 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 11. ThunderCall Client (Internet / API Development)
+        self.register_signed_package(
+            "org.novaos.thundercall",
+            "ThunderCall Client",
+            "1.0.0",
+            AppCategory::Internet,
+            "ThunderCall Team",
+            "MIT",
+            "High-performance API development, testing, and debugging studio",
+            "ThunderCall provides an intuitive, high-performance desktop interface for REST, GraphQL, WebSocket, and gRPC API engineering. Features reactive request builders, multi-environment variables, mock servers, and automated contract testing with zero paywalls.",
+            "Initial release with pure Rust API runner and desktop UI client.",
+            "[TC]",
+            28 * 1024 * 1024,
+            65 * 1024 * 1024,
+            4.9,
+            1980,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "API Request Builder".into(),
+                    caption: "Interactive REST and GraphQL test console".into(),
+                    accent_rgb: (255, 108, 55),
+                },
+                ScreenshotPreview {
+                    title: "Environment Variables".into(),
+                    caption: "Dynamic token interpolation and secrets manager".into(),
+                    accent_rgb: (16, 185, 129),
+                },
+            ],
+            InstallStatus::NotInstalled,
+        );
+
+        // 12. DBNavigator Pro (Development / Database Studio)
+        self.register_signed_package(
+            "org.novaos.dbnavigator",
+            "DBNavigator Pro",
+            "1.0.0",
+            AppCategory::Development,
+            "DBNavigator Team",
+            "MIT",
+            "Multi-engine database explorer, SQL query console, and ER diagram modeler",
+            "Unified desktop database IDE supporting PostgreSQL, MySQL, SQLite, and MongoDB. Includes intelligent query editor, interactive inline data grid editor with staged transactions, and full-database visual ER diagram key relationship routing.",
+            "Initial release with multi-engine connection manager and visual ER modeler.",
+            "[DB]",
+            32 * 1024 * 1024,
+            78 * 1024 * 1024,
+            4.9,
+            2420,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Database Explorer & SQL Console".into(),
+                    caption: "Multi-engine query editor and tree inspector".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Visual ER Diagram".into(),
+                    caption: "Whole-database schema mapping and relationship visualizer".into(),
+                    accent_rgb: (175, 82, 222),
+                },
+            ],
+            InstallStatus::NotInstalled,
+        );
+
+        // 13. Lumina Studio (Development / Polyglot IDE)
+        self.register_signed_package(
+            "org.novaos.lumina",
+            "Lumina Studio",
+            "1.0.0",
+            AppCategory::Development,
+            "Lumina Project",
+            "MIT",
+            "IntelliJ-inspired code editor and polyglot IDE in warm amber theme",
+            "Lumina is a warm, distraction-free modern desktop IDE crafted with intelligent syntax highlighting, Search Everywhere (double Shift), Git blame gutter annotations, declaration jump, and Maven/Cargo project builds.",
+            "Initial release featuring Search Everywhere, Git blame gutters, and amber slate styling.",
+            "[LUM]",
+            35 * 1024 * 1024,
+            85 * 1024 * 1024,
+            4.8,
+            1760,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Amber Slate Editor".into(),
+                    caption: "IntelliJ-style typography with warm ambient palette".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+                ScreenshotPreview {
+                    title: "Search Everywhere & Git Gutter".into(),
+                    caption: "Fast popup navigation and blame inspections".into(),
+                    accent_rgb: (99, 102, 241),
+                },
+            ],
+            InstallStatus::NotInstalled,
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

@@ -4108,7 +4108,7 @@ impl Wm {
     /// Returns the bounding rectangle for the interactive Start Menu popup.
     pub fn start_menu_rect(&self) -> Rect {
         let sm_w = if self.screen_w >= 800 { 380 } else { 280 };
-        let sm_h = if self.desktop_h >= 500 { 430 } else { (self.desktop_h - 20).max(120) };
+        let sm_h = if self.desktop_h >= 500 { 470 } else { (self.desktop_h - 20).max(120) };
         let sm_x = 12;
         let sm_y = (self.desktop_h - sm_h - 6).max(self.menubar_h);
         Rect::new(sm_x, sm_y, sm_w, sm_h)
@@ -4116,7 +4116,7 @@ impl Wm {
 
     /// Computes hit-tested Start Menu application card rectangle.
     pub fn start_menu_item_rect(&self, idx: usize) -> Option<Rect> {
-        if idx >= 10 {
+        if idx >= 12 {
             return None;
         }
         let sm = self.start_menu_rect();
@@ -4181,7 +4181,7 @@ impl Wm {
         if !self.start_menu_open {
             return None;
         }
-        for i in 0..10 {
+        for i in 0..12 {
             if let Some(r) = self.start_menu_item_rect(i) {
                 if point_in_rect(px, py, r.x, r.y, r.w, r.h) {
                     return Some(i);
@@ -4737,10 +4737,12 @@ impl Wm {
                         2 => 8, // Aero Browser
                         3 => 9, // Spectra (Default Media Player)
                         4 => 10, // Vellum (Default PDF Studio)
-                        5 => 7, // Calculator
-                        6 => 6, // Calendar
-                        7 => 5, // Settings
-                        8 => 4, // Software Store
+                        5 => 12, // Zenith Office Suite
+                        6 => 7, // Calculator
+                        7 => 6, // Calendar
+                        8 => 5, // Settings
+                        9 => 4, // Software Store
+                        10 => 11, // Vortex BitTorrent & IDM
                         _ => 3, // Text Editor
                     };
                     self.launch_or_restore(target_app);
@@ -5348,21 +5350,23 @@ impl Wm {
         let sec_y = srch_y + 30;
         ui::font::draw_text_font(s, sm.x + 18, sec_y, "PINNED APPLICATIONS", Color::rgba(255, 255, 255, 120), &font_sm);
 
-        // 6. 10 App Cards (2 columns x 5 rows)
-        let apps: [(&str, &str, u8); 10] = [
+        // 6. 12 App Cards (2 columns x 6 rows)
+        let apps: [(&str, &str, u8); 12] = [
             ("Terminal", "NovaTerm CLI", 1),
             ("Files", "Root Storage", 2),
             ("Aero Browser", "Fast Web Engine", 8),
             ("Spectra", "Ultra HD Media", 9),
             ("Vellum", "PDF Studio", 10),
+            ("Zenith Office", "Productivity", 12),
             ("Calculator", "Math Studio", 7),
             ("Calendar", "Events & Tasks", 6),
             ("Settings", "Control Panel", 5),
             ("App Store", "Nova Packages", 4),
+            ("Vortex", "BitTorrent & IDM", 11),
             ("Text Editor", "Document Pad", 3),
         ];
 
-        for i in 0..10 {
+        for i in 0..12 {
             if let Some(card_rect) = self.start_menu_item_rect(i) {
                 let is_hov = self.hovered_start_item == Some(i);
                 let (title, desc, icon_type) = apps[i];
@@ -7351,8 +7355,13 @@ fn draw_player_client_body<S: Surface + ?Sized>(
 
     // Top Row: Timeline [00:45] =======[O]================ [03:00]
     let cur_pos = player.position_secs;
-    let time_cur_str = format!("{:02}:{:02}", cur_pos / 60, cur_pos % 60);
-    ui::font::draw_text_font(s, bot_rect.x + 8, bot_y + 6, &time_cur_str, Color::rgb(148, 163, 184), &font_sm);
+    let mut time_buf = [0u8; 16];
+    let mut t_off = 0;
+    format_u32_padded(cur_pos / 60, 2, &mut time_buf, &mut t_off);
+    append_str(":", &mut time_buf, &mut t_off);
+    format_u32_padded(cur_pos % 60, 2, &mut time_buf, &mut t_off);
+    let time_cur_str = core::str::from_utf8(&time_buf[..t_off]).unwrap_or("00:00");
+    ui::font::draw_text_font(s, bot_rect.x + 8, bot_y + 6, time_cur_str, Color::rgb(148, 163, 184), &font_sm);
 
     let scrub_x = bot_rect.x + 48;
     let scrub_w = (bot_rect.w - 96).max(20);
@@ -7438,8 +7447,12 @@ fn draw_player_client_body<S: Surface + ?Sized>(
         let v_color = if player.volume_pct > 100 { Color::rgb(245, 158, 11) } else { Color::rgb(74, 222, 128) };
         ui::draw::draw_rounded_rect(s, Rect::new(v_slider_x, btn_y + 9, v_fill_w, 6), 2, v_color);
     }
-    let vol_pct_str = format!("{}%", player.volume_pct);
-    ui::font::draw_text_font(s, client.x + client.w - 44, btn_y + 5, &vol_pct_str, Color::rgb(148, 163, 184), &font_sm);
+    let mut vol_buf = [0u8; 16];
+    let mut v_off = 0;
+    format_u32(player.volume_pct, &mut vol_buf, &mut v_off);
+    append_str("%", &mut vol_buf, &mut v_off);
+    let vol_pct_str = core::str::from_utf8(&vol_buf[..v_off]).unwrap_or("100%");
+    ui::font::draw_text_font(s, client.x + client.w - 44, btn_y + 5, vol_pct_str, Color::rgb(148, 163, 184), &font_sm);
 
     // 7. Dropdown Menu Card (rendered on top if active_menu is open)
     if let Some(m_idx) = player.active_menu {
@@ -7742,9 +7755,13 @@ fn draw_vellum_client_body<S: Surface + ?Sized>(
             s.fill_rect(Rect::new(card_rect.x + 6, card_rect.y + 12, card_w - 18, 2), Color::rgb(226, 232, 240));
             s.fill_rect(Rect::new(card_rect.x + 6, card_rect.y + 17, card_w - 14, 2), Color::rgb(226, 232, 240));
 
-            let page_label = format!("Page {}", p + 1);
+            let mut page_lbl_buf = [0u8; 16];
+            let mut pl_off = 0;
+            append_str("Page ", &mut page_lbl_buf, &mut pl_off);
+            format_u32((p + 1) as u32, &mut page_lbl_buf, &mut pl_off);
+            let page_label = core::str::from_utf8(&page_lbl_buf[..pl_off]).unwrap_or("Page 1");
             let label_col = if is_cur { Color::rgb(56, 189, 248) } else { Color::rgb(148, 163, 184) };
-            ui::font::draw_text_font(s, card_rect.x + (card_w - 36) / 2, card_rect.bottom() + 2, &page_label, label_col, &font_sm);
+            ui::font::draw_text_font(s, card_rect.x + (card_w - 36) / 2, card_rect.bottom() + 2, page_label, label_col, &font_sm);
         }
 
         canvas_left += sb_w;
@@ -7862,8 +7879,13 @@ fn draw_vellum_client_body<S: Surface + ?Sized>(
         ui::draw::draw_rect_outline(s, sb_rect, 1, Color::rgb(56, 189, 248));
 
         ui::font::draw_text_font(s, sb_x + 8, sb_y + 7, "NovaOS", Color::WHITE, &font_sm);
-        let match_str = format!("{}/{}", vellum.match_idx, vellum.total_matches);
-        ui::font::draw_text_font(s, sb_x + 130, sb_y + 7, &match_str, Color::rgb(245, 158, 11), &font_sm);
+        let mut m_buf = [0u8; 16];
+        let mut m_off = 0;
+        format_u32(vellum.match_idx as u32, &mut m_buf, &mut m_off);
+        append_str("/", &mut m_buf, &mut m_off);
+        format_u32(vellum.total_matches as u32, &mut m_buf, &mut m_off);
+        let match_str = core::str::from_utf8(&m_buf[..m_off]).unwrap_or("1/3");
+        ui::font::draw_text_font(s, sb_x + 130, sb_y + 7, match_str, Color::rgb(245, 158, 11), &font_sm);
         ui::font::draw_text_font(s, sb_x + 168, sb_y + 7, "<", Color::rgb(203, 213, 225), &font_sm);
         ui::font::draw_text_font(s, sb_x + 188, sb_y + 7, ">", Color::rgb(203, 213, 225), &font_sm);
         ui::font::draw_text_font(s, sb_x + 212, sb_y + 7, "X", Color::rgb(244, 63, 94), &font_sm);
@@ -7876,17 +7898,27 @@ fn draw_vellum_client_body<S: Surface + ?Sized>(
 
     // Page navigation stepper: < Page 1 of 3 >
     ui::font::draw_text_font(s, client.x + 12, content_bot + 6, "<", Color::rgb(203, 213, 225), &font_sm);
-    let p_info = format!("Page {} of {}", vellum.page + 1, vellum.total_pages);
-    ui::font::draw_text_font(s, client.x + 26, content_bot + 6, &p_info, Color::rgb(241, 245, 249), &font_sm);
+    let mut p_buf = [0u8; 24];
+    let mut p_off = 0;
+    append_str("Page ", &mut p_buf, &mut p_off);
+    format_u32((vellum.page + 1) as u32, &mut p_buf, &mut p_off);
+    append_str(" of ", &mut p_buf, &mut p_off);
+    format_u32(vellum.total_pages as u32, &mut p_buf, &mut p_off);
+    let p_info = core::str::from_utf8(&p_buf[..p_off]).unwrap_or("Page 1 of 3");
+    ui::font::draw_text_font(s, client.x + 26, content_bot + 6, p_info, Color::rgb(241, 245, 249), &font_sm);
     ui::font::draw_text_font(s, client.x + 98, content_bot + 6, ">", Color::rgb(203, 213, 225), &font_sm);
 
     // Dimensions
     ui::font::draw_text_font(s, client.x + 120, content_bot + 6, "612 x 792 pt", Color::rgb(148, 163, 184), &font_sm);
 
     // Zoom Controls
-    let z_str = format!("{}%", vellum.zoom_pct);
+    let mut z_buf = [0u8; 16];
+    let mut z_off = 0;
+    format_u32(vellum.zoom_pct as u32, &mut z_buf, &mut z_off);
+    append_str("%", &mut z_buf, &mut z_off);
+    let z_str = core::str::from_utf8(&z_buf[..z_off]).unwrap_or("100%");
     ui::font::draw_text_font(s, client.right() - 84, content_bot + 6, "-", Color::rgb(203, 213, 225), &font_sm);
-    ui::font::draw_text_font(s, client.right() - 68, content_bot + 6, &z_str, Color::rgb(241, 245, 249), &font_sm);
+    ui::font::draw_text_font(s, client.right() - 68, content_bot + 6, z_str, Color::rgb(241, 245, 249), &font_sm);
     ui::font::draw_text_font(s, client.right() - 32, content_bot + 6, "+", Color::rgb(203, 213, 225), &font_sm);
 
     // 9. Modal About Dialog (if open)
@@ -10052,6 +10084,16 @@ mod tests {
         wm.on_left_press(item1_rect.x + 10, item1_rect.y + 10);
         assert!(!wm.start_menu_open, "Clicking app card should close start menu");
         assert!(!wm.windows[1].is_minimized, "Files window should be unminimized");
+
+        // Verify Zenith (item 5) and Vortex (item 10) item hit-testing
+        wm.start_menu_open = true;
+        let item5_rect = wm.start_menu_item_rect(5).expect("Zenith item 5 should exist");
+        assert_eq!(wm.start_menu_item_at(item5_rect.x + 5, item5_rect.y + 5), Some(5));
+        let item10_rect = wm.start_menu_item_rect(10).expect("Vortex item 10 should exist");
+        assert_eq!(wm.start_menu_item_at(item10_rect.x + 5, item10_rect.y + 5), Some(10));
+        let item11_rect = wm.start_menu_item_rect(11).expect("Text Editor item 11 should exist");
+        assert_eq!(wm.start_menu_item_at(item11_rect.x + 5, item11_rect.y + 5), Some(11));
+        assert!(wm.start_menu_item_rect(12).is_none());
 
         // Clicking top menubar star badge toggles start menu
         wm.on_left_press(16, 10);

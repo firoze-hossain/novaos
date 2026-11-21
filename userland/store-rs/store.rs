@@ -468,6 +468,48 @@ impl Store {
             VerificationStatus::VerifiedHmacSha256,
             &[0; 32],
         );
+
+        // 9. ThunderCall (Utilities / API Platform)
+        self.add_package(
+            "ThunderCall",
+            "1.0",
+            "API development and testing platform",
+            "THUNDER.PKG",
+            "THUNDER.APP",
+            Category::Utilities,
+            280,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
+
+        // 10. DBNavigator (Productivity / Database IDE)
+        self.add_package(
+            "DBNavigator",
+            "1.0",
+            "Multi-engine database SQL IDE and ER modeler",
+            "DBNAV.PKG",
+            "DBNAV.APP",
+            Category::Productivity,
+            320,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
+
+        // 11. Lumina (Productivity / Development IDE)
+        self.add_package(
+            "Lumina",
+            "1.0",
+            "IntelliJ-inspired code editor & polyglot IDE",
+            "LUMINA.PKG",
+            "LUMINA.APP",
+            Category::Productivity,
+            350,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
     }
 
     /// Scans the FAT32 filesystem for `.PKG` files and verifies their cryptographic signatures.

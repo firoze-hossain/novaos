@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.dbnavigator"
+name = "DBNavigator Pro"
+version = "1.0.0"
+category = "Development"
+app_filename = "DBNAV.ELF"
+summary = "Multi-engine database SQL query IDE and ER diagram modeler"

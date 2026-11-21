@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.lumina"
+name = "Lumina Studio"
+version = "1.0.0"
+category = "Development"
+app_filename = "LUMINA.ELF"
+summary = "IntelliJ-inspired code editor and polyglot development IDE"
