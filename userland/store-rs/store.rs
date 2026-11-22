@@ -510,6 +510,48 @@ impl Store {
             VerificationStatus::VerifiedHmacSha256,
             &[0; 32],
         );
+
+        // 12. Aero Browser (Utilities / Web)
+        self.add_package(
+            "Aero Browser",
+            "1.0",
+            "Fast sovereign web browser with Brave Shields",
+            "AERO.PKG",
+            "AERO.ELF",
+            Category::Utilities,
+            482,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
+
+        // 13. Spectra (Utilities / Media)
+        self.add_package(
+            "Spectra",
+            "1.0",
+            "Ultra-HD 4K/8K video player and visualizer",
+            "SPECTRA.PKG",
+            "SPECTRA.ELF",
+            Category::Utilities,
+            482,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
+
+        // 14. Vellum (Productivity / PDF)
+        self.add_package(
+            "Vellum",
+            "1.0",
+            "Sovereign PDF reader, editor and annotator",
+            "VELLUM.PKG",
+            "VELLUM.ELF",
+            Category::Productivity,
+            482,
+            false,
+            VerificationStatus::VerifiedHmacSha256,
+            &[0; 32],
+        );
     }
 
     /// Scans the FAT32 filesystem for `.PKG` files and verifies their cryptographic signatures.

@@ -2922,6 +2922,527 @@ impl WmZenithApp {
     }
 }
 
+// --- Sovereign NovaOS Software Store & App Hub (macOS + Ubuntu Fusion) ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreCategory {
+    Discover = 0,
+    Productivity = 1,
+    Development = 2,
+    Internet = 3,
+    Games = 4,
+    Manage = 5,
+    Security = 6,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StoreAppItem {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub subtitle: &'static str,
+    pub description: &'static str,
+    pub version: &'static str,
+    pub category: StoreCategory,
+    pub icon_letter: &'static str,
+    pub icon_bg: Color,
+    pub publisher: &'static str,
+    pub is_verified: bool,
+    pub size_kb: u32,
+    pub is_core: bool,
+    pub app_id: u8,
+}
+
+pub const STORE_APPS: [StoreAppItem; 12] = [
+    StoreAppItem {
+        id: "org.novaos.zenith",
+        name: "Zenith Office",
+        subtitle: "Writer, Calc, Present & Base",
+        description: "Sovereign office suite synthesizing Microsoft Office & LibreOffice. Full DOCX/XLSX/PPTX format engines, 11 typography families, formulas, and relational database tables.",
+        version: "1.0.0",
+        category: StoreCategory::Productivity,
+        icon_letter: "Z",
+        icon_bg: Color::rgb(137, 87, 229),
+        publisher: "NovaOS Sovereign Core",
+        is_verified: true,
+        size_kb: 478,
+        is_core: true,
+        app_id: 12,
+    },
+    StoreAppItem {
+        id: "org.novaos.dbnavigator",
+        name: "DBNavigator Pro",
+        subtitle: "Multi-Engine SQL IDE & Modeler",
+        description: "Comprehensive database IDE: SQL query console, table schema navigator, visual ER diagram modeler, query profiler, and native NovaDB/SQLite engine drivers.",
+        version: "1.0.0",
+        category: StoreCategory::Development,
+        icon_letter: "DB",
+        icon_bg: Color::rgb(30, 144, 255),
+        publisher: "NovaOS Developer Tools",
+        is_verified: true,
+        size_kb: 320,
+        is_core: false,
+        app_id: 13,
+    },
+    StoreAppItem {
+        id: "org.novaos.lumina",
+        name: "Lumina Studio",
+        subtitle: "IntelliJ-Inspired Polyglot IDE",
+        description: "Next-gen sovereign code editor: Multi-tab editor with Rust/C/Python/JS syntax highlighting, symbol tree outline, Git gutter, and embedded build runner.",
+        version: "1.0.0",
+        category: StoreCategory::Development,
+        icon_letter: "L",
+        icon_bg: Color::rgb(16, 185, 129),
+        publisher: "NovaOS Developer Tools",
+        is_verified: true,
+        size_kb: 350,
+        is_core: false,
+        app_id: 14,
+    },
+    StoreAppItem {
+        id: "org.novaos.thundercall",
+        name: "ThunderCall Client",
+        subtitle: "High-Performance API Platform",
+        description: "Professional API development and debugging platform: REST/JSON, GraphQL, and gRPC client, interactive headers, environment variables, and latency analytics.",
+        version: "1.0.0",
+        category: StoreCategory::Development,
+        icon_letter: "TC",
+        icon_bg: Color::rgb(245, 158, 11),
+        publisher: "ThunderCall Team",
+        is_verified: true,
+        size_kb: 280,
+        is_core: false,
+        app_id: 15,
+    },
+    StoreAppItem {
+        id: "org.novaos.vortex",
+        name: "Vortex Studio",
+        subtitle: "BitTorrent & IDM Stream Studio",
+        description: "Dual-engine download accelerator combining Transmission swarm BitTorrent client with IDM multi-thread byte-range segmentation, piece map, and web sniffer.",
+        version: "1.0.0",
+        category: StoreCategory::Internet,
+        icon_letter: "V",
+        icon_bg: Color::rgb(56, 189, 248),
+        publisher: "Vortex Labs",
+        is_verified: true,
+        size_kb: 180,
+        is_core: false,
+        app_id: 11,
+    },
+    StoreAppItem {
+        id: "org.novaos.aero",
+        name: "Aero Web Browser",
+        subtitle: "Fast, Sovereign & Private Web",
+        description: "Sovereign web browser with integrated Brave Shields ad/tracker blocker, Chrome multi-tab model, responsive 4-side DevTools dock, and pure-Rust engine.",
+        version: "1.0.0",
+        category: StoreCategory::Internet,
+        icon_letter: "A",
+        icon_bg: Color::rgb(255, 107, 0),
+        publisher: "NovaOS Sovereign Core",
+        is_verified: true,
+        size_kb: 482,
+        is_core: true,
+        app_id: 8,
+    },
+    StoreAppItem {
+        id: "org.novaos.spectra",
+        name: "Spectra Player",
+        subtitle: "Ultra-HD 4K/8K Media & Visualizer",
+        description: "High-resolution video player and audio studio: MKV/MP4/WebM/FLAC playback, 32-band real-time audio visualizer, subtitle sync, and VLC keyboard controls.",
+        version: "1.0.0",
+        category: StoreCategory::Internet,
+        icon_letter: "S",
+        icon_bg: Color::rgb(99, 102, 241),
+        publisher: "NovaOS Sovereign Core",
+        is_verified: true,
+        size_kb: 482,
+        is_core: true,
+        app_id: 9,
+    },
+    StoreAppItem {
+        id: "org.novaos.vellum",
+        name: "Vellum PDF Studio",
+        subtitle: "PDF Reader, In-Place Editor & Markup",
+        description: "Sovereign document studio synthesizing Adobe Acrobat in-place editing, macOS Preview pen markup, and Ubuntu Evince continuous reading, TOC, and search.",
+        version: "1.0.0",
+        category: StoreCategory::Productivity,
+        icon_letter: "P",
+        icon_bg: Color::rgb(225, 29, 72),
+        publisher: "NovaOS Sovereign Core",
+        is_verified: true,
+        size_kb: 482,
+        is_core: true,
+        app_id: 10,
+    },
+    StoreAppItem {
+        id: "org.novaos.terminal",
+        name: "NovaTerm Terminal",
+        subtitle: "Full ANSI CLI System Console",
+        description: "System command-line interface with dual 32/64-bit ABI support, ring-3 POSIX utilities, syntax-colored output, task monitoring, and network diagnostics.",
+        version: "2.0.0",
+        category: StoreCategory::Development,
+        icon_letter: "T",
+        icon_bg: Color::rgb(71, 85, 105),
+        publisher: "NovaOS System Core",
+        is_verified: true,
+        size_kb: 180,
+        is_core: true,
+        app_id: 1,
+    },
+    StoreAppItem {
+        id: "org.novaos.calculator",
+        name: "Calculator",
+        subtitle: "Scientific Expression & Math Studio",
+        description: "Scientific calculator with precedence-aware formula parsing, trigonometry, logarithms, statistical modes, and memory registers.",
+        version: "1.2.0",
+        category: StoreCategory::Productivity,
+        icon_letter: "C",
+        icon_bg: Color::rgb(52, 211, 153),
+        publisher: "NovaOS Utilities",
+        is_verified: true,
+        size_kb: 214,
+        is_core: true,
+        app_id: 7,
+    },
+    StoreAppItem {
+        id: "org.novaos.calendar",
+        name: "Calendar",
+        subtitle: "Events, Tasks & World Clock Hub",
+        description: "International calendar hub featuring monthly grid, task reminders, RTC hardware clock synchronization, and global timezone selector.",
+        version: "1.0.0",
+        category: StoreCategory::Productivity,
+        icon_letter: "19",
+        icon_bg: Color::rgb(244, 63, 94),
+        publisher: "NovaOS Utilities",
+        is_verified: true,
+        size_kb: 240,
+        is_core: true,
+        app_id: 6,
+    },
+    StoreAppItem {
+        id: "org.novaos.games",
+        name: "Game Studio",
+        subtitle: "Retro Arcade & Pixel Adventures",
+        description: "Interactive retro gaming showcase: 60 FPS pixel arcade space defender, responsive key controls, high score board, and sound engine.",
+        version: "2.1.0",
+        category: StoreCategory::Games,
+        icon_letter: "G",
+        icon_bg: Color::rgb(245, 180, 50),
+        publisher: "Nova Arcade",
+        is_verified: true,
+        size_kb: 60,
+        is_core: false,
+        app_id: 16,
+    },
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmStoreApp {
+    pub active_category: StoreCategory,
+    pub selected_app_idx: Option<usize>,
+    pub installed_mask: u16,
+    pub status_msg: &'static str,
+    pub search_query: [u8; 16],
+    pub search_len: usize,
+    pub search_active: bool,
+}
+
+impl WmStoreApp {
+    pub fn new() -> Self {
+        // Core preinstalled apps: Zenith (0), Aero (5), Spectra (6), Vellum (7), Terminal (8), Calc (9), Calendar (10), Vortex (4)
+        let mask = (1 << 0) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10);
+        WmStoreApp {
+            active_category: StoreCategory::Discover,
+            selected_app_idx: None,
+            installed_mask: mask,
+            status_msg: "Ready | 12 sovereign packages cataloged | Click any app to inspect",
+            search_query: [0; 16],
+            search_len: 0,
+            search_active: false,
+        }
+    }
+
+    pub fn is_installed(&self, idx: usize) -> bool {
+        if idx >= STORE_APPS.len() { return false; }
+        (self.installed_mask & (1 << idx)) != 0
+    }
+
+    pub fn installed_count(&self) -> usize {
+        let mut count = 0;
+        for i in 0..STORE_APPS.len() {
+            if self.is_installed(i) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn toggle_install(&mut self, idx: usize) {
+        if idx >= STORE_APPS.len() { return; }
+        if self.is_installed(idx) {
+            if !STORE_APPS[idx].is_core {
+                self.installed_mask &= !(1 << idx);
+                self.status_msg = "Package uninstalled from system.";
+            } else {
+                self.status_msg = "Core system application cannot be removed.";
+            }
+        } else {
+            self.installed_mask |= 1 << idx;
+            self.status_msg = "Package installed successfully (HMAC-SHA256 verified)!";
+        }
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) -> Option<u8> {
+        let rel_x = px - client.x;
+        let rel_y = py - client.y;
+        let sb_w = 150;
+
+        // 1. Left Sidebar Clicks (rel_x < 150)
+        if rel_x < sb_w {
+            // Search button at top
+            if rel_y >= 8 && rel_y <= 30 {
+                self.search_active = !self.search_active;
+                self.status_msg = if self.search_active { "Search filter active" } else { "Showing all packages" };
+                return None;
+            }
+
+            // Categories:
+            // Discover (y: 46..68)
+            if rel_y >= 46 && rel_y <= 68 {
+                self.active_category = StoreCategory::Discover;
+                self.selected_app_idx = None;
+                self.status_msg = "Explore featured sovereign packages";
+                return None;
+            }
+            // Productivity (y: 70..92)
+            if rel_y >= 70 && rel_y <= 92 {
+                self.active_category = StoreCategory::Productivity;
+                self.selected_app_idx = None;
+                self.status_msg = "Productivity: Office, PDF, DB & Tools";
+                return None;
+            }
+            // Development (y: 94..116)
+            if rel_y >= 94 && rel_y <= 116 {
+                self.active_category = StoreCategory::Development;
+                self.selected_app_idx = None;
+                self.status_msg = "Development: IDEs, APIs, DB & CLI";
+                return None;
+            }
+            // Internet (y: 118..140)
+            if rel_y >= 118 && rel_y <= 140 {
+                self.active_category = StoreCategory::Internet;
+                self.selected_app_idx = None;
+                self.status_msg = "Internet & Media: Web, Video & Swarms";
+                return None;
+            }
+            // Games (y: 142..164)
+            if rel_y >= 142 && rel_y <= 164 {
+                self.active_category = StoreCategory::Games;
+                self.selected_app_idx = None;
+                self.status_msg = "Games & Entertainment";
+                return None;
+            }
+            // Manage (y: 180..202)
+            if rel_y >= 180 && rel_y <= 202 {
+                self.active_category = StoreCategory::Manage;
+                self.selected_app_idx = None;
+                self.status_msg = "Installed applications management";
+                return None;
+            }
+            // Security (y: 204..226)
+            if rel_y >= 204 && rel_y <= 226 {
+                self.active_category = StoreCategory::Security;
+                self.selected_app_idx = None;
+                self.status_msg = "Cryptographic integrity & repo audit";
+                return None;
+            }
+            return None;
+        }
+
+        // 2. Main Content Area Clicks (rel_x >= 150)
+        let main_x = rel_x - sb_w;
+        let main_y = rel_y;
+        let main_w = client.w - sb_w;
+
+        // --- SCENARIO A: App Detail View ---
+        if let Some(sel_idx) = self.selected_app_idx {
+            let app = STORE_APPS[sel_idx];
+            // Back button (< Back to Store) at top left
+            if main_x >= 12 && main_x <= 110 && main_y >= 8 && main_y <= 30 {
+                self.selected_app_idx = None;
+                self.status_msg = "Returned to package catalog";
+                return None;
+            }
+
+            // Action Button 1: [Launch / Open] or [Install]
+            let btn1_x0 = main_w - 150;
+            let btn1_x1 = main_w - 76;
+            if main_x >= btn1_x0 && main_x <= btn1_x1 && main_y >= 38 && main_y <= 62 {
+                if self.is_installed(sel_idx) {
+                    self.status_msg = "Launching application...";
+                    return Some(app.app_id);
+                } else {
+                    self.toggle_install(sel_idx);
+                    return None;
+                }
+            }
+
+            // Action Button 2: [Uninstall]
+            let btn2_x0 = main_w - 72;
+            let btn2_x1 = main_w - 12;
+            if main_x >= btn2_x0 && main_x <= btn2_x1 && main_y >= 38 && main_y <= 62 {
+                if self.is_installed(sel_idx) && !app.is_core {
+                    self.toggle_install(sel_idx);
+                }
+                return None;
+            }
+            return None;
+        }
+
+        // --- SCENARIO B: Manage View ---
+        if self.active_category == StoreCategory::Manage {
+            let list_y = 44;
+            let row_h = 32;
+            for i in 0..STORE_APPS.len() {
+                let ry = list_y + (i as i32 * (row_h + 4));
+                if main_y >= ry && main_y < ry + row_h {
+                    let is_inst = self.is_installed(i);
+                    // Check Launch button (main_w - 110 .. main_w - 60)
+                    if is_inst && main_x >= main_w - 110 && main_x <= main_w - 60 {
+                        self.status_msg = "Launching application...";
+                        return Some(STORE_APPS[i].app_id);
+                    }
+                    // Check Uninstall button (main_w - 56 .. main_w - 10)
+                    if is_inst && !STORE_APPS[i].is_core && main_x >= main_w - 56 && main_x <= main_w - 10 {
+                        self.toggle_install(i);
+                        return None;
+                    }
+                    // Check Install button (main_w - 80 .. main_w - 16)
+                    if !is_inst && main_x >= main_w - 80 && main_x <= main_w - 16 {
+                        self.toggle_install(i);
+                        return None;
+                    }
+
+                    // Otherwise clicking row opens App Detail View
+                    self.selected_app_idx = Some(i);
+                    self.status_msg = "Inspecting package details";
+                    return None;
+                }
+            }
+            return None;
+        }
+
+        // --- SCENARIO C: Discover View (Hero Banner & Shelves) ---
+        if self.active_category == StoreCategory::Discover {
+            // Hero banner click (main_y: 10..84)
+            if main_y >= 10 && main_y <= 84 {
+                self.selected_app_idx = Some(0); // View Zenith
+                self.status_msg = "Viewing featured suite: Zenith Office";
+                return None;
+            }
+
+            // Shelf 1 (Top Core Apps: Zenith, Aero, Spectra, Vellum) (main_y: 110..186)
+            let shelf1_apps = [0, 5, 6, 7];
+            let card_w = (main_w - 40) / 4;
+            if main_y >= 110 && main_y <= 186 {
+                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
+                let app_idx = shelf1_apps[card_idx];
+                let is_inst = self.is_installed(app_idx);
+                let cx = 12 + (card_idx as i32 * (card_w + 6));
+                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 164 && main_y <= 184 {
+                    if is_inst {
+                        self.status_msg = "Launching application...";
+                        return Some(STORE_APPS[app_idx].app_id);
+                    } else {
+                        self.toggle_install(app_idx);
+                        return None;
+                    }
+                }
+                self.selected_app_idx = Some(app_idx);
+                self.status_msg = "Inspecting package details";
+                return None;
+            }
+
+            // Shelf 2 (Power Tools: Vortex, DBNavigator, Lumina, ThunderCall) (main_y: 206..282)
+            let shelf2_apps = [4, 1, 2, 3];
+            if main_y >= 206 && main_y <= 282 {
+                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
+                let app_idx = shelf2_apps[card_idx];
+                let is_inst = self.is_installed(app_idx);
+                let cx = 12 + (card_idx as i32 * (card_w + 6));
+                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 260 && main_y <= 280 {
+                    if is_inst {
+                        self.status_msg = "Launching application...";
+                        return Some(STORE_APPS[app_idx].app_id);
+                    } else {
+                        self.toggle_install(app_idx);
+                        return None;
+                    }
+                }
+                self.selected_app_idx = Some(app_idx);
+                self.status_msg = "Inspecting package details";
+                return None;
+            }
+
+            // Shelf 3 (Productivity & Utilities: Terminal, Calc, Calendar, Game) (main_y: 302..378)
+            let shelf3_apps = [8, 9, 10, 11];
+            if main_y >= 302 && main_y <= 378 {
+                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
+                let app_idx = shelf3_apps[card_idx];
+                let is_inst = self.is_installed(app_idx);
+                let cx = 12 + (card_idx as i32 * (card_w + 6));
+                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 356 && main_y <= 376 {
+                    if is_inst {
+                        self.status_msg = "Launching application...";
+                        return Some(STORE_APPS[app_idx].app_id);
+                    } else {
+                        self.toggle_install(app_idx);
+                        return None;
+                    }
+                }
+                self.selected_app_idx = Some(app_idx);
+                self.status_msg = "Inspecting package details";
+                return None;
+            }
+            return None;
+        }
+
+        // --- SCENARIO D: Category Grid Views ---
+        let cat_apps: [usize; 4] = match self.active_category {
+            StoreCategory::Productivity => [0, 7, 9, 10],
+            StoreCategory::Development => [1, 2, 3, 8],
+            StoreCategory::Internet => [4, 5, 6, 4],
+            StoreCategory::Games => [11, 11, 11, 11],
+            _ => [0, 1, 2, 3],
+        };
+        let grid_w = (main_w - 30) / 2;
+        let grid_h = 70;
+        let start_y = 40;
+        for (i, &app_idx) in cat_apps.iter().enumerate() {
+            let col = (i % 2) as i32;
+            let row = (i / 2) as i32;
+            let cx = 12 + col * (grid_w + 6);
+            let cy = start_y + row * (grid_h + 8);
+            if main_x >= cx && main_x < cx + grid_w && main_y >= cy && main_y < cy + grid_h {
+                let is_inst = self.is_installed(app_idx);
+                if main_x >= cx + grid_w - 56 && main_y >= cy + grid_h - 24 {
+                    if is_inst {
+                        self.status_msg = "Launching application...";
+                        return Some(STORE_APPS[app_idx].app_id);
+                    } else {
+                        self.toggle_install(app_idx);
+                        return None;
+                    }
+                }
+                self.selected_app_idx = Some(app_idx);
+                self.status_msg = "Inspecting package details";
+                return None;
+            }
+        }
+
+        None
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -3580,6 +4101,7 @@ pub struct Wm {
     pub vellum_app: WmVellumApp,
     pub vortex_app: WmVortexApp,
     pub zenith_app: WmZenithApp,
+    pub store_app: WmStoreApp,
 }
 
 impl Wm {
@@ -3641,6 +4163,7 @@ impl Wm {
             vellum_app: WmVellumApp::new(),
             vortex_app: WmVortexApp::new(),
             zenith_app: WmZenithApp::new(),
+            store_app: WmStoreApp::new(),
         }
     }
 
@@ -3712,6 +4235,7 @@ impl Wm {
             vellum_app: WmVellumApp::new(),
             vortex_app: WmVortexApp::new(),
             zenith_app: WmZenithApp::new(),
+            store_app: WmStoreApp::new(),
         }
     }
 
@@ -4232,6 +4756,12 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
+                if app_id == 4 && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                    w.w = 680;
+                    w.h = 440;
+                    w.x = (self.screen_w - 680) / 2;
+                    w.y = (self.desktop_h - 440) / 2;
+                }
                 w.is_open = true;
                 w.is_minimized = false;
                 self.raise(w_idx);
@@ -4242,6 +4772,12 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
+                if app_id == 4 && self.screen_w >= 800 {
+                    w.w = 680;
+                    w.h = 440;
+                    w.x = (self.screen_w - 680) / 2;
+                    w.y = (self.desktop_h - 440) / 2;
+                }
                 w.is_open = true;
                 w.is_minimized = false;
                 self.raise(w_idx);
@@ -4926,6 +5462,14 @@ impl Wm {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
                     self.zenith_app.handle_click(px, py, client);
                 }
+            } else if w.label == 4 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    if let Some(target_app_id) = self.store_app.handle_click(px, py, client) {
+                        self.launch_or_restore(target_app_id);
+                    }
+                }
             }
             return;
         }
@@ -5047,7 +5591,7 @@ impl Wm {
                 } else if w.label == 3 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_editor_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 4 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
-                    draw_store_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                    draw_store_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.store_app, &palette);
                 } else if w.label == 5 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 6 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
@@ -5119,7 +5663,7 @@ impl Wm {
                     1 => "Console - NovaOS Shell",
                     2 => "Files - Root Directory",
                     3 => "Editor - Scratchpad",
-                    4 => "Software Store - Packages",
+                    4 => "NovaOS App Store - Discover & Manage Packages",
                     5 => "Settings - Control Panel",
                     6 => "Calendar - NovaOS Schedule & Events",
                     7 => "Calculator - NovaOS Math Studio",
@@ -8870,103 +9414,454 @@ fn draw_editor_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, _palett
     }
 }
 
-/// Renders the Software Store & App Launcher client view inside Window 3 / Software Store - Packages.
-fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
-    let font_regular = Font::regular();
-    let font_small = Font::small();
+/// Renders the Modern NovaOS Software Store & App Hub (macOS + Ubuntu Fusion)
+fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &WmStoreApp, palette: &ThemePalette) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
 
-    // 1. Dark background
-    let bg_color = Color::rgb(13, 17, 23);
-    s.fill_rect(client, bg_color);
+    // 1. Dark canvas background
+    s.fill_rect(client, Color::rgb(13, 17, 23));
 
-    // 2. Tab strip
-    let tb_h = 24;
-    let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
-    s.fill_rect(tb_rect, Color::rgb(22, 27, 34));
-    s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), Color::rgb(48, 54, 61));
+    // 2. Left Sidebar (width 150px) - macOS / Ubuntu Sidebar Fusion
+    let sb_w = 150;
+    let sb_h = (client.h - 22).max(1);
+    let sb_rect = Rect::new(client.x, client.y, sb_w, sb_h);
+    s.fill_rect(sb_rect, Color::rgb(18, 22, 28));
+    s.fill_rect(Rect::new(client.x + sb_w - 1, client.y, 1, sb_h), Color::rgb(48, 54, 61));
 
-    // Tabs: [All Packages] [Installed] [Repo Server] [Security]
-    let tabs: [(&str, i32, bool); 4] = [
-        ("All Packages", 84, true),
-        ("Installed", 68, false),
-        ("Repo Server", 76, false),
-        ("Security", 60, false),
+    // Top Search Bar in Sidebar
+    let s_rect = Rect::new(client.x + 8, client.y + 8, sb_w - 16, 22);
+    s.fill_rect(s_rect, Color::rgb(13, 17, 23));
+    let s_border = if store.search_active { Color::rgb(56, 189, 248) } else { Color::rgb(48, 54, 61) };
+    draw_rect_outline(s, s_rect, 1, s_border);
+    let search_txt = if store.search_active { "Filter active" } else { "Search apps..." };
+    let search_col = if store.search_active { Color::WHITE } else { Color::rgb(110, 118, 129) };
+    ui::font::draw_text_font(s, s_rect.x + 6, s_rect.y + 5, search_txt, search_col, &font_sm);
+
+    // Sidebar Category Items
+    let nav_items: [(&str, StoreCategory); 7] = [
+        ("Discover", StoreCategory::Discover),
+        ("Productivity", StoreCategory::Productivity),
+        ("Development", StoreCategory::Development),
+        ("Internet", StoreCategory::Internet),
+        ("Games", StoreCategory::Games),
+        ("Manage", StoreCategory::Manage),
+        ("Security", StoreCategory::Security),
     ];
-    let mut bx = client.x + 8;
-    for (lbl, bw, is_active) in &tabs {
-        if bx + bw > client.right() - 8 { break; }
-        if *is_active {
-            s.fill_rect(Rect::new(bx, client.y + 2, *bw, tb_h - 4), Color::rgb(33, 38, 45));
-            s.fill_rect(Rect::new(bx, client.y + tb_h - 2, *bw, 2), palette.accent_primary);
-            ui::font::draw_text_font(s, bx + 6, client.y + 7, lbl, Color::WHITE, &font_small);
+
+    ui::font::draw_text_font(s, client.x + 10, client.y + 36, "DISCOVER", Color::rgb(110, 118, 129), &font_sm);
+
+    for (i, (name, cat)) in nav_items.iter().enumerate() {
+        let ny = if i < 5 {
+            client.y + 50 + (i as i32 * 23)
+        } else if i == 5 {
+            ui::font::draw_text_font(s, client.x + 10, client.y + 172, "MANAGEMENT", Color::rgb(110, 118, 129), &font_sm);
+            client.y + 186
         } else {
-            ui::font::draw_text_font(s, bx + 6, client.y + 7, lbl, palette.text_muted, &font_small);
-        }
-        bx += bw + 6;
-    }
+            client.y + 209
+        };
 
-    // 3. Status Bar at bottom
-    let sb_h = 18;
-    let sb_y = client.bottom() - sb_h;
-    if sb_y > client.y + tb_h + 30 {
-        let sb_rect = Rect::new(client.x, sb_y, client.w, sb_h);
-        s.fill_rect(sb_rect, Color::rgb(22, 27, 34));
-        s.fill_rect(Rect::new(client.x, sb_y, client.w, 1), Color::rgb(48, 54, 61));
-        ui::font::draw_text_font(s, client.x + 8, sb_y + 3, "6 packages available | 2 installed", palette.accent_primary, &font_small);
-        let repo_str = "HTTP Repo: 8080 Active | HMAC-SHA256";
-        let r_sz = font_small.measure_str(repo_str);
-        ui::font::draw_text_font(s, client.right() - r_sz.w - 10, sb_y + 3, repo_str, palette.status_success, &font_small);
-    }
+        if ny + 20 >= client.bottom() - 24 { break; }
 
-    // 4. Package rows
-    let row_y = client.y + tb_h + 6;
-    let row_h = 36;
-    let rows: [(&str, &str, &str, bool, Color); 3] = [
-        ("Editor", "v1.0", "Tiny text editor (demo package)", true, Color::rgb(88, 166, 255)),
-        ("Game", "v2.1", "Tiny game (demo package)", false, Color::rgb(245, 180, 50)),
-        ("Calc", "v1.2", "Scientific calculator utility", false, Color::rgb(57, 211, 83)),
-    ];
+        let is_active = store.active_category == *cat && store.selected_app_idx.is_none();
+        let item_rect = Rect::new(client.x + 6, ny, sb_w - 12, 21);
 
-    for (i, (name, ver, desc, is_installed, col)) in rows.iter().enumerate() {
-        let ry = row_y + (i as i32 * (row_h + 4));
-        if ry + row_h >= sb_y { break; }
-
-        let r_rect = Rect::new(client.x + 8, ry, client.w - 16, row_h);
-        s.fill_rect(r_rect, Color::rgb(22, 27, 34));
-        s.fill_rect(Rect::new(r_rect.x, r_rect.y, 1, row_h), Color::rgb(48, 54, 61));
-        s.fill_rect(Rect::new(r_rect.right() - 1, r_rect.y, 1, row_h), Color::rgb(48, 54, 61));
-        s.fill_rect(Rect::new(r_rect.x, r_rect.y, r_rect.w, 1), Color::rgb(48, 54, 61));
-        s.fill_rect(Rect::new(r_rect.x, r_rect.bottom() - 1, r_rect.w, 1), Color::rgb(48, 54, 61));
-
-        // Color indicator pill
-        s.fill_rect(Rect::new(r_rect.x + 4, ry + 4, 3, row_h - 8), *col);
-
-        // App Name & Version
-        ui::font::draw_text_font(s, r_rect.x + 12, ry + 6, name, Color::WHITE, &font_regular);
-        ui::font::draw_text_font(s, r_rect.x + 64, ry + 8, ver, palette.text_muted, &font_small);
-
-        // Description
-        ui::font::draw_text_font(s, r_rect.x + 12, ry + 22, desc, palette.text_muted, &font_small);
-
-        // Verified Badge
-        let badge_x = r_rect.right() - 160;
-        if badge_x > r_rect.x + 120 {
-            ui::font::draw_text_font(s, badge_x, ry + 6, "[✓] Verified", palette.status_success, &font_small);
+        if is_active {
+            s.fill_rect(item_rect, Color::rgb(33, 38, 45));
+            s.fill_rect(Rect::new(client.x + 6, ny, 3, 21), palette.accent_primary);
+            ui::font::draw_text_font(s, client.x + 16, ny + 4, name, Color::WHITE, &font_sm);
+        } else {
+            ui::font::draw_text_font(s, client.x + 16, ny + 4, name, palette.text_muted, &font_sm);
         }
 
-        // Action Button
-        let btn_w = 46;
-        let btn_h = 18;
-        let btn_x = r_rect.right() - btn_w - 8;
-        let btn_y = ry + (row_h - btn_h) / 2;
-        let b_rect = Rect::new(btn_x, btn_y, btn_w, btn_h);
+        // Badge on Manage item
+        if *cat == StoreCategory::Manage {
+            let badge_rect = Rect::new(client.x + sb_w - 34, ny + 3, 22, 14);
+            s.fill_rect(badge_rect, Color::rgba(56, 189, 248, 40));
+            draw_rect_outline(s, badge_rect, 1, Color::rgb(56, 189, 248));
+            ui::font::draw_text_font(s, badge_rect.x + 4, badge_rect.y + 1, "12", Color::rgb(56, 189, 248), &font_sm);
+        }
+    }
 
-        if *is_installed {
+    // Sidebar Bottom Badge
+    let cert_y = client.bottom() - 52;
+    if cert_y > client.y + 240 {
+        ui::font::draw_text_font(s, client.x + 12, cert_y, "NovaOS 2.0 CA", Color::rgb(110, 118, 129), &font_sm);
+        ui::font::draw_text_font(s, client.x + 12, cert_y + 14, "HMAC-SHA256", palette.status_success, &font_sm);
+    }
+
+    // 3. Bottom Status Bar (height 20px)
+    let sb_y = client.bottom() - 20;
+    let sb_bar = Rect::new(client.x, sb_y, client.w, 20);
+    s.fill_rect(sb_bar, Color::rgb(18, 22, 28));
+    s.fill_rect(Rect::new(client.x, sb_y, client.w, 1), Color::rgb(48, 54, 61));
+
+    ui::font::draw_text_font(s, client.x + 10, sb_y + 4, store.status_msg, palette.accent_primary, &font_sm);
+    let repo_txt = "Repo: 10.0.2.2:8080 Active | Ring-3 VFS Enforced";
+    let rt_w = font_sm.measure_str(repo_txt).w;
+    if client.right() - rt_w - 12 > client.x + 240 {
+        ui::font::draw_text_font(s, client.right() - rt_w - 12, sb_y + 4, repo_txt, palette.status_success, &font_sm);
+    }
+
+    // 4. Main Content Canvas
+    let mx = client.x + sb_w;
+    let my = client.y;
+    let mw = client.w - sb_w;
+    let mh = client.h - 20;
+    if mw <= 40 || mh <= 40 { return; }
+
+    // --- VIEW A: App Detail View (macOS / Ubuntu Detail Page) ---
+    if let Some(sel_idx) = store.selected_app_idx {
+        if sel_idx >= STORE_APPS.len() { return; }
+        let app = STORE_APPS[sel_idx];
+        let is_inst = store.is_installed(sel_idx);
+
+        // Top back bar
+        let back_btn = Rect::new(mx + 12, my + 8, 76, 20);
+        s.fill_rect(back_btn, Color::rgb(33, 38, 45));
+        draw_rect_outline(s, back_btn, 1, Color::rgb(48, 54, 61));
+        ui::font::draw_text_font(s, back_btn.x + 8, back_btn.y + 4, "< Back", Color::WHITE, &font_sm);
+
+        // Hero App Header
+        let icon_rect = Rect::new(mx + 14, my + 36, 38, 38);
+        ui::draw::draw_rounded_rect(s, icon_rect, 6, app.icon_bg);
+        ui::font::draw_text_font(s, icon_rect.x + 8, icon_rect.y + 11, app.icon_letter, Color::WHITE, &font_reg);
+
+        ui::font::draw_text_font(s, mx + 60, my + 36, app.name, Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, mx + 60, my + 52, app.subtitle, palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, mx + 60, my + 66, app.publisher, palette.accent_primary, &font_sm);
+        ui::font::draw_text_font(s, mx + 240, my + 66, "[✓] Verified HMAC-SHA256", palette.status_success, &font_sm);
+
+        // Primary action buttons (top right)
+        if is_inst {
+            let b_open = Rect::new(mx + mw - 146, my + 36, 64, 24);
+            s.fill_rect(b_open, palette.status_success);
+            ui::font::draw_text_font(s, b_open.x + 15, b_open.y + 5, "Open", Color::WHITE, &font_sm);
+
+            if !app.is_core {
+                let b_un = Rect::new(mx + mw - 76, my + 36, 68, 24);
+                s.fill_rect(b_un, Color::rgb(33, 38, 45));
+                draw_rect_outline(s, b_un, 1, Color::rgb(218, 54, 51));
+                ui::font::draw_text_font(s, b_un.x + 10, b_un.y + 5, "Uninstall", Color::rgb(218, 54, 51), &font_sm);
+            }
+        } else {
+            let b_inst = Rect::new(mx + mw - 96, my + 36, 86, 24);
+            s.fill_rect(b_inst, palette.accent_primary);
+            ui::font::draw_text_font(s, b_inst.x + 18, b_inst.y + 5, "Install", Color::WHITE, &font_sm);
+        }
+
+        // Horizontal Specs Strip (Ubuntu style)
+        let spec_y = my + 84;
+        let spec_bar = Rect::new(mx + 12, spec_y, mw - 24, 22);
+        s.fill_rect(spec_bar, Color::rgb(22, 27, 34));
+        draw_rect_outline(s, spec_bar, 1, Color::rgb(48, 54, 61));
+
+        ui::font::draw_text_font(s, spec_bar.x + 8, spec_y + 4, "Download: 482 KB", palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, spec_bar.x + 125, spec_y + 4, "| Ring-3 Isolated", palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, spec_bar.x + 230, spec_y + 4, "| Version: 1.0.0", palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, spec_bar.x + 335, spec_y + 4, "| License: MIT", palette.text_muted, &font_sm);
+
+        // App Description
+        ui::font::draw_text_font(s, mx + 14, my + 114, app.description, Color::rgb(240, 246, 252), &font_sm);
+
+        // Feature Highlights
+        ui::font::draw_text_font(s, mx + 14, my + 138, "Key Architecture & Features:", Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 154, "✓ Pure Rust 1.99.1 Architecture (Zero C/C++ dependencies)", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 170, "✓ Cryptographic HMAC-SHA256 Integrity Verified by NovaOS Keyring", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 186, "✓ Seamless Window Manager Integration & Capability Sandbox Enforced", palette.status_success, &font_sm);
+
+        // App Preview Showcase Window
+        let prev_y = my + 210;
+        let prev_h = (sb_y - prev_y - 8).max(60);
+        if prev_h >= 60 {
+            let prev_frame = Rect::new(mx + 12, prev_y, mw - 24, prev_h);
+            s.fill_rect(prev_frame, Color::rgb(18, 22, 28));
+            draw_rect_outline(s, prev_frame, 1, Color::rgb(48, 54, 61));
+
+            // Simulated preview titlebar
+            s.fill_rect(Rect::new(prev_frame.x, prev_frame.y, prev_frame.w, 18), Color::rgb(33, 38, 45));
+            ui::font::draw_text_font(s, prev_frame.x + 8, prev_frame.y + 3, app.name, Color::WHITE, &font_sm);
+            s.fill_rect(Rect::new(prev_frame.right() - 28, prev_frame.y + 5, 8, 8), Color::rgb(57, 211, 83));
+            s.fill_rect(Rect::new(prev_frame.right() - 16, prev_frame.y + 5, 8, 8), Color::rgb(245, 180, 50));
+
+            // Simulated application workspace preview
+            ui::font::draw_text_font(s, prev_frame.x + 16, prev_frame.y + 26, "[Live Application Workspace Mockup]", palette.accent_primary, &font_sm);
+            ui::font::draw_text_font(s, prev_frame.x + 16, prev_frame.y + 44, "Status: Ready • Zero runtime overhead • Direct framebuffer presentation", palette.text_muted, &font_sm);
+        }
+        return;
+    }
+
+    // --- VIEW B: Discover / Explore View (Hero Banner & Curated Shelves) ---
+    if store.active_category == StoreCategory::Discover {
+        // 1. Hero Gradient Banner (macOS + Ubuntu style)
+        let hero_rect = Rect::new(mx + 10, my + 8, mw - 20, 76);
+        s.fill_rect(hero_rect, Color::rgb(15, 23, 42));
+        s.fill_rect(Rect::new(hero_rect.x, hero_rect.y, hero_rect.w / 2, hero_rect.h), Color::rgb(30, 27, 75));
+        s.fill_rect(Rect::new(hero_rect.x + hero_rect.w / 2, hero_rect.y, hero_rect.w / 2, hero_rect.h), Color::rgb(6, 78, 59));
+        draw_rect_outline(s, hero_rect, 1, Color::rgb(56, 189, 248));
+
+        ui::font::draw_text_font(s, hero_rect.x + 14, hero_rect.y + 10, "★ FEATURED SOVEREIGN APPS", Color::rgb(245, 158, 11), &font_sm);
+        ui::font::draw_text_font(s, hero_rect.x + 14, hero_rect.y + 28, "NovaOS 2.0 Sovereign Application Ecosystem", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, hero_rect.x + 14, hero_rect.y + 48, "Pure Rust 1.99.1 • Zero C/C++ • Ring-3 VFS Sandbox • Native Desktop UI", Color::rgb(203, 213, 225), &font_sm);
+
+        // Mini app icon badges on far right
+        let badge_x = hero_rect.right() - 110;
+        let badges: [(&str, Color); 4] = [
+            ("Z", Color::rgb(137, 87, 229)),
+            ("A", Color::rgb(255, 107, 0)),
+            ("S", Color::rgb(99, 102, 241)),
+            ("V", Color::rgb(56, 189, 248)),
+        ];
+        for (bi, (b_txt, b_col)) in badges.iter().enumerate() {
+            let bx = badge_x + (bi as i32 * 24);
+            let br = Rect::new(bx, hero_rect.y + 24, 20, 20);
+            ui::draw::draw_rounded_rect(s, br, 4, *b_col);
+            ui::font::draw_text_font(s, br.x + 5, br.y + 3, b_txt, Color::WHITE, &font_sm);
+        }
+
+        // 2. Shelf 1: "Top Sovereign Core Apps"
+        let shelf1_y = my + 92;
+        ui::font::draw_text_font(s, mx + 12, shelf1_y, "Top Sovereign Core Apps", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, mx + mw - 76, shelf1_y + 2, "See All >", palette.accent_primary, &font_sm);
+
+        let shelf1_apps = [0, 5, 6, 7]; // Zenith, Aero, Spectra, Vellum
+        let card_w = (mw - 36) / 4;
+        let card_h = 76;
+        for (i, &app_idx) in shelf1_apps.iter().enumerate() {
+            let app = STORE_APPS[app_idx];
+            let is_inst = store.is_installed(app_idx);
+            let cx = mx + 10 + (i as i32 * (card_w + 5));
+            let cy = shelf1_y + 18;
+            let c_rect = Rect::new(cx, cy, card_w, card_h);
+
+            s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+            draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
+
+            // Icon + Title
+            let ir = Rect::new(cx + 6, cy + 6, 20, 20);
+            ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
+            ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+
+            // Subtitle
+            ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+
+            // Verified Badge & Action Button
+            ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
+            let b_w = 46;
+            let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+            if is_inst {
+                s.fill_rect(b_rect, palette.status_success);
+                ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+            } else {
+                s.fill_rect(b_rect, palette.accent_primary);
+                ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+            }
+        }
+
+        // 3. Shelf 2: "Developer & System Power Tools"
+        let shelf2_y = shelf1_y + 100;
+        if shelf2_y + card_h <= sb_y {
+            ui::font::draw_text_font(s, mx + 12, shelf2_y, "Developer & System Power Tools", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, mx + mw - 76, shelf2_y + 2, "See All >", palette.accent_primary, &font_sm);
+
+            let shelf2_apps = [4, 1, 2, 3]; // Vortex, DBNavigator, Lumina, ThunderCall
+            for (i, &app_idx) in shelf2_apps.iter().enumerate() {
+                let app = STORE_APPS[app_idx];
+                let is_inst = store.is_installed(app_idx);
+                let cx = mx + 10 + (i as i32 * (card_w + 5));
+                let cy = shelf2_y + 18;
+                let c_rect = Rect::new(cx, cy, card_w, card_h);
+
+                s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+                draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
+
+                let ir = Rect::new(cx + 6, cy + 6, 20, 20);
+                ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
+                ui::font::draw_text_font(s, ir.x + 4, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+
+                ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+
+                ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
+                let b_w = 46;
+                let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+                if is_inst {
+                    s.fill_rect(b_rect, palette.status_success);
+                    ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+                } else {
+                    s.fill_rect(b_rect, palette.accent_primary);
+                    ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+                }
+            }
+        }
+
+        // 4. Shelf 3: "Productivity & Entertainment" (if height allows)
+        let shelf3_y = shelf2_y + 100;
+        if shelf3_y + card_h <= sb_y {
+            ui::font::draw_text_font(s, mx + 12, shelf3_y, "Productivity & Utilities", Color::WHITE, &font_reg);
+            let shelf3_apps = [8, 9, 10, 11]; // Terminal, Calc, Calendar, Game
+            for (i, &app_idx) in shelf3_apps.iter().enumerate() {
+                let app = STORE_APPS[app_idx];
+                let is_inst = store.is_installed(app_idx);
+                let cx = mx + 10 + (i as i32 * (card_w + 5));
+                let cy = shelf3_y + 18;
+                let c_rect = Rect::new(cx, cy, card_w, card_h);
+
+                s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+                draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
+
+                let ir = Rect::new(cx + 6, cy + 6, 20, 20);
+                ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
+                ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+
+                ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+
+                ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
+                let b_w = 46;
+                let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+                if is_inst {
+                    s.fill_rect(b_rect, palette.status_success);
+                    ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+                } else {
+                    s.fill_rect(b_rect, palette.accent_primary);
+                    ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+                }
+            }
+        }
+        return;
+    }
+
+    // --- VIEW C: Manage / Installed View (Ubuntu App Center Style) ---
+    if store.active_category == StoreCategory::Manage {
+        ui::font::draw_text_font(s, mx + 12, my + 10, "Installed Applications & Package Management", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, mx + 12, my + 28, "Manage sovereign software packages • 1-click launch and removal", palette.text_muted, &font_sm);
+
+        let list_y = my + 44;
+        let row_h = 30;
+        for i in 0..STORE_APPS.len() {
+            let ry = list_y + (i as i32 * (row_h + 3));
+            if ry + row_h >= sb_y { break; }
+
+            let app = STORE_APPS[i];
+            let is_inst = store.is_installed(i);
+
+            let r_rect = Rect::new(mx + 10, ry, mw - 20, row_h);
+            s.fill_rect(r_rect, Color::rgb(22, 27, 34));
+            draw_rect_outline(s, r_rect, 1, Color::rgb(48, 54, 61));
+
+            // Icon
+            let ir = Rect::new(r_rect.x + 6, ry + 5, 20, 20);
+            ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
+            ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
+
+            // Name & Version
+            ui::font::draw_text_font(s, r_rect.x + 32, ry + 8, app.name, Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, r_rect.x + 130, ry + 8, app.version, palette.text_muted, &font_sm);
+
+            // Size
+            ui::font::draw_text_font(s, r_rect.x + 190, ry + 8, "482 KB", palette.text_muted, &font_sm);
+
+            // Status tag
+            if is_inst {
+                if app.is_core {
+                    ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[Core Default]", palette.accent_primary, &font_sm);
+                } else {
+                    ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[User Package]", palette.status_success, &font_sm);
+                }
+
+                // Open button
+                let b_open = Rect::new(r_rect.right() - 104, ry + 5, 46, 20);
+                s.fill_rect(b_open, palette.status_success);
+                ui::font::draw_text_font(s, b_open.x + 8, b_open.y + 3, "Open", Color::WHITE, &font_sm);
+
+                // Uninstall button
+                if !app.is_core {
+                    let b_un = Rect::new(r_rect.right() - 52, ry + 5, 46, 20);
+                    s.fill_rect(b_un, Color::rgb(33, 38, 45));
+                    draw_rect_outline(s, b_un, 1, Color::rgb(218, 54, 51));
+                    ui::font::draw_text_font(s, b_un.x + 5, b_un.y + 3, "Remove", Color::rgb(218, 54, 51), &font_sm);
+                }
+            } else {
+                ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[Available]", Color::rgb(110, 118, 129), &font_sm);
+                let b_inst = Rect::new(r_rect.right() - 76, ry + 5, 68, 20);
+                s.fill_rect(b_inst, palette.accent_primary);
+                ui::font::draw_text_font(s, b_inst.x + 10, b_inst.y + 3, "Install", Color::WHITE, &font_sm);
+            }
+        }
+        return;
+    }
+
+    // --- VIEW D: Security & Keyring Audit View ---
+    if store.active_category == StoreCategory::Security {
+        ui::font::draw_text_font(s, mx + 12, my + 10, "Cryptographic Security & Repository Audit", Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, mx + 12, my + 28, "FIPS 198-1 / RFC 2104 HMAC-SHA256 sovereign signature verification", palette.text_muted, &font_sm);
+
+        // Security card 1
+        let c1 = Rect::new(mx + 12, my + 48, mw - 24, 76);
+        s.fill_rect(c1, Color::rgb(22, 27, 34));
+        draw_rect_outline(s, c1, 1, Color::rgb(48, 54, 61));
+        ui::font::draw_text_font(s, c1.x + 12, c1.y + 10, "Cryptographic Signature Verification: ENFORCED", palette.status_success, &font_reg);
+        ui::font::draw_text_font(s, c1.x + 12, c1.y + 30, "Algorithm: HMAC-SHA256 • Keyring: Root Sovereign Authority (CA)", Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, c1.x + 12, c1.y + 48, "All ring-3 binaries pass signature gating before SYS_EXEC execution.", palette.text_muted, &font_sm);
+
+        // Security card 2
+        let c2 = Rect::new(mx + 12, my + 134, mw - 24, 76);
+        s.fill_rect(c2, Color::rgb(22, 27, 34));
+        draw_rect_outline(s, c2, 1, Color::rgb(48, 54, 61));
+        ui::font::draw_text_font(s, c2.x + 12, c2.y + 10, "In-Kernel Package Repository Server: ACTIVE", palette.accent_primary, &font_reg);
+        ui::font::draw_text_font(s, c2.x + 12, c2.y + 30, "Port: 8080 • Kernel Syscall: SYS_PKGREPO_CTL (82)", Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, c2.x + 12, c2.y + 48, "Supports live HTTP package requests and over-the-air update staging.", palette.text_muted, &font_sm);
+        return;
+    }
+
+    // --- VIEW E: Category Views (Productivity, Development, Internet, Games) ---
+    let (cat_title, cat_apps): (&str, [usize; 4]) = match store.active_category {
+        StoreCategory::Productivity => ("Productivity Suite & Office Applications", [0, 7, 9, 10]),
+        StoreCategory::Development => ("Developer Tools, IDEs & API Platforms", [1, 2, 3, 8]),
+        StoreCategory::Internet => ("Internet Browsing, Streaming & Media", [4, 5, 6, 4]),
+        StoreCategory::Games => ("Games & Pixel Arcade", [11, 11, 11, 11]),
+        _ => ("Applications Catalog", [0, 1, 2, 3]),
+    };
+
+    ui::font::draw_text_font(s, mx + 12, my + 10, cat_title, Color::WHITE, &font_reg);
+    ui::font::draw_text_font(s, mx + 12, my + 28, "Verified pure-Rust software packages for NovaOS 2.0", palette.text_muted, &font_sm);
+
+    let grid_w = (mw - 30) / 2;
+    let grid_h = 70;
+    let start_y = my + 44;
+    for (i, &app_idx) in cat_apps.iter().enumerate() {
+        let col = (i % 2) as i32;
+        let row = (i / 2) as i32;
+        let cx = mx + 10 + col * (grid_w + 10);
+        let cy = start_y + row * (grid_h + 10);
+        if cy + grid_h >= sb_y { break; }
+
+        let app = STORE_APPS[app_idx];
+        let is_inst = store.is_installed(app_idx);
+        let c_rect = Rect::new(cx, cy, grid_w, grid_h);
+
+        s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+        draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
+
+        let ir = Rect::new(cx + 8, cy + 8, 24, 24);
+        ui::draw::draw_rounded_rect(s, ir, 4, app.icon_bg);
+        ui::font::draw_text_font(s, ir.x + 6, ir.y + 4, app.icon_letter, Color::WHITE, &font_sm);
+
+        ui::font::draw_text_font(s, cx + 38, cy + 8, app.name, Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, cx + 38, cy + 24, app.subtitle, palette.text_muted, &font_sm);
+
+        ui::font::draw_text_font(s, cx + 8, cy + 48, "[✓] Verified", palette.status_success, &font_sm);
+
+        let b_w = 50;
+        let b_rect = Rect::new(cx + grid_w - b_w - 8, cy + 44, b_w, 20);
+        if is_inst {
             s.fill_rect(b_rect, palette.status_success);
-            ui::font::draw_text_font(s, btn_x + 6, btn_y + 3, "Launch", Color::WHITE, &font_small);
+            ui::font::draw_text_font(s, b_rect.x + 10, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
         } else {
             s.fill_rect(b_rect, palette.accent_primary);
-            ui::font::draw_text_font(s, btn_x + 6, btn_y + 3, "Install", Color::WHITE, &font_small);
+            ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
         }
     }
 }
@@ -11024,5 +11919,86 @@ mod tests {
         wm.on_key(10);
         let l4 = core::str::from_utf8(&wm.term.lines[wm.term.line_count - 1].text).unwrap();
         assert!(l4.contains("Pure Rust 1.99.1") || l4.contains("zenith-core") || l4.contains("Zenith"), "Terminal zenith --version output: {}", l4);
+    }
+
+    #[test]
+    fn test_wm_modern_app_store_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial State
+        assert_eq!(wm.store_app.active_category, StoreCategory::Discover);
+        assert_eq!(wm.store_app.selected_app_idx, None);
+        assert!(!wm.store_app.search_active);
+        let init_installed = wm.store_app.installed_count();
+        assert!(init_installed >= 8, "Core sovereign packages should be pre-installed");
+        assert!(wm.store_app.is_installed(0)); // Zenith Office
+        assert!(wm.store_app.is_installed(4)); // Vortex
+        assert!(wm.store_app.is_installed(5)); // Aero Browser
+        assert!(wm.store_app.is_installed(6)); // Spectra Player
+        assert!(wm.store_app.is_installed(7)); // Vellum PDF
+        assert!(!wm.store_app.is_installed(1)); // DBNavigator (Store pkg)
+        assert!(!wm.store_app.is_installed(2)); // Lumina (Store pkg)
+        assert!(!wm.store_app.is_installed(3)); // ThunderCall (Store pkg)
+
+        // 2. Launch App Store via Start Menu or Desktop Shortcut
+        wm.launch_or_restore(4);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 4, "App Store should be top window");
+        let w = &wm.windows[top_win_idx];
+        assert_eq!(w.w, 680);
+        assert_eq!(w.h, 440);
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // 3. Category Switching via Left Sidebar
+        // Productivity (y: client.y + 80)
+        wm.on_left_press(client.x + 50, client.y + 80);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Productivity);
+
+        // Development (y: client.y + 105)
+        wm.on_left_press(client.x + 50, client.y + 105);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Development);
+
+        // Manage (y: client.y + 190)
+        wm.on_left_press(client.x + 50, client.y + 190);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Manage);
+
+        // Security (y: client.y + 215)
+        wm.on_left_press(client.x + 50, client.y + 215);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Security);
+
+        // Discover (y: client.y + 55)
+        wm.on_left_press(client.x + 50, client.y + 55);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Discover);
+
+        // 4. Hero Banner Click -> Inspect Zenith Office
+        wm.on_left_press(client.x + 200, client.y + 40);
+        assert_eq!(wm.store_app.selected_app_idx, Some(0));
+
+        // Back button (< Back to Store) at top left of main area
+        wm.on_left_press(client.x + 150 + 30, client.y + 20);
+        assert_eq!(wm.store_app.selected_app_idx, None);
+
+        // 5. Package Installation: Install DBNavigator (index 1) in Manage or Discover
+        // Switch to Manage view
+        wm.on_left_press(client.x + 50, client.y + 190);
+        assert_eq!(wm.store_app.active_category, StoreCategory::Manage);
+        assert!(!wm.store_app.is_installed(1));
+        wm.store_app.toggle_install(1);
+        assert!(wm.store_app.is_installed(1));
+        assert_eq!(wm.store_app.installed_count(), init_installed + 1);
+
+        // Uninstall DBNavigator
+        wm.store_app.toggle_install(1);
+        assert!(!wm.store_app.is_installed(1));
+        assert_eq!(wm.store_app.installed_count(), init_installed);
+
+        // 6. Launch App from App Store
+        // When Zenith (0) is selected in Detail view, clicking [Open] should launch Window 12
+        wm.store_app.selected_app_idx = Some(0);
+        let launch_btn_x = client.x + 150 + (client.w - 150 - 100);
+        let launch_btn_y = client.y + 50;
+        wm.on_left_press(launch_btn_x, launch_btn_y);
+        let new_top_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[new_top_idx].label, 12, "Launching Zenith from App Store should bring Window 12 to front");
     }
 }
