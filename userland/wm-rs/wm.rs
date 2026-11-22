@@ -3484,6 +3484,413 @@ impl WmStoreApp {
     }
 }
 
+// ===========================================================================
+// Sovereign Settings & Control Hub Subsystem (macOS & Ubuntu Synthesis)
+// ===========================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsPanel {
+    System = 0,
+    Appearance = 1,
+    DesktopDock = 2,
+    Displays = 3,
+    DefaultApps = 4,
+    NetworkFirewall = 5,
+    UsersSecurity = 6,
+    PowerPerformance = 7,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsCommand {
+    None,
+    SetTheme(Theme),
+    SetFontScale(FontScale),
+    ToggleDockAutohide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockPlacementChoice {
+    Bottom = 0,
+    Left = 1,
+    Right = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerModeChoice {
+    Performance = 0,
+    Balanced = 1,
+    PowerSaver = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolutionChoice {
+    Res1024x768 = 0,
+    Res1280x800 = 1,
+    Res1920x1080 = 2,
+}
+
+pub struct SettingsCategorySpec {
+    pub panel: SettingsPanel,
+    pub title: &'static str,
+    pub badge: &'static str,
+    pub badge_color: Color,
+}
+
+pub const SETTINGS_CATEGORIES: [SettingsCategorySpec; 8] = [
+    SettingsCategorySpec { panel: SettingsPanel::System,           title: "System & About",      badge: "SYS",  badge_color: Color::rgb(59, 130, 246) },
+    SettingsCategorySpec { panel: SettingsPanel::Appearance,       title: "Appearance",          badge: "CLR",  badge_color: Color::rgb(168, 85, 247) },
+    SettingsCategorySpec { panel: SettingsPanel::DesktopDock,      title: "Desktop & Dock",      badge: "DCK",  badge_color: Color::rgb(14, 165, 233) },
+    SettingsCategorySpec { panel: SettingsPanel::Displays,         title: "Displays",            badge: "DSP",  badge_color: Color::rgb(245, 158, 11) },
+    SettingsCategorySpec { panel: SettingsPanel::DefaultApps,      title: "Default Apps",        badge: "APP",  badge_color: Color::rgb(16, 185, 129) },
+    SettingsCategorySpec { panel: SettingsPanel::NetworkFirewall,  title: "Network & Firewall",  badge: "NET",  badge_color: Color::rgb(239, 68, 68) },
+    SettingsCategorySpec { panel: SettingsPanel::UsersSecurity,    title: "Users & Security",    badge: "SEC",  badge_color: Color::rgb(99, 102, 241) },
+    SettingsCategorySpec { panel: SettingsPanel::PowerPerformance, title: "Power & Battery",     badge: "PWR",  badge_color: Color::rgb(234, 179, 8) },
+];
+
+pub const ACCENT_SWATCHES: [(Color, &'static str); 8] = [
+    (Color::rgb(59, 130, 246),  "Nova Blue"),
+    (Color::rgb(16, 185, 129),  "Emerald Green"),
+    (Color::rgb(139, 92, 246),  "Royal Purple"),
+    (Color::rgb(245, 158, 11),  "Amber Orange"),
+    (Color::rgb(239, 68, 68),   "Crimson Red"),
+    (Color::rgb(6, 182, 212),   "Cyan Teal"),
+    (Color::rgb(236, 72, 153),  "Rose Pink"),
+    (Color::rgb(100, 116, 139), "Slate Graphite"),
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmSettingsApp {
+    pub active_panel: SettingsPanel,
+    pub status_msg: &'static str,
+
+    // Panel 1: System
+    pub hostname: [u8; 16],
+    pub hostname_len: usize,
+
+    // Panel 2: Appearance
+    pub theme_mode: u8, // 0: Dark, 1: Midnight, 2: Light, 3: High Contrast
+    pub accent_choice: usize, // 0..7 index into ACCENT_SWATCHES
+    pub font_scale_choice: u8, // 0: 90%, 1: 100%, 2: 115%, 3: 130%
+
+    // Panel 3: Desktop & Dock
+    pub dock_placement: DockPlacementChoice,
+    pub dock_icon_size: u8, // 0: 28px, 1: 36px, 2: 44px
+    pub dock_autohide: bool,
+    pub show_indicator_dots: bool,
+    pub window_snapping: bool,
+    pub corner_grip_enabled: bool,
+
+    // Panel 4: Displays
+    pub resolution_choice: ResolutionChoice,
+    pub refresh_rate_120: bool,
+    pub night_shift: bool,
+
+    // Panel 5: Default Apps
+    pub default_browser_idx: u8,
+    pub default_media_idx: u8,
+    pub default_pdf_idx: u8,
+    pub default_office_idx: u8,
+    pub default_term_idx: u8,
+    pub default_torrent_idx: u8,
+
+    // Panel 6: Network & Firewall
+    pub dhcp_enabled: bool,
+    pub firewall_enabled: bool,
+    pub stealth_mode: bool,
+
+    // Panel 7: Users & Security
+    pub sandbox_strict: bool,
+    pub signature_enforced: bool,
+
+    // Panel 8: Power & Performance
+    pub power_mode: PowerModeChoice,
+    pub cpu_idle_hlt: bool,
+    pub screen_blank_mins: u8, // 0: Never, 5, 15, 30
+}
+
+impl WmSettingsApp {
+    pub fn new() -> Self {
+        let mut h = [0u8; 16];
+        let name = b"novaos-pc";
+        h[..name.len()].copy_from_slice(name);
+
+        WmSettingsApp {
+            active_panel: SettingsPanel::System,
+            status_msg: "Ready | Settings synchronized with microkernel",
+            hostname: h,
+            hostname_len: name.len(),
+            theme_mode: 0,
+            accent_choice: 0,
+            font_scale_choice: 1,
+            dock_placement: DockPlacementChoice::Bottom,
+            dock_icon_size: 1,
+            dock_autohide: false,
+            show_indicator_dots: true,
+            window_snapping: true,
+            corner_grip_enabled: true,
+            resolution_choice: ResolutionChoice::Res1024x768,
+            refresh_rate_120: false,
+            night_shift: false,
+            default_browser_idx: 0,
+            default_media_idx: 0,
+            default_pdf_idx: 0,
+            default_office_idx: 0,
+            default_term_idx: 0,
+            default_torrent_idx: 0,
+            dhcp_enabled: true,
+            firewall_enabled: true,
+            stealth_mode: true,
+            sandbox_strict: true,
+            signature_enforced: true,
+            power_mode: PowerModeChoice::Performance,
+            cpu_idle_hlt: true,
+            screen_blank_mins: 15,
+        }
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) -> SettingsCommand {
+        let sb_w = if client.w >= 500 { 150 } else if client.w >= 360 { 120 } else { 0 };
+
+        // 1. Sidebar clicks
+        if sb_w > 0 && px >= client.x && px < client.x + sb_w {
+            let cat_start_y = client.y + 64;
+            for (i, spec) in SETTINGS_CATEGORIES.iter().enumerate() {
+                let item_y = cat_start_y + (i as i32 * 28);
+                if py >= item_y && py < item_y + 26 {
+                    self.active_panel = spec.panel;
+                    self.status_msg = "Viewing category configuration";
+                    return SettingsCommand::None;
+                }
+            }
+            return SettingsCommand::None;
+        }
+
+        // 2. Main Content Canvas clicks
+        let cx = client.x + sb_w;
+        let cw = client.w - sb_w;
+
+        // Header buttons: Defaults / Save
+        let def_btn = Rect::new(client.right() - 110, client.y + 6, 48, 22);
+        if point_in_rect(px, py, def_btn.x, def_btn.y, def_btn.w, def_btn.h) {
+            *self = WmSettingsApp::new();
+            self.status_msg = "Settings reset to defaults";
+            return SettingsCommand::SetTheme(Theme::Dark);
+        }
+
+        let save_btn = Rect::new(client.right() - 56, client.y + 6, 46, 22);
+        if point_in_rect(px, py, save_btn.x, save_btn.y, save_btn.w, save_btn.h) {
+            self.status_msg = "Settings persisted to SYSTEM.CFG & ACCESS.CFG";
+            return SettingsCommand::None;
+        }
+
+        let card_x = cx + 10;
+        let card_w = (cw - 20).max(100);
+
+        match self.active_panel {
+            SettingsPanel::Appearance => {
+                // Card 1: Theme mode (y = client.y + 42, h = 66)
+                let c1_y = client.y + 42;
+                let picker1 = Rect::new(card_x + 12, c1_y + 30, (card_w - 24).max(80), 26);
+                if point_in_rect(px, py, picker1.x, picker1.y, picker1.w, picker1.h) {
+                    let seg_w = (picker1.w / 4).max(1);
+                    let sel = ((px - picker1.x) / seg_w).clamp(0, 3) as u8;
+                    self.theme_mode = sel;
+                    self.status_msg = "Desktop theme updated";
+                    return match sel {
+                        0 => SettingsCommand::SetTheme(Theme::Dark),
+                        1 => SettingsCommand::SetTheme(Theme::Dark),
+                        2 => SettingsCommand::SetTheme(Theme::Light),
+                        _ => SettingsCommand::SetTheme(Theme::HighContrast),
+                    };
+                }
+
+                // Card 2: Accent colors (y = c1_y + 74, h = 62)
+                let c2_y = c1_y + 74;
+                let sw_y = c2_y + 28;
+                let sz = 20;
+                let gap = 10;
+                for i in 0..8 {
+                    let sx = card_x + 14 + (i as i32 * (sz + gap));
+                    if point_in_rect(px, py, sx - 2, sw_y - 2, sz + 4, sz + 4) {
+                        self.accent_choice = i;
+                        self.status_msg = "Accent color updated";
+                        return SettingsCommand::None;
+                    }
+                }
+
+                // Card 3: Font scale (y = c2_y + 70, h = 62)
+                let c3_y = c2_y + 70;
+                let picker3 = Rect::new(card_x + 12, c3_y + 28, (card_w - 24).max(80), 24);
+                if point_in_rect(px, py, picker3.x, picker3.y, picker3.w, picker3.h) {
+                    let seg_w = (picker3.w / 4).max(1);
+                    let sel = ((px - picker3.x) / seg_w).clamp(0, 3) as u8;
+                    self.font_scale_choice = sel;
+                    self.status_msg = "UI font scale updated";
+                    return match sel {
+                        0 => SettingsCommand::SetFontScale(FontScale::Normal),
+                        1 => SettingsCommand::SetFontScale(FontScale::Normal),
+                        2 => SettingsCommand::SetFontScale(FontScale::Medium),
+                        _ => SettingsCommand::SetFontScale(FontScale::Large),
+                    };
+                }
+            }
+            SettingsPanel::DesktopDock => {
+                let c1_y = client.y + 42;
+                // Placement picker
+                let p1 = Rect::new(card_x + 12, c1_y + 24, (card_w - 24).min(240).max(60), 22);
+                if point_in_rect(px, py, p1.x, p1.y, p1.w, p1.h) {
+                    let seg_w = (p1.w / 3).max(1);
+                    let sel = ((px - p1.x) / seg_w).clamp(0, 2);
+                    self.dock_placement = match sel {
+                        1 => DockPlacementChoice::Left,
+                        2 => DockPlacementChoice::Right,
+                        _ => DockPlacementChoice::Bottom,
+                    };
+                    self.status_msg = "Dock position changed";
+                    return SettingsCommand::None;
+                }
+
+                // Card 2: Auto-hide toggle (y = c1_y + 80, h = 64)
+                let c2_y = c1_y + 80;
+                let sw1 = Rect::new(card_x + card_w - 52, c2_y + 8, 38, 18);
+                if point_in_rect(px, py, sw1.x, sw1.y, sw1.w, sw1.h) {
+                    self.dock_autohide = !self.dock_autohide;
+                    self.status_msg = if self.dock_autohide { "Dock auto-hide enabled" } else { "Dock auto-hide disabled" };
+                    return SettingsCommand::ToggleDockAutohide;
+                }
+
+                let sw2 = Rect::new(card_x + card_w - 52, c2_y + 36, 38, 18);
+                if point_in_rect(px, py, sw2.x, sw2.y, sw2.w, sw2.h) {
+                    self.show_indicator_dots = !self.show_indicator_dots;
+                    self.status_msg = "Running app indicator toggle updated";
+                    return SettingsCommand::None;
+                }
+
+                // Card 3: Snapping toggle (y = c2_y + 72, h = 64)
+                let c3_y = c2_y + 72;
+                let sw3 = Rect::new(card_x + card_w - 52, c3_y + 8, 38, 18);
+                if point_in_rect(px, py, sw3.x, sw3.y, sw3.w, sw3.h) {
+                    self.window_snapping = !self.window_snapping;
+                    self.status_msg = "Window edge snapping toggle updated";
+                    return SettingsCommand::None;
+                }
+
+                let sw4 = Rect::new(card_x + card_w - 52, c3_y + 36, 38, 18);
+                if point_in_rect(px, py, sw4.x, sw4.y, sw4.w, sw4.h) {
+                    self.corner_grip_enabled = !self.corner_grip_enabled;
+                    self.status_msg = "Tactile corner resize grip toggle updated";
+                    return SettingsCommand::None;
+                }
+            }
+            SettingsPanel::Displays => {
+                let c2_y = client.y + 42 + 66;
+                let p_res = Rect::new(card_x + 12, c2_y + 24, (card_w - 24).max(60), 22);
+                if point_in_rect(px, py, p_res.x, p_res.y, p_res.w, p_res.h) {
+                    let seg_w = (p_res.w / 3).max(1);
+                    let sel = ((px - p_res.x) / seg_w).clamp(0, 2);
+                    self.resolution_choice = match sel {
+                        1 => ResolutionChoice::Res1280x800,
+                        2 => ResolutionChoice::Res1920x1080,
+                        _ => ResolutionChoice::Res1024x768,
+                    };
+                    self.status_msg = "Display resolution mode selected";
+                    return SettingsCommand::None;
+                }
+
+                let sw_hz = Rect::new(card_x + card_w - 52, c2_y + 50, 38, 18);
+                if point_in_rect(px, py, sw_hz.x, sw_hz.y, sw_hz.w, sw_hz.h) {
+                    self.refresh_rate_120 = !self.refresh_rate_120;
+                    self.status_msg = if self.refresh_rate_120 { "120 Hz ProMotion enabled" } else { "60 Hz Standard mode enabled" };
+                    return SettingsCommand::None;
+                }
+
+                let c3_y = c2_y + 78;
+                let sw_ns = Rect::new(card_x + card_w - 52, c3_y + 14, 38, 18);
+                if point_in_rect(px, py, sw_ns.x, sw_ns.y, sw_ns.w, sw_ns.h) {
+                    self.night_shift = !self.night_shift;
+                    self.status_msg = if self.night_shift { "Night Shift warm display tone active" } else { "Night Shift disabled" };
+                    return SettingsCommand::None;
+                }
+            }
+            SettingsPanel::NetworkFirewall => {
+                let c1_y = client.y + 42;
+                let c2_y = c1_y + 74;
+                let sw_fw = Rect::new(card_x + card_w - 52, c2_y + 10, 38, 18);
+                if point_in_rect(px, py, sw_fw.x, sw_fw.y, sw_fw.w, sw_fw.h) {
+                    self.firewall_enabled = !self.firewall_enabled;
+                    self.status_msg = if self.firewall_enabled { "Stateful firewall active and filtering" } else { "Firewall disabled (Permissive mode)" };
+                    return SettingsCommand::None;
+                }
+
+                let sw_st = Rect::new(card_x + card_w - 52, c2_y + 36, 38, 18);
+                if point_in_rect(px, py, sw_st.x, sw_st.y, sw_st.w, sw_st.h) {
+                    self.stealth_mode = !self.stealth_mode;
+                    self.status_msg = if self.stealth_mode { "Stealth mode active: ICMP probes dropped" } else { "Stealth mode disabled" };
+                    return SettingsCommand::None;
+                }
+            }
+            SettingsPanel::UsersSecurity => {
+                let c2_y = client.y + 42 + 72;
+                let sw_sb = Rect::new(card_x + card_w - 52, c2_y + 10, 38, 18);
+                if point_in_rect(px, py, sw_sb.x, sw_sb.y, sw_sb.w, sw_sb.h) {
+                    self.sandbox_strict = !self.sandbox_strict;
+                    self.status_msg = if self.sandbox_strict { "Strict Ring-3 UFS sandboxing enforced" } else { "Permissive sandbox mode" };
+                    return SettingsCommand::None;
+                }
+
+                let sw_sig = Rect::new(card_x + card_w - 52, c2_y + 36, 38, 18);
+                if point_in_rect(px, py, sw_sig.x, sw_sig.y, sw_sig.w, sw_sig.h) {
+                    self.signature_enforced = !self.signature_enforced;
+                    self.status_msg = if self.signature_enforced { "Cryptographic HMAC-SHA256 required" } else { "Audit-only signature mode" };
+                    return SettingsCommand::None;
+                }
+            }
+            SettingsPanel::PowerPerformance => {
+                let c1_y = client.y + 42;
+                let p_pwr = Rect::new(card_x + 12, c1_y + 24, (card_w - 24).max(60), 24);
+                if point_in_rect(px, py, p_pwr.x, p_pwr.y, p_pwr.w, p_pwr.h) {
+                    let seg_w = (p_pwr.w / 3).max(1);
+                    let sel = ((px - p_pwr.x) / seg_w).clamp(0, 2);
+                    self.power_mode = match sel {
+                        1 => PowerModeChoice::Balanced,
+                        2 => PowerModeChoice::PowerSaver,
+                        _ => PowerModeChoice::Performance,
+                    };
+                    self.status_msg = "CPU power governor updated";
+                    return SettingsCommand::None;
+                }
+
+                let c2_y = c1_y + 80;
+                let sw_hlt = Rect::new(card_x + card_w - 52, c2_y + 10, 38, 18);
+                if point_in_rect(px, py, sw_hlt.x, sw_hlt.y, sw_hlt.w, sw_hlt.h) {
+                    self.cpu_idle_hlt = !self.cpu_idle_hlt;
+                    self.status_msg = if self.cpu_idle_hlt { "CPU low-power HLT loop active" } else { "Continuous polling active" };
+                    return SettingsCommand::None;
+                }
+            }
+            SettingsPanel::DefaultApps => {
+                let list_y = client.y + 42;
+                for i in 0..6 {
+                    let ry = list_y + 12 + (i as i32 * 26);
+                    if py >= ry && py < ry + 24 {
+                        self.status_msg = "Default application confirmed & registered";
+                        return SettingsCommand::None;
+                    }
+                }
+            }
+            SettingsPanel::System => {
+                let btn = Rect::new(card_x + card_w - 110, client.y + 42 + 20, 96, 22);
+                if point_in_rect(px, py, btn.x, btn.y, btn.w, btn.h) {
+                    self.status_msg = "NovaOS system is up to date (v2.0-LTS)";
+                    return SettingsCommand::None;
+                }
+            }
+        }
+
+        SettingsCommand::None
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -4148,6 +4555,7 @@ pub struct Wm {
     pub vortex_app: WmVortexApp,
     pub zenith_app: WmZenithApp,
     pub store_app: WmStoreApp,
+    pub settings_app: WmSettingsApp,
 }
 
 impl Wm {
@@ -4215,6 +4623,7 @@ impl Wm {
             vortex_app: WmVortexApp::new(),
             zenith_app: WmZenithApp::new(),
             store_app: WmStoreApp::new(),
+            settings_app: WmSettingsApp::new(),
         }
     }
 
@@ -4292,6 +4701,7 @@ impl Wm {
             vortex_app: WmVortexApp::new(),
             zenith_app: WmZenithApp::new(),
             store_app: WmStoreApp::new(),
+            settings_app: WmSettingsApp::new(),
         }
     }
 
@@ -4878,7 +5288,7 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
-                if app_id == 4 && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                if (app_id == 4 || app_id == 5) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -4894,7 +5304,7 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
-                if app_id == 4 && self.screen_w >= 800 {
+                if (app_id == 4 || app_id == 5) && self.screen_w >= 800 {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -4909,6 +5319,12 @@ impl Wm {
         // 3. Fallback: reuse the background-most window slot
         let bg_idx = self.z_order[0];
         self.windows[bg_idx].label = app_id;
+        if (app_id == 4 || app_id == 5) && self.screen_w >= 800 {
+            self.windows[bg_idx].w = 680;
+            self.windows[bg_idx].h = 440;
+            self.windows[bg_idx].x = (self.screen_w - 680) / 2;
+            self.windows[bg_idx].y = (self.desktop_h - 440) / 2;
+        }
         self.windows[bg_idx].is_open = true;
         self.windows[bg_idx].is_minimized = false;
         self.raise(bg_idx);
@@ -5632,6 +6048,16 @@ impl Wm {
                         self.launch_or_restore(target_app_id);
                     }
                 }
+            } else if w.label == 5 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    match self.settings_app.handle_click(px, py, client) {
+                        SettingsCommand::SetTheme(t) => self.set_theme(t),
+                        SettingsCommand::SetFontScale(f) => self.set_font_scale(f),
+                        _ => {}
+                    }
+                }
             }
             return;
         }
@@ -5832,7 +6258,7 @@ impl Wm {
                 } else if w.label == 4 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_store_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.store_app, &palette);
                 } else if w.label == 5 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
-                    draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                    draw_settings_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.settings_app, &palette);
                 } else if w.label == 6 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_calendar_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.calendar_app, &palette);
                 } else if w.label == 7 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
@@ -7048,94 +7474,437 @@ fn draw_files_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette:
     }
 }
 
-/// Renders a graphical settings control panel view inside the client area of Window 4 / Settings.
-fn draw_settings_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
+fn draw_toggle_switch<S: Surface + ?Sized>(s: &mut S, rect: Rect, is_on: bool, palette: &ThemePalette) {
+    let bg = if is_on { palette.status_success } else { palette.surface_sunken };
+    ui::draw::draw_rounded_rect(s, rect, rect.h / 2, bg);
+    ui::draw::draw_rect_outline(s, rect, 1, if is_on { palette.status_success } else { palette.border_subtle });
+    let knob_sz = (rect.h - 4).max(4);
+    let knob_x = if is_on { rect.right() - knob_sz - 2 } else { rect.x + 2 };
+    let knob_rect = Rect::new(knob_x, rect.y + 2, knob_sz, knob_sz);
+    ui::draw::draw_rounded_rect(s, knob_rect, knob_sz / 2, Color::WHITE);
+}
+
+fn draw_segmented_picker<S: Surface + ?Sized>(
+    s: &mut S,
+    rect: Rect,
+    options: &[&str],
+    selected_idx: usize,
+    palette: &ThemePalette,
+    font: &Font,
+) {
+    ui::draw::draw_rounded_rect(s, rect, 4, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, rect, 1, palette.border_subtle);
+    let opt_w = (rect.w / options.len() as i32).max(1);
+    for (i, &opt) in options.iter().enumerate() {
+        let opt_rect = Rect::new(rect.x + (i as i32 * opt_w), rect.y, opt_w, rect.h);
+        if i == selected_idx {
+            ui::draw::draw_rounded_rect(s, Rect::new(opt_rect.x + 1, opt_rect.y + 1, opt_rect.w - 2, opt_rect.h - 2), 3, palette.accent_primary);
+            let sz = font.measure_str(opt);
+            ui::font::draw_text_font(s, opt_rect.x + (opt_rect.w - sz.w)/2, opt_rect.y + (opt_rect.h - sz.h)/2, opt, Color::WHITE, font);
+        } else {
+            let sz = font.measure_str(opt);
+            ui::font::draw_text_font(s, opt_rect.x + (opt_rect.w - sz.w)/2, opt_rect.y + (opt_rect.h - sz.h)/2, opt, palette.text_secondary, font);
+        }
+        if i > 0 && i != selected_idx && (i - 1) != selected_idx {
+            s.fill_rect(Rect::new(opt_rect.x, opt_rect.y + 3, 1, opt_rect.h - 6), palette.border_subtle);
+        }
+    }
+}
+
+fn draw_accent_swatches<S: Surface + ?Sized>(
+    s: &mut S,
+    x0: i32,
+    y0: i32,
+    selected_idx: usize,
+    font: &Font,
+) {
+    let sz = 20;
+    let gap = 10;
+    for (i, &(col, _name)) in ACCENT_SWATCHES.iter().enumerate() {
+        let cx = x0 + (i as i32 * (sz + gap));
+        let rect = Rect::new(cx, y0, sz, sz);
+        ui::draw::draw_rounded_rect(s, rect, sz / 2, col);
+        if i == selected_idx {
+            ui::draw::draw_rect_outline(s, Rect::new(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4), 1, Color::WHITE);
+            ui::font::draw_text_font(s, rect.x + 6, rect.y + 3, "v", Color::WHITE, font);
+        }
+    }
+}
+
+/// Renders a graphical settings control panel view inside the client area of Window 5 / Settings.
+/// Synthesizes the finest interaction models of macOS System Settings and Ubuntu Settings.
+fn draw_settings_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    settings: &WmSettingsApp,
+    palette: &ThemePalette,
+) {
     let f_small = Font::small();
     let font = Font::regular();
 
-    // 1. Sidebar with category badge tabs (w = 84)
-    let sb_w = 84;
-    let sb_rect = Rect::new(client.x, client.y, sb_w, client.h);
-    s.fill_rect(sb_rect, palette.surface_raised);
-    s.fill_rect(Rect::new(sb_rect.right() - 1, sb_rect.y, 1, sb_rect.h), palette.border_subtle);
+    // Responsive sidebar
+    let sb_w = if client.w >= 500 { 150 } else if client.w >= 360 { 120 } else { 0 };
 
-    let tabs: &[(&str, &str)] = &[
-        ("SYS",  "System"),
-        ("USR",  "Users"),
-        ("SVC",  "Services"),
-        ("FW",   "Firewall"),
-        ("DISP", "Display"),
-    ];
+    // 1. Sidebar (macOS User Avatar & Categories)
+    if sb_w > 0 {
+        let sb_rect = Rect::new(client.x, client.y, sb_w, client.h);
+        s.fill_rect(sb_rect, palette.surface_raised);
+        s.fill_rect(Rect::new(sb_rect.right() - 1, sb_rect.y, 1, sb_rect.h), palette.border_subtle);
 
-    let mut ty = client.y + 6;
-    let tab_h = 22;
-    for (i, &(badge, name)) in tabs.iter().enumerate() {
-        if ty + tab_h > client.bottom() - 18 {
-            break;
-        }
-        let t_rect = Rect::new(client.x + 4, ty, sb_w - 8, tab_h);
-        if i == 0 {
-            ui::draw::draw_rounded_rect(s, t_rect, 2, palette.accent_primary.darken(35));
-            ui::draw::draw_rect_outline(s, t_rect, 1, palette.border_focused);
-            s.fill_rect(Rect::new(t_rect.x + 1, t_rect.y + 3, 2, t_rect.h - 6), palette.accent_primary);
+        // User Avatar & Profile Card (macOS style)
+        let av_rect = Rect::new(client.x + 10, client.y + 8, 26, 26);
+        ui::draw::draw_rounded_rect(s, av_rect, 13, palette.accent_primary);
+        ui::font::draw_text_font(s, av_rect.x + 9, av_rect.y + 6, "A", Color::WHITE, &f_small);
+
+        if sb_w >= 130 {
+            ui::font::draw_text_font(s, av_rect.right() + 8, client.y + 8, "admin", Color::WHITE, &font);
+            ui::font::draw_text_font(s, av_rect.right() + 8, client.y + 22, "NovaOS Sovereign", palette.text_muted, &f_small);
         }
 
-        let b_sz = f_small.measure_str(badge);
-        let b_rect = Rect::new(t_rect.x + 4, t_rect.y + 3, b_sz.w + 4, t_rect.h - 6);
-        let b_bg = if i == 0 { palette.accent_primary } else { palette.surface_sunken };
-        ui::draw::draw_rounded_rect(s, b_rect, 2, b_bg);
-        ui::font::draw_text_font(s, b_rect.x + 2, b_rect.y + 2, badge, Color::WHITE, &f_small);
+        // Search Bar Pill
+        let s_rect = Rect::new(client.x + 8, client.y + 40, sb_w - 16, 20);
+        ui::draw::draw_rounded_rect(s, s_rect, 4, palette.surface_sunken);
+        ui::draw::draw_rect_outline(s, s_rect, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, s_rect.x + 6, s_rect.y + 4, "Search...", palette.text_muted, &f_small);
 
-        let col = if i == 0 { Color::WHITE } else { palette.text_secondary };
-        ui::font::draw_text_font(s, b_rect.right() + 4, t_rect.y + 4, name, col, &f_small);
+        // Categories List
+        let cat_start_y = client.y + 66;
+        for (i, spec) in SETTINGS_CATEGORIES.iter().enumerate() {
+            let item_y = cat_start_y + (i as i32 * 28);
+            if item_y + 26 > client.bottom() - 20 {
+                break;
+            }
+            let is_active = settings.active_panel == spec.panel;
+            let item_rect = Rect::new(client.x + 6, item_y, sb_w - 12, 26);
 
-        ty += tab_h + 2;
+            if is_active {
+                ui::draw::draw_rounded_rect(s, item_rect, 4, palette.accent_primary.darken(35));
+                s.fill_rect(Rect::new(item_rect.x + 1, item_rect.y + 3, 3, item_rect.h - 6), palette.accent_primary);
+            }
+
+            let badge_rect = Rect::new(item_rect.x + 6, item_rect.y + 5, 20, 16);
+            ui::draw::draw_rounded_rect(s, badge_rect, 3, spec.badge_color);
+            let b_sz = f_small.measure_str(spec.badge);
+            ui::font::draw_text_font(s, badge_rect.x + (badge_rect.w - b_sz.w)/2, badge_rect.y + 2, spec.badge, Color::WHITE, &f_small);
+
+            if sb_w >= 130 {
+                let col = if is_active { Color::WHITE } else { palette.text_secondary };
+                ui::font::draw_text_font(s, badge_rect.right() + 6, item_rect.y + 5, spec.title, col, &f_small);
+            }
+        }
     }
 
-    // 2. Top Header inside content area
+    // 2. Main Content Canvas
     let cx = client.x + sb_w;
     let cw = client.w - sb_w;
-    let hdr_h = 24;
-    let hdr_rect = Rect::new(cx, client.y, cw, hdr_h);
+
+    // Header bar (Height 38)
+    let hdr_rect = Rect::new(cx, client.y, cw, 38);
     s.fill_rect(hdr_rect, palette.surface_raised);
     s.fill_rect(Rect::new(cx, hdr_rect.bottom() - 1, cw, 1), palette.border_subtle);
 
-    ui::font::draw_text_font(s, cx + 10, client.y + 4, "System & Identity", palette.text_primary, &font);
+    let (title_str, sub_str) = match settings.active_panel {
+        SettingsPanel::System           => ("System & Identity", "Microkernel specs, memory breakdown, and machine identity"),
+        SettingsPanel::Appearance       => ("Appearance & Themes", "Desktop theme modes, macOS accent swatches, and font scale"),
+        SettingsPanel::DesktopDock      => ("Desktop & Dock", "Dock placement, icon size, auto-hide, and multitasking"),
+        SettingsPanel::Displays         => ("Displays & Framebuffer", "Screen resolution, refresh rate, and Night Shift comfort"),
+        SettingsPanel::DefaultApps      => ("Default Applications", "Sovereign default web browser, media studio, and office suite"),
+        SettingsPanel::NetworkFirewall  => ("Network & Firewall", "Ethernet addressing, packet filtering, and stealth mode"),
+        SettingsPanel::UsersSecurity    => ("Users & Security", "Supervisor credentials, Ring-3 UFS sandboxing, and audit"),
+        SettingsPanel::PowerPerformance => ("Power & Performance", "CPU governor mode, low-power HLT idle, and energy saving"),
+    };
 
-    // Save button
-    let save_rect = Rect::new(client.right() - 48, client.y + 3, 42, 18);
-    ui::draw::draw_rounded_rect(s, save_rect, 2, palette.accent_primary);
-    let s_sz = f_small.measure_str("Save");
-    ui::font::draw_text_font(s, save_rect.x + (save_rect.w - s_sz.w)/2, save_rect.y + 2, "Save", Color::WHITE, &f_small);
+    ui::font::draw_text_font(s, cx + 12, client.y + 4, title_str, Color::WHITE, &font);
+    ui::font::draw_text_font(s, cx + 12, client.y + 20, sub_str, palette.text_muted, &f_small);
 
-    // 3. Settings Fields
-    let fx = cx + 12;
-    let mut fy = client.y + hdr_h + 8;
+    // Header buttons: Defaults / Save
+    let def_btn = Rect::new(client.right() - 110, client.y + 8, 48, 22);
+    ui::draw::draw_rounded_rect(s, def_btn, 4, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, def_btn, 1, palette.border_subtle);
+    ui::font::draw_text_font(s, def_btn.x + 6, def_btn.y + 5, "Defaults", palette.text_secondary, &f_small);
 
-    ui::font::draw_text_font(s, fx, fy, "Hostname:", palette.text_muted, &f_small);
-    let h_card = Rect::new(fx + 64, fy - 2, 80, 18);
-    ui::draw::draw_rounded_rect(s, h_card, 2, palette.surface_sunken);
-    ui::draw::draw_rect_outline(s, h_card, 1, palette.border_subtle);
-    ui::font::draw_text_font(s, h_card.x + 6, h_card.y + 2, "novaos", palette.text_primary, &f_small);
+    let save_btn = Rect::new(client.right() - 56, client.y + 8, 46, 22);
+    ui::draw::draw_rounded_rect(s, save_btn, 4, palette.accent_primary);
+    ui::font::draw_text_font(s, save_btn.x + 10, save_btn.y + 5, "Apply", Color::WHITE, &f_small);
 
-    fy += 24;
-    ui::font::draw_text_font(s, fx, fy, "Init (PID 1):", palette.text_muted, &f_small);
-    let i_card = Rect::new(fx + 64, fy - 2, 80, 18);
-    ui::draw::draw_rounded_rect(s, i_card, 2, palette.accent_primary.darken(35));
-    ui::draw::draw_rect_outline(s, i_card, 1, palette.accent_primary);
-    ui::font::draw_text_font(s, i_card.x + 6, i_card.y + 2, "SHELL.ELF", palette.accent_primary, &f_small);
+    // Status bar at bottom (Height 20)
+    let sb_h = 20;
+    let sb_rect = Rect::new(cx, client.bottom() - sb_h, cw, sb_h);
+    s.fill_rect(sb_rect, palette.surface_raised);
+    s.fill_rect(Rect::new(cx, sb_rect.y, cw, 1), palette.border_subtle);
+    ui::font::draw_text_font(s, cx + 10, sb_rect.y + 4, settings.status_msg, palette.text_muted, &f_small);
 
-    fy += 24;
-    ui::font::draw_text_font(s, fx, fy, "Config File:", palette.text_muted, &f_small);
-    ui::font::draw_text_font(s, fx + 64, fy, "SYSTEM.CFG (81 B)", palette.text_secondary, &f_small);
+    // Cards Canvas Area
+    let card_x = cx + 10;
+    let card_w = (cw - 20).max(100);
 
-    // 4. Status Bar at bottom
-    if client.h >= 100 {
-        let sb_h = 18;
-        let sb_rect = Rect::new(cx, client.bottom() - sb_h, cw, sb_h);
-        s.fill_rect(sb_rect, palette.surface_raised);
-        s.fill_rect(Rect::new(cx, sb_rect.y, cw, 1), palette.border_subtle);
-        ui::font::draw_text_font(s, cx + 8, sb_rect.y + 2, "Ready | Synchronized", palette.text_muted, &f_small);
+    match settings.active_panel {
+        SettingsPanel::System => {
+            // Card 1: System Hero Specs (macOS style)
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 66);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            let icon_r = Rect::new(c1.x + 12, c1.y + 14, 38, 38);
+            ui::draw::draw_rounded_rect(s, icon_r, 8, palette.accent_primary);
+            ui::font::draw_text_font(s, icon_r.x + 13, icon_r.y + 11, "N", Color::WHITE, &font);
+
+            ui::font::draw_text_font(s, icon_r.right() + 12, c1.y + 12, "NovaOS 2.0 Sovereign Desktop", Color::WHITE, &font);
+            ui::font::draw_text_font(s, icon_r.right() + 12, c1.y + 28, "Ring-0 Microkernel v2.0-LTS | x86_64 Long Mode", palette.text_secondary, &f_small);
+            ui::font::draw_text_font(s, icon_r.right() + 12, c1.y + 44, "Virtual Hardware: 4 Cores @ 2.80 GHz | 4.0 GB LPDDR4", palette.accent_primary, &f_small);
+
+            let up_btn = Rect::new(c1.right() - 96, c1.y + 22, 84, 22);
+            ui::draw::draw_rounded_rect(s, up_btn, 4, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, up_btn, 1, palette.status_success);
+            ui::font::draw_text_font(s, up_btn.x + 8, up_btn.y + 4, "Up to Date", palette.status_success, &f_small);
+
+            // Card 2: Visual Storage & Memory Breakdown (macOS style segmented progress bar)
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 88);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 8, "Memory Allocation (4.0 GB LPDDR4)", Color::WHITE, &f_small);
+            let bar1 = Rect::new(c2.x + 12, c2.y + 24, c2.w - 24, 10);
+            ui::draw::draw_rounded_rect(s, bar1, 3, palette.surface_sunken);
+            let k_w = (bar1.w * 3) / 100;
+            let wm_w = (bar1.w * 6) / 100;
+            let app_w = (bar1.w * 13) / 100;
+            s.fill_rect(Rect::new(bar1.x, bar1.y, k_w, bar1.h), Color::rgb(59, 130, 246));
+            s.fill_rect(Rect::new(bar1.x + k_w, bar1.y, wm_w, bar1.h), Color::rgb(6, 182, 212));
+            s.fill_rect(Rect::new(bar1.x + k_w + wm_w, bar1.y, app_w, bar1.h), Color::rgb(139, 92, 246));
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 38, "* Kernel (128M)   * Compositor (256M)   * Apps (512M)   * Free (3.1G)", palette.text_muted, &f_small);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 54, "Sovereign Disk Storage (10.0 GB NVMe Disk)", Color::WHITE, &f_small);
+            let bar2 = Rect::new(c2.x + 12, c2.y + 68, c2.w - 24, 10);
+            ui::draw::draw_rounded_rect(s, bar2, 3, palette.surface_sunken);
+            let b_w = (bar2.w * 4) / 100;
+            let d_w = (bar2.w * 8) / 100;
+            let j_w = (bar2.w * 2) / 100;
+            s.fill_rect(Rect::new(bar2.x, bar2.y, b_w, bar2.h), Color::rgb(16, 185, 129));
+            s.fill_rect(Rect::new(bar2.x + b_w, bar2.y, d_w, bar2.h), Color::rgb(245, 158, 11));
+            s.fill_rect(Rect::new(bar2.x + b_w + d_w, bar2.y, j_w, bar2.h), Color::rgb(239, 68, 68));
+
+            // Card 3: Machine Hostname & Config File
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 72);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 12, "Device Hostname:", palette.text_secondary, &f_small);
+            let h_box = Rect::new(c3.x + 130, c3.y + 8, 100, 20);
+            ui::draw::draw_rounded_rect(s, h_box, 3, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, h_box, 1, palette.border_subtle);
+            ui::font::draw_text_font(s, h_box.x + 8, h_box.y + 4, "novaos-pc", Color::WHITE, &f_small);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 32, "Init Program (PID 1):", palette.text_secondary, &f_small);
+            ui::font::draw_text_font(s, c3.x + 130, c3.y + 32, "SHELL.ELF (Sovereign ANSI Shell)", palette.accent_primary, &f_small);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 50, "Configuration File:", palette.text_secondary, &f_small);
+            ui::font::draw_text_font(s, c3.x + 130, c3.y + 50, "FAT32:/SYSTEM.CFG (Persisted)", palette.text_muted, &f_small);
+        }
+        SettingsPanel::Appearance => {
+            // Card 1: Theme Mode
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 66);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 10, "Desktop Appearance Style", Color::WHITE, &f_small);
+            let picker1 = Rect::new(c1.x + 12, c1.y + 30, (c1.w - 24).max(80), 26);
+            draw_segmented_picker(s, picker1, &["Dark", "Midnight", "Light", "High Contrast"], settings.theme_mode as usize, palette, &f_small);
+
+            // Card 2: Accent Color (macOS style 8 circular swatches)
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 62);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 10, "System Accent Color (macOS Palette)", Color::WHITE, &f_small);
+            draw_accent_swatches(s, c2.x + 14, c2.y + 28, settings.accent_choice, &f_small);
+
+            // Card 3: Font Scale (Ubuntu style)
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 62);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 10, "Global Typography & Font Scale", Color::WHITE, &f_small);
+            let picker3 = Rect::new(c3.x + 12, c3.y + 28, (c3.w - 24).max(80), 24);
+            draw_segmented_picker(s, picker3, &["Small 90%", "Standard 100%", "Large 115%", "Extra 130%"], settings.font_scale_choice as usize, palette, &f_small);
+        }
+        SettingsPanel::DesktopDock => {
+            // Card 1: Dock Placement & Sizing
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 70);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 8, "Dock Screen Placement:", Color::WHITE, &f_small);
+            let p1 = Rect::new(c1.x + 12, c1.y + 24, (c1.w - 24).min(240).max(60), 22);
+            draw_segmented_picker(s, p1, &["Bottom", "Left", "Right"], settings.dock_placement as usize, palette, &f_small);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 50, "Dock Icon Size: Standard 36px Adaptive", palette.text_secondary, &f_small);
+
+            // Card 2: Dock Behavior
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 10, "Auto-Hide Dock (IntelliHide)", Color::WHITE, &f_small);
+            let sw1 = Rect::new(c2.right() - 52, c2.y + 8, 38, 18);
+            draw_toggle_switch(s, sw1, settings.dock_autohide, palette);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 38, "Show Running App Indicator Dots", Color::WHITE, &f_small);
+            let sw2 = Rect::new(c2.right() - 52, c2.y + 36, 38, 18);
+            draw_toggle_switch(s, sw2, settings.show_indicator_dots, palette);
+
+            // Card 3: Multitasking & Snapping
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 10, "Screen Edge Snapping & Half-Split", Color::WHITE, &f_small);
+            let sw3 = Rect::new(c3.right() - 52, c3.y + 8, 38, 18);
+            draw_toggle_switch(s, sw3, settings.window_snapping, palette);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 38, "Interactive Corner Resize Grips", Color::WHITE, &f_small);
+            let sw4 = Rect::new(c3.right() - 52, c3.y + 36, 38, 18);
+            draw_toggle_switch(s, sw4, settings.corner_grip_enabled, palette);
+        }
+        SettingsPanel::Displays => {
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 56);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            let icon_d = Rect::new(c1.x + 12, c1.y + 10, 34, 34);
+            ui::draw::draw_rounded_rect(s, icon_d, 6, palette.accent_primary);
+            ui::font::draw_text_font(s, icon_d.x + 10, icon_d.y + 9, "D", Color::WHITE, &font);
+
+            ui::font::draw_text_font(s, icon_d.right() + 12, c1.y + 10, "Color LCD / Primary Framebuffer Display", Color::WHITE, &f_small);
+            ui::font::draw_text_font(s, icon_d.right() + 12, c1.y + 28, "Bochs / VirtIO-GPU Linear 32-bit XRGB8888", palette.text_secondary, &f_small);
+
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 72);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 8, "Screen Resolution:", Color::WHITE, &f_small);
+            let p_res = Rect::new(c2.x + 12, c2.y + 24, (c2.w - 24).max(60), 22);
+            draw_segmented_picker(s, p_res, &["1024 x 768", "1280 x 800", "1920 x 1080"], settings.resolution_choice as usize, palette, &f_small);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 52, "120 Hz ProMotion High Refresh Mode", Color::WHITE, &f_small);
+            let sw_hz = Rect::new(c2.right() - 52, c2.y + 50, 38, 18);
+            draw_toggle_switch(s, sw_hz, settings.refresh_rate_120, palette);
+
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 60);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 16, "Night Shift (Warm Display Tone)", Color::WHITE, &f_small);
+            let sw_ns = Rect::new(c3.right() - 52, c3.y + 14, 38, 18);
+            draw_toggle_switch(s, sw_ns, settings.night_shift, palette);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 36, "Blue light filter: Reduces eye strain during nighttime", palette.text_muted, &f_small);
+        }
+        SettingsPanel::DefaultApps => {
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 180);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            let rows: [(&str, &str); 6] = [
+                ("Web Browser:", "Aero Web Browser"),
+                ("Media Player:", "Spectra Player"),
+                ("PDF Studio:", "Vellum PDF Studio"),
+                ("Office Productivity:", "Zenith Office Suite"),
+                ("Terminal Console:", "NovaTerm CLI"),
+                ("Download & Torrent:", "Vortex Studio"),
+            ];
+
+            for (i, &(cat, app)) in rows.iter().enumerate() {
+                let ry = c1.y + 12 + (i as i32 * 26);
+                ui::font::draw_text_font(s, c1.x + 12, ry + 4, cat, palette.text_secondary, &f_small);
+
+                let btn_r = Rect::new(c1.right() - 170, ry, 158, 22);
+                ui::draw::draw_rounded_rect(s, btn_r, 4, palette.surface_sunken);
+                ui::draw::draw_rect_outline(s, btn_r, 1, palette.border_subtle);
+                ui::font::draw_text_font(s, btn_r.x + 8, btn_r.y + 4, app, Color::WHITE, &f_small);
+            }
+        }
+        SettingsPanel::NetworkFirewall => {
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 10, "Ethernet Adapter (eth0 - Realtek RTL8139)", Color::WHITE, &f_small);
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 26, "IP: 10.0.2.15 | Netmask: 255.255.255.0 | Gateway: 10.0.2.2", palette.text_secondary, &f_small);
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 44, "Hardware Link: 1000 Mbps Full Duplex | DNS: 1.1.1.1", palette.accent_primary, &f_small);
+
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 12, "Stateful Packet Firewall Master Switch", Color::WHITE, &f_small);
+            let sw_fw = Rect::new(c2.right() - 52, c2.y + 10, 38, 18);
+            draw_toggle_switch(s, sw_fw, settings.firewall_enabled, palette);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 38, "Stealth Mode (Drop unsolicited ICMP pings)", Color::WHITE, &f_small);
+            let sw_st = Rect::new(c2.right() - 52, c2.y + 36, 38, 18);
+            draw_toggle_switch(s, sw_st, settings.stealth_mode, palette);
+
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 48);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 14, "Firewall Telemetry: 12 Active Rules | Inbound Dropped: 0", palette.status_success, &f_small);
+        }
+        SettingsPanel::UsersSecurity => {
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 62);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 10, "admin (System Administrator) - UID 0, GID 0", Color::WHITE, &f_small);
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 26, "Role: Sovereign Ring-3 Supervisor | IPC Full Access", palette.text_secondary, &f_small);
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 42, "Password Security: PBKDF2-HMAC-SHA256 (10,000 Rounds)", palette.status_success, &f_small);
+
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 12, "Ring-3 Strict UFS Sandbox Enforcement", Color::WHITE, &f_small);
+            let sw_sb = Rect::new(c2.right() - 52, c2.y + 10, 38, 18);
+            draw_toggle_switch(s, sw_sb, settings.sandbox_strict, palette);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 38, "Cryptographic HMAC-SHA256 Verification", Color::WHITE, &f_small);
+            let sw_sig = Rect::new(c2.right() - 52, c2.y + 36, 38, 18);
+            draw_toggle_switch(s, sw_sig, settings.signature_enforced, palette);
+
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 48);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 14, "Security Status: All 12 Sovereign Packages Cryptographically Verified", palette.status_info, &f_small);
+        }
+        SettingsPanel::PowerPerformance => {
+            let c1 = Rect::new(card_x, client.y + 46, card_w, 72);
+            ui::draw::draw_rounded_rect(s, c1, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c1, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 8, "Operating Performance Governor:", Color::WHITE, &f_small);
+            let p_pwr = Rect::new(c1.x + 12, c1.y + 24, (c1.w - 24).max(60), 24);
+            draw_segmented_picker(s, p_pwr, &["Performance", "Balanced", "Power Saver"], settings.power_mode as usize, palette, &f_small);
+
+            ui::font::draw_text_font(s, c1.x + 12, c1.y + 52, "Uncapped virtual CPU turboclock for zero-latency rendering.", palette.text_muted, &f_small);
+
+            let c2 = Rect::new(card_x, c1.bottom() + 10, card_w, 64);
+            ui::draw::draw_rounded_rect(s, c2, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c2, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 12, "CPU Low-Power Idle (x86 HLT Loop)", Color::WHITE, &f_small);
+            let sw_hlt = Rect::new(c2.right() - 52, c2.y + 10, 38, 18);
+            draw_toggle_switch(s, sw_hlt, settings.cpu_idle_hlt, palette);
+
+            ui::font::draw_text_font(s, c2.x + 12, c2.y + 38, "Screen Blanking Timeout: 15 Minutes", palette.text_secondary, &f_small);
+
+            let c3 = Rect::new(card_x, c2.bottom() + 10, card_w, 48);
+            ui::draw::draw_rounded_rect(s, c3, 6, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, c3, 1, palette.border_subtle);
+
+            ui::font::draw_text_font(s, c3.x + 12, c3.y + 14, "Power Telemetry: AC Main Connected (100%) | Thermal: 38C Normal", palette.status_success, &f_small);
+        }
     }
 }
 
@@ -12338,5 +13107,61 @@ mod tests {
         assert_eq!(wm.windows[top_idx].snap, SnapState::Maximize, "Double-clicking titlebar should maximize window");
         assert_eq!(wm.windows[top_idx].w, 1024);
         assert_eq!(wm.windows[top_idx].h, 708);
+    }
+
+    #[test]
+    fn test_wm_settings_app_synthesis_and_interaction() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.launch_or_restore(5); // Launch Settings (app_id 5)
+        let top_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_idx].label, 5);
+        assert_eq!(wm.windows[top_idx].w, 680);
+        assert_eq!(wm.windows[top_idx].h, 440);
+
+        let client = Rect::new(wm.windows[top_idx].x, wm.windows[top_idx].y + wm.titlebar_h, wm.windows[top_idx].w, wm.windows[top_idx].h - wm.titlebar_h);
+
+        // 1. Initial State: System & About
+        assert_eq!(wm.settings_app.active_panel, SettingsPanel::System);
+
+        // 2. Click Appearance tab on sidebar (index 1: y = client.y + 64 + 28)
+        let tab1_x = client.x + 40;
+        let tab1_y = client.y + 64 + 28 + 10;
+        let cmd = wm.settings_app.handle_click(tab1_x, tab1_y, client);
+        assert_eq!(cmd, SettingsCommand::None);
+        assert_eq!(wm.settings_app.active_panel, SettingsPanel::Appearance);
+
+        // 3. Click Accent color circle 1 (Emerald Green: x = card_x + 14 + 1 * 30)
+        let card_x = client.x + 150 + 10;
+        let sw1_x = card_x + 14 + 30;
+        let sw1_y = client.y + 42 + 74 + 28 + 10;
+        let cmd = wm.settings_app.handle_click(sw1_x, sw1_y, client);
+        assert_eq!(cmd, SettingsCommand::None);
+        assert_eq!(wm.settings_app.accent_choice, 1);
+
+        // 4. Click Light theme option in segmented picker (option 2: x in segment 2)
+        let p1_x = card_x + 12;
+        let p1_w = (client.w - 150 - 20 - 24).max(80);
+        let opt2_x = p1_x + (p1_w / 4) * 2 + 10;
+        let opt2_y = client.y + 42 + 30 + 10;
+        let cmd = wm.settings_app.handle_click(opt2_x, opt2_y, client);
+        assert_eq!(cmd, SettingsCommand::SetTheme(Theme::Light));
+        assert_eq!(wm.settings_app.theme_mode, 2);
+
+        // 5. Click Network & Firewall tab (index 5)
+        let tab5_y = client.y + 64 + (5 * 28) + 10;
+        wm.settings_app.handle_click(tab1_x, tab5_y, client);
+        assert_eq!(wm.settings_app.active_panel, SettingsPanel::NetworkFirewall);
+
+        // 6. Toggle Firewall switch (Card 2 switch at right)
+        let sw_fw_x = card_x + (client.w - 150 - 20) - 30;
+        let sw_fw_y = client.y + 42 + 74 + 15;
+        assert!(wm.settings_app.firewall_enabled);
+        wm.settings_app.handle_click(sw_fw_x, sw_fw_y, client);
+        assert!(!wm.settings_app.firewall_enabled);
+
+        // 7. Render Settings app into BufferSurface32 without panic
+        let mut test_buf = [0u32; 680 * 440];
+        let mut surf = ui::draw::BufferSurface32::new(&mut test_buf, 680, 440);
+        draw_settings_client_body(&mut surf, Rect::new(0, 0, 680, 440), &wm.settings_app, &Theme::Dark.palette());
     }
 }
