@@ -155,7 +155,7 @@ else
     # Automatically build and install Aero Browser from its separate repository
     AERO_REPO="$(cd "$ROOT/.." && pwd)/aero-browser"
     if [ -d "$AERO_REPO" ] && [ -x "$AERO_REPO/novaos/build.sh" ]; then
-        if [ ! -f "$FIXTURES/BROWSER.ELF" ] || [ ! -f "$FIXTURES/AERO.ELF" ]; then
+        if [ ! -f "$FIXTURES/BROWSER.ELF" ] || [ ! -f "$FIXTURES/AERO.ELF" ] || [ -n "$(find "$AERO_REPO/crates" "$AERO_REPO/novaos" -newer "$FIXTURES/BROWSER.ELF" 2>/dev/null | head -n 1)" ]; then
             echo "Auto-compiling Aero Browser default web engine from $AERO_REPO..."
             (cd "$AERO_REPO/novaos" && ./build.sh) || true
         fi
@@ -167,7 +167,7 @@ else
         SPECTRA_REPO="$(cd "$ROOT/.." && pwd)/nova-player"
     fi
     if [ -d "$SPECTRA_REPO" ] && [ -x "$SPECTRA_REPO/novaos/build.sh" ]; then
-        if [ ! -f "$FIXTURES/SPECTRA.ELF" ] || [ ! -f "$FIXTURES/PLAYER.ELF" ]; then
+        if [ ! -f "$FIXTURES/SPECTRA.ELF" ] || [ ! -f "$FIXTURES/PLAYER.ELF" ] || [ -n "$(find "$SPECTRA_REPO/crates" "$SPECTRA_REPO/novaos" -newer "$FIXTURES/SPECTRA.ELF" 2>/dev/null | head -n 1)" ]; then
             echo "Auto-compiling Spectra default media engine from $SPECTRA_REPO..."
             (cd "$SPECTRA_REPO/novaos" && ./build.sh) || true
         fi
@@ -176,7 +176,7 @@ else
     # Automatically build and install Vellum default PDF engine from its separate repository
     VELLUM_REPO="$(cd "$ROOT/.." && pwd)/vellum"
     if [ -d "$VELLUM_REPO" ] && [ -x "$VELLUM_REPO/novaos/build.sh" ]; then
-        if [ ! -f "$FIXTURES/VELLUM.ELF" ] || [ ! -f "$FIXTURES/PDF.ELF" ]; then
+        if [ ! -f "$FIXTURES/VELLUM.ELF" ] || [ ! -f "$FIXTURES/PDF.ELF" ] || [ -n "$(find "$VELLUM_REPO/crates" "$VELLUM_REPO/novaos" -newer "$FIXTURES/VELLUM.ELF" 2>/dev/null | head -n 1)" ]; then
             echo "Auto-compiling Vellum default PDF engine from $VELLUM_REPO..."
             (cd "$VELLUM_REPO/novaos" && ./build.sh) || true
         fi
@@ -185,7 +185,7 @@ else
     # Automatically build and package Vortex BitTorrent & Stream Studio from its separate repository
     VORTEX_REPO="$(cd "$ROOT/.." && pwd)/vortex"
     if [ -d "$VORTEX_REPO" ] && [ -x "$VORTEX_REPO/novaos/build.sh" ]; then
-        if [ ! -f "$FIXTURES/VORTEX.ELF" ] || [ ! -f "$FIXTURES/VORTEX.PKG" ]; then
+        if [ ! -f "$FIXTURES/VORTEX.ELF" ] || [ ! -f "$FIXTURES/VORTEX.PKG" ] || [ -n "$(find "$VORTEX_REPO/crates" "$VORTEX_REPO/novaos" -newer "$FIXTURES/VORTEX.ELF" 2>/dev/null | head -n 1)" ]; then
             echo "Auto-compiling Vortex stream & torrent engine from $VORTEX_REPO..."
             (cd "$VORTEX_REPO/novaos" && ./build.sh) || true
         fi
@@ -194,7 +194,7 @@ else
     # Automatically build and package Zenith Office Suite from its separate repository
     ZENITH_REPO="$(cd "$ROOT/.." && pwd)/zenith"
     if [ -d "$ZENITH_REPO" ] && [ -x "$ZENITH_REPO/novaos/build.sh" ]; then
-        if [ ! -f "$FIXTURES/ZENITH.ELF" ] || [ ! -f "$FIXTURES/ZENITH.PKG" ]; then
+        if [ ! -f "$FIXTURES/ZENITH.ELF" ] || [ ! -f "$FIXTURES/ZENITH.PKG" ] || [ -n "$(find "$ZENITH_REPO/crates" "$ZENITH_REPO/novaos" -newer "$FIXTURES/ZENITH.ELF" 2>/dev/null | head -n 1)" ]; then
             echo "Auto-compiling Zenith Office Suite from $ZENITH_REPO..."
             (cd "$ZENITH_REPO/novaos" && ./build.sh) || true
         fi

@@ -401,6 +401,17 @@ disk-server: $(DISK_SERVER_IMG)
 
 server-image: $(DISK_SERVER_IMG)
 
+# Update companion apps (aero-browser, spectra-player, vellum, vortex, zenith, dbnavigator, thundercall, lumina)
+# Usage:
+#   make update-apps             (updates all companion apps and rebuilds disk.img)
+#   make update-apps APP=aero    (updates specific app)
+#   make update-apps PULL=1      (git pull latest commits from remote before building)
+update-apps:
+	@PULL_FLAG=""; if [ "$(PULL)" = "1" ]; then PULL_FLAG="--pull"; fi; \
+	APP_NAME="$(APP)"; if [ -z "$$APP_NAME" ]; then APP_NAME="all"; fi; \
+	./tools/update-apps.sh $$PULL_FLAG "$$APP_NAME"
+
+
 # Run in QEMU (interactive, graphical window)
 run: $(ISO_FILE) $(DISK_IMG)
 	$(QEMU_RUN_WRAPPER) $(QEMU) -cdrom $(ISO_FILE) $(DISK_FLAGS) $(NET_FLAGS) $(AUDIO_FLAGS) $(RUN_USB_FLAGS) $(QEMU_FLAGS) $(DISPLAY_FLAGS) -vga std
