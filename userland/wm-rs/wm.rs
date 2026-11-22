@@ -110,6 +110,20 @@ impl SnapState {
     }
 }
 
+/// Window edge or corner currently being grabbed for interactive mouse resizing.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ResizeEdge {
+    None,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 /// Usable desktop workspace area taking menubars and taskbars into account.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct WorkArea {
@@ -3267,16 +3281,16 @@ impl WmStoreApp {
         if let Some(sel_idx) = self.selected_app_idx {
             let app = STORE_APPS[sel_idx];
             // Back button (< Back to Store) at top left
-            if main_x >= 12 && main_x <= 110 && main_y >= 8 && main_y <= 30 {
+            if main_x >= 12 && main_x <= 110 && main_y >= 8 && main_y <= 32 {
                 self.selected_app_idx = None;
                 self.status_msg = "Returned to package catalog";
                 return None;
             }
 
             // Action Button 1: [Launch / Open] or [Install]
-            let btn1_x0 = main_w - 150;
+            let btn1_x0 = main_w - 170;
             let btn1_x1 = main_w - 76;
-            if main_x >= btn1_x0 && main_x <= btn1_x1 && main_y >= 38 && main_y <= 62 {
+            if main_x >= btn1_x0 && main_x <= btn1_x1 && main_y >= 34 && main_y <= 66 {
                 if self.is_installed(sel_idx) {
                     self.status_msg = "Launching application...";
                     return Some(app.app_id);
@@ -3287,9 +3301,9 @@ impl WmStoreApp {
             }
 
             // Action Button 2: [Uninstall]
-            let btn2_x0 = main_w - 72;
-            let btn2_x1 = main_w - 12;
-            if main_x >= btn2_x0 && main_x <= btn2_x1 && main_y >= 38 && main_y <= 62 {
+            let btn2_x0 = main_w - 74;
+            let btn2_x1 = main_w - 10;
+            if main_x >= btn2_x0 && main_x <= btn2_x1 && main_y >= 34 && main_y <= 66 {
                 if self.is_installed(sel_idx) && !app.is_core {
                     self.toggle_install(sel_idx);
                 }
@@ -3301,23 +3315,35 @@ impl WmStoreApp {
         // --- SCENARIO B: Manage View ---
         if self.active_category == StoreCategory::Manage {
             let list_y = 44;
-            let row_h = 32;
+            let row_h = 34;
             for i in 0..STORE_APPS.len() {
-                let ry = list_y + (i as i32 * (row_h + 4));
+                let ry = list_y + (i as i32 * (row_h + 3));
                 if main_y >= ry && main_y < ry + row_h {
                     let is_inst = self.is_installed(i);
-                    // Check Launch button (main_w - 110 .. main_w - 60)
-                    if is_inst && main_x >= main_w - 110 && main_x <= main_w - 60 {
+                    let app = STORE_APPS[i];
+
+                    // Check Launch button
+                    let open_hit = if is_inst && !app.is_core {
+                        main_x >= main_w - 128 && main_x <= main_w - 70
+                    } else if is_inst {
+                        main_x >= main_w - 68 && main_x <= main_w - 8
+                    } else {
+                        false
+                    };
+
+                    if open_hit {
                         self.status_msg = "Launching application...";
-                        return Some(STORE_APPS[i].app_id);
+                        return Some(app.app_id);
                     }
-                    // Check Uninstall button (main_w - 56 .. main_w - 10)
-                    if is_inst && !STORE_APPS[i].is_core && main_x >= main_w - 56 && main_x <= main_w - 10 {
+
+                    // Check Uninstall button
+                    if is_inst && !app.is_core && main_x >= main_w - 68 && main_x <= main_w - 8 {
                         self.toggle_install(i);
                         return None;
                     }
-                    // Check Install button (main_w - 80 .. main_w - 16)
-                    if !is_inst && main_x >= main_w - 80 && main_x <= main_w - 16 {
+
+                    // Check Install button
+                    if !is_inst && main_x >= main_w - 74 && main_x <= main_w - 8 {
                         self.toggle_install(i);
                         return None;
                     }
@@ -3333,74 +3359,89 @@ impl WmStoreApp {
 
         // --- SCENARIO C: Discover View (Hero Banner & Shelves) ---
         if self.active_category == StoreCategory::Discover {
-            // Hero banner click (main_y: 10..84)
-            if main_y >= 10 && main_y <= 84 {
+            // Hero banner click (main_y: 8..90)
+            if main_y >= 8 && main_y <= 90 {
                 self.selected_app_idx = Some(0); // View Zenith
                 self.status_msg = "Viewing featured suite: Zenith Office";
                 return None;
             }
 
-            // Shelf 1 (Top Core Apps: Zenith, Aero, Spectra, Vellum) (main_y: 110..186)
+            let cols = if main_w >= 560 { 3 } else { 2 };
+            let card_w = (main_w - 24 - ((cols - 1) * 8)) / cols;
+            let card_h = 76;
+
+            // Shelf 1 (Top Core Apps: Zenith, Aero, Spectra, Vellum) (main_y: 94..180)
             let shelf1_apps = [0, 5, 6, 7];
-            let card_w = (main_w - 40) / 4;
-            if main_y >= 110 && main_y <= 186 {
-                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
-                let app_idx = shelf1_apps[card_idx];
-                let is_inst = self.is_installed(app_idx);
-                let cx = 12 + (card_idx as i32 * (card_w + 6));
-                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 164 && main_y <= 184 {
-                    if is_inst {
-                        self.status_msg = "Launching application...";
-                        return Some(STORE_APPS[app_idx].app_id);
-                    } else {
-                        self.toggle_install(app_idx);
+            let s1_y = 96 + 18;
+            if main_y >= s1_y && main_y < s1_y + card_h {
+                for (i, &app_idx) in shelf1_apps.iter().take(cols as usize).enumerate() {
+                    let cx = 10 + (i as i32 * (card_w + 8));
+                    if main_x >= cx && main_x < cx + card_w {
+                        let is_inst = self.is_installed(app_idx);
+                        if main_x >= cx + card_w - 60 && main_x <= cx + card_w - 6 && main_y >= s1_y + 44 {
+                            if is_inst {
+                                self.status_msg = "Launching application...";
+                                return Some(STORE_APPS[app_idx].app_id);
+                            } else {
+                                self.toggle_install(app_idx);
+                                return None;
+                            }
+                        }
+                        self.selected_app_idx = Some(app_idx);
+                        self.status_msg = "Inspecting package details";
                         return None;
                     }
                 }
-                self.selected_app_idx = Some(app_idx);
-                self.status_msg = "Inspecting package details";
                 return None;
             }
 
-            // Shelf 2 (Power Tools: Vortex, DBNavigator, Lumina, ThunderCall) (main_y: 206..282)
+            // Shelf 2 (Power Tools: Vortex, DBNavigator, Lumina, ThunderCall) (main_y: 194..280)
             let shelf2_apps = [4, 1, 2, 3];
-            if main_y >= 206 && main_y <= 282 {
-                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
-                let app_idx = shelf2_apps[card_idx];
-                let is_inst = self.is_installed(app_idx);
-                let cx = 12 + (card_idx as i32 * (card_w + 6));
-                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 260 && main_y <= 280 {
-                    if is_inst {
-                        self.status_msg = "Launching application...";
-                        return Some(STORE_APPS[app_idx].app_id);
-                    } else {
-                        self.toggle_install(app_idx);
+            let s2_y = 96 + 100 + 18;
+            if main_y >= s2_y && main_y < s2_y + card_h {
+                for (i, &app_idx) in shelf2_apps.iter().take(cols as usize).enumerate() {
+                    let cx = 10 + (i as i32 * (card_w + 8));
+                    if main_x >= cx && main_x < cx + card_w {
+                        let is_inst = self.is_installed(app_idx);
+                        if main_x >= cx + card_w - 60 && main_x <= cx + card_w - 6 && main_y >= s2_y + 44 {
+                            if is_inst {
+                                self.status_msg = "Launching application...";
+                                return Some(STORE_APPS[app_idx].app_id);
+                            } else {
+                                self.toggle_install(app_idx);
+                                return None;
+                            }
+                        }
+                        self.selected_app_idx = Some(app_idx);
+                        self.status_msg = "Inspecting package details";
                         return None;
                     }
                 }
-                self.selected_app_idx = Some(app_idx);
-                self.status_msg = "Inspecting package details";
                 return None;
             }
 
-            // Shelf 3 (Productivity & Utilities: Terminal, Calc, Calendar, Game) (main_y: 302..378)
+            // Shelf 3 (Productivity & Utilities: Terminal, Calc, Calendar, Game)
             let shelf3_apps = [8, 9, 10, 11];
-            if main_y >= 302 && main_y <= 378 {
-                let card_idx = ((main_x - 12) / (card_w + 6)).clamp(0, 3) as usize;
-                let app_idx = shelf3_apps[card_idx];
-                let is_inst = self.is_installed(app_idx);
-                let cx = 12 + (card_idx as i32 * (card_w + 6));
-                if main_x >= cx + card_w - 52 && main_x <= cx + card_w - 4 && main_y >= 356 && main_y <= 376 {
-                    if is_inst {
-                        self.status_msg = "Launching application...";
-                        return Some(STORE_APPS[app_idx].app_id);
-                    } else {
-                        self.toggle_install(app_idx);
+            let s3_y = 96 + 200 + 18;
+            if main_y >= s3_y && main_y < s3_y + card_h {
+                for (i, &app_idx) in shelf3_apps.iter().take(cols as usize).enumerate() {
+                    let cx = 10 + (i as i32 * (card_w + 8));
+                    if main_x >= cx && main_x < cx + card_w {
+                        let is_inst = self.is_installed(app_idx);
+                        if main_x >= cx + card_w - 60 && main_x <= cx + card_w - 6 && main_y >= s3_y + 44 {
+                            if is_inst {
+                                self.status_msg = "Launching application...";
+                                return Some(STORE_APPS[app_idx].app_id);
+                            } else {
+                                self.toggle_install(app_idx);
+                                return None;
+                            }
+                        }
+                        self.selected_app_idx = Some(app_idx);
+                        self.status_msg = "Inspecting package details";
                         return None;
                     }
                 }
-                self.selected_app_idx = Some(app_idx);
-                self.status_msg = "Inspecting package details";
                 return None;
             }
             return None;
@@ -3415,16 +3456,16 @@ impl WmStoreApp {
             _ => [0, 1, 2, 3],
         };
         let grid_w = (main_w - 30) / 2;
-        let grid_h = 70;
-        let start_y = 40;
+        let grid_h = 76;
+        let start_y = 44;
         for (i, &app_idx) in cat_apps.iter().enumerate() {
             let col = (i % 2) as i32;
             let row = (i / 2) as i32;
-            let cx = 12 + col * (grid_w + 6);
-            let cy = start_y + row * (grid_h + 8);
+            let cx = 10 + col * (grid_w + 10);
+            let cy = start_y + row * (grid_h + 10);
             if main_x >= cx && main_x < cx + grid_w && main_y >= cy && main_y < cy + grid_h {
                 let is_inst = self.is_installed(app_idx);
-                if main_x >= cx + grid_w - 56 && main_y >= cy + grid_h - 24 {
+                if main_x >= cx + grid_w - 60 && main_y >= cy + 46 {
                     if is_inst {
                         self.status_msg = "Launching application...";
                         return Some(STORE_APPS[app_idx].app_id);
@@ -4075,6 +4116,11 @@ pub struct Wm {
     pub dragging: Option<usize>,
     pub drag_offset_x: i32,
     pub drag_offset_y: i32,
+    pub resizing: Option<(usize, ResizeEdge)>,
+    pub resize_orig_rect: (i32, i32, i32, i32),
+    pub resize_start_mouse: (i32, i32),
+    pub last_titlebar_click: (usize, u32),
+    pub wm_ticks: u32,
     pub prev_left_button: bool,
     pub cursor_theme: CursorTheme,
     pub active_menu: Option<usize>,
@@ -4137,6 +4183,11 @@ impl Wm {
             dragging: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
+            resizing: None,
+            resize_orig_rect: (0, 0, 0, 0),
+            resize_start_mouse: (0, 0),
+            last_titlebar_click: (MAX_WINDOWS, 0),
+            wm_ticks: 0,
             prev_left_button: false,
             cursor_theme: CursorTheme::Classic,
             active_menu: None,
@@ -4209,6 +4260,11 @@ impl Wm {
             dragging: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
+            resizing: None,
+            resize_orig_rect: (0, 0, 0, 0),
+            resize_start_mouse: (0, 0),
+            last_titlebar_click: (MAX_WINDOWS, 0),
+            wm_ticks: 0,
             prev_left_button: false,
             cursor_theme: CursorTheme::Classic,
             active_menu: None,
@@ -4559,6 +4615,72 @@ impl Wm {
             }
             if point_in_rect(px, py, w.x, w.y, w.w, self.titlebar_h) {
                 return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Hit-tests pointer coordinates against window borders and corners for interactive resizing.
+    pub fn resize_edge_at(&self, px: i32, py: i32) -> Option<(usize, ResizeEdge)> {
+        if self.titlebar_h < 14 {
+            return None;
+        }
+        for i in (0..MAX_WINDOWS).rev() {
+            let idx = self.z_order[i];
+            let w = &self.windows[idx];
+            if !w.is_open || w.is_minimized || w.snap == SnapState::Maximize {
+                continue;
+            }
+            let margin = 5;
+            let grip = 14;
+
+            // Check if within the outer bounding zone around the window
+            if px < w.x - margin || px > w.x + w.w + margin || py < w.y - margin || py > w.y + w.h + margin {
+                continue;
+            }
+
+            // Exclude titlebar area from resizing (titlebar is reserved for dragging/moving)
+            if py >= w.y && py < w.y + self.titlebar_h && px >= w.x + margin && px <= w.x + w.w - margin {
+                break;
+            }
+
+            let on_left = px >= w.x - margin && px <= w.x + 4;
+            let on_right = px >= w.x + w.w - 4 && px <= w.x + w.w + margin;
+            let on_top = py >= w.y - margin && py < w.y + 2;
+            let on_bottom = py >= w.y + w.h - 4 && py <= w.y + w.h + margin;
+
+            // Dedicated bottom-right corner grip
+            let in_br_grip = px >= w.x + w.w - grip && px <= w.x + w.w + margin
+                && py >= w.y + w.h - grip && py <= w.y + w.h + margin;
+
+            if in_br_grip || (on_right && on_bottom) {
+                return Some((idx, ResizeEdge::BottomRight));
+            }
+            if on_left && on_bottom {
+                return Some((idx, ResizeEdge::BottomLeft));
+            }
+            if on_right && on_top {
+                return Some((idx, ResizeEdge::TopRight));
+            }
+            if on_left && on_top {
+                return Some((idx, ResizeEdge::TopLeft));
+            }
+            if on_right {
+                return Some((idx, ResizeEdge::Right));
+            }
+            if on_bottom {
+                return Some((idx, ResizeEdge::Bottom));
+            }
+            if on_left && py >= w.y + self.titlebar_h {
+                return Some((idx, ResizeEdge::Left));
+            }
+            if on_top {
+                return Some((idx, ResizeEdge::Top));
+            }
+
+            // If pointer is well inside the window body, stop checking lower windows in z-order
+            if point_in_rect(px, py, w.x, w.y, w.w, w.h) {
+                break;
             }
         }
         None
@@ -5083,6 +5205,24 @@ impl Wm {
         if self.dragging.is_some() {
             return CursorShape::Move;
         }
+        if let Some((_, edge)) = self.resizing {
+            return match edge {
+                ResizeEdge::Left | ResizeEdge::Right => CursorShape::ResizeEW,
+                ResizeEdge::Top | ResizeEdge::Bottom => CursorShape::ResizeNS,
+                ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorShape::ResizeNWSE,
+                ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorShape::ResizeNESW,
+                _ => CursorShape::Arrow,
+            };
+        }
+        if let Some((_, edge)) = self.resize_edge_at(cx, cy) {
+            return match edge {
+                ResizeEdge::Left | ResizeEdge::Right => CursorShape::ResizeEW,
+                ResizeEdge::Top | ResizeEdge::Bottom => CursorShape::ResizeNS,
+                ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorShape::ResizeNWSE,
+                ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorShape::ResizeNESW,
+                _ => CursorShape::Arrow,
+            };
+        }
         if self.start_menu_open {
             if self.hovered_start_item.is_some() {
                 return CursorShape::Pointer;
@@ -5373,6 +5513,16 @@ impl Wm {
             return;
         }
 
+        // 3b. Interactive window border / corner resize grab
+        if let Some((idx, edge)) = self.resize_edge_at(px, py) {
+            self.raise(idx);
+            let w = &self.windows[idx];
+            self.resizing = Some((idx, edge));
+            self.resize_orig_rect = (w.x, w.y, w.w, w.h);
+            self.resize_start_mouse = (px, py);
+            return;
+        }
+
         // 4. Window titlebar clicks (raise and start drag)
         if let Some(idx) = self.titlebar_at(px, py) {
             let w = &mut self.windows[idx];
@@ -5395,6 +5545,18 @@ impl Wm {
                         return;
                     }
                 }
+            }
+
+            // Check double-click on titlebar to toggle maximize (only in high-res modern desktop mode)
+            if self.titlebar_h >= 20 {
+                let cur_tick = self.wm_ticks;
+                let (last_win, last_tick) = self.last_titlebar_click;
+                if last_win == idx && cur_tick.saturating_sub(last_tick) < 30 {
+                    self.toggle_maximize(idx);
+                    self.last_titlebar_click = (MAX_WINDOWS, 0);
+                    return;
+                }
+                self.last_titlebar_click = (idx, cur_tick);
             }
 
             self.raise(idx);
@@ -5510,19 +5672,96 @@ impl Wm {
             }
         }
 
+        self.wm_ticks = self.wm_ticks.wrapping_add(1);
+
         let just_pressed = m.left_button && !self.prev_left_button;
         let just_released = !m.left_button && self.prev_left_button;
 
-        if just_pressed && self.dragging.is_none() {
+        if just_pressed && self.dragging.is_none() && self.resizing.is_none() {
             self.on_left_press(self.cursor_x, self.cursor_y);
         }
 
-        if let Some(idx) = self.dragging {
+        if let Some((idx, edge)) = self.resizing {
             if m.left_button {
+                let (ox, oy, ow, oh) = self.resize_orig_rect;
+                let (mx0, my0) = self.resize_start_mouse;
+                let dx = self.cursor_x - mx0;
+                let dy = self.cursor_y - my0;
+                let min_w = 120.min(self.screen_w / 2);
+                let min_h = 80.min(self.desktop_h / 2);
+
+                let w = &mut self.windows[idx];
+                match edge {
+                    ResizeEdge::Right => {
+                        let max_w = (self.screen_w - ox).max(min_w);
+                        w.w = (ow + dx).clamp(min_w, max_w);
+                    }
+                    ResizeEdge::Bottom => {
+                        let max_h = (self.desktop_h - oy).max(min_h);
+                        w.h = (oh + dy).clamp(min_h, max_h);
+                    }
+                    ResizeEdge::BottomRight => {
+                        let max_w = (self.screen_w - ox).max(min_w);
+                        let max_h = (self.desktop_h - oy).max(min_h);
+                        w.w = (ow + dx).clamp(min_w, max_w);
+                        w.h = (oh + dy).clamp(min_h, max_h);
+                    }
+                    ResizeEdge::Left => {
+                        let max_w = (ox + ow).max(min_w);
+                        let new_w = (ow - dx).clamp(min_w, max_w);
+                        w.x = ox + ow - new_w;
+                        w.w = new_w;
+                    }
+                    ResizeEdge::Top => {
+                        let max_h = (oy + oh).max(min_h);
+                        let new_h = (oh - dy).clamp(min_h, max_h);
+                        w.y = (oy + oh - new_h).max(self.menubar_h);
+                        w.h = new_h;
+                    }
+                    ResizeEdge::BottomLeft => {
+                        let max_w = (ox + ow).max(min_w);
+                        let new_w = (ow - dx).clamp(min_w, max_w);
+                        w.x = ox + ow - new_w;
+                        w.w = new_w;
+                        let max_h = (self.desktop_h - oy).max(min_h);
+                        w.h = (oh + dy).clamp(min_h, max_h);
+                    }
+                    ResizeEdge::TopRight => {
+                        let max_w = (self.screen_w - ox).max(min_w);
+                        w.w = (ow + dx).clamp(min_w, max_w);
+                        let max_h = (oy + oh).max(min_h);
+                        let new_h = (oh - dy).clamp(min_h, max_h);
+                        w.y = (oy + oh - new_h).max(self.menubar_h);
+                        w.h = new_h;
+                    }
+                    ResizeEdge::TopLeft => {
+                        let max_w = (ox + ow).max(min_w);
+                        let new_w = (ow - dx).clamp(min_w, max_w);
+                        w.x = ox + ow - new_w;
+                        w.w = new_w;
+                        let max_h = (oy + oh).max(min_h);
+                        let new_h = (oh - dy).clamp(min_h, max_h);
+                        w.y = (oy + oh - new_h).max(self.menubar_h);
+                        w.h = new_h;
+                    }
+                    _ => {}
+                }
+                w.pre_snap = (w.x, w.y, w.w, w.h);
+            }
+            if just_released {
+                self.resizing = None;
+            }
+        }
+
+        if let Some(idx) = self.dragging {
+            if m.left_button && !just_pressed {
                 let w = &mut self.windows[idx];
                 w.x = (self.cursor_x - self.drag_offset_x).clamp(0, self.screen_w - w.w);
                 w.y = (self.cursor_y - self.drag_offset_y).clamp(0, self.desktop_h - w.h);
                 self.preview_snap = self.detect_snap_target(self.cursor_x, self.cursor_y);
+                if m.dx != 0 || m.dy != 0 {
+                    self.last_titlebar_click = (MAX_WINDOWS, 0);
+                }
             }
             if just_released {
                 self.on_drag_release_at(idx, self.cursor_x, self.cursor_y);
@@ -5722,6 +5961,16 @@ impl Wm {
                 let bar_x = min_x + (btn_size - bar_w) / 2;
                 let bar_color = if is_high_contrast { Color::BLACK } else { Color::WHITE };
                 surface.fill_rect(Rect::new(bar_x, cy, bar_w, 1), bar_color);
+            }
+
+            // Tactile window resize corner grip in bottom-right corner
+            if is_active && w.snap != SnapState::Maximize && self.titlebar_h >= 20 {
+                let grip_col = if is_high_contrast { Color::WHITE } else { Color::rgba(255, 255, 255, 80) };
+                surface.fill_rect(Rect::new(w.x + w.w - 5, w.y + w.h - 11, 2, 2), grip_col);
+                surface.fill_rect(Rect::new(w.x + w.w - 8, w.y + w.h - 8, 2, 2), grip_col);
+                surface.fill_rect(Rect::new(w.x + w.w - 11, w.y + w.h - 5, 2, 2), grip_col);
+                surface.fill_rect(Rect::new(w.x + w.w - 5, w.y + w.h - 7, 2, 2), grip_col);
+                surface.fill_rect(Rect::new(w.x + w.w - 7, w.y + w.h - 5, 2, 2), grip_col);
             }
         }
 
@@ -9467,8 +9716,8 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
         let item_rect = Rect::new(client.x + 6, ny, sb_w - 12, 21);
 
         if is_active {
-            s.fill_rect(item_rect, Color::rgb(33, 38, 45));
-            s.fill_rect(Rect::new(client.x + 6, ny, 3, 21), palette.accent_primary);
+            ui::draw::draw_rounded_rect(s, item_rect, 4, Color::rgb(33, 38, 45));
+            s.fill_rect(Rect::new(client.x + 6, ny + 2, 3, 17), palette.accent_primary);
             ui::font::draw_text_font(s, client.x + 16, ny + 4, name, Color::WHITE, &font_sm);
         } else {
             ui::font::draw_text_font(s, client.x + 16, ny + 4, name, palette.text_muted, &font_sm);
@@ -9476,10 +9725,10 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
 
         // Badge on Manage item
         if *cat == StoreCategory::Manage {
-            let badge_rect = Rect::new(client.x + sb_w - 34, ny + 3, 22, 14);
+            let badge_rect = Rect::new(client.x + sb_w - 36, ny + 3, 24, 14);
             s.fill_rect(badge_rect, Color::rgba(56, 189, 248, 40));
             draw_rect_outline(s, badge_rect, 1, Color::rgb(56, 189, 248));
-            ui::font::draw_text_font(s, badge_rect.x + 4, badge_rect.y + 1, "12", Color::rgb(56, 189, 248), &font_sm);
+            ui::font::draw_text_font(s, badge_rect.x + 5, badge_rect.y + 1, "12", Color::rgb(56, 189, 248), &font_sm);
         }
     }
 
@@ -9516,62 +9765,70 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
         let app = STORE_APPS[sel_idx];
         let is_inst = store.is_installed(sel_idx);
 
-        // Top back bar
-        let back_btn = Rect::new(mx + 12, my + 8, 76, 20);
-        s.fill_rect(back_btn, Color::rgb(33, 38, 45));
+        // Top back button
+        let back_btn = Rect::new(mx + 12, my + 8, 80, 22);
+        ui::draw::draw_rounded_rect(s, back_btn, 4, Color::rgb(33, 38, 45));
         draw_rect_outline(s, back_btn, 1, Color::rgb(48, 54, 61));
-        ui::font::draw_text_font(s, back_btn.x + 8, back_btn.y + 4, "< Back", Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, back_btn.x + 10, back_btn.y + 5, "< Back", Color::WHITE, &font_sm);
 
         // Hero App Header
-        let icon_rect = Rect::new(mx + 14, my + 36, 38, 38);
-        ui::draw::draw_rounded_rect(s, icon_rect, 6, app.icon_bg);
-        ui::font::draw_text_font(s, icon_rect.x + 8, icon_rect.y + 11, app.icon_letter, Color::WHITE, &font_reg);
+        let icon_rect = Rect::new(mx + 14, my + 38, 42, 42);
+        ui::draw::draw_rounded_rect(s, icon_rect, 8, app.icon_bg);
+        ui::font::draw_text_font(s, icon_rect.x + 10, icon_rect.y + 12, app.icon_letter, Color::WHITE, &font_reg);
 
-        ui::font::draw_text_font(s, mx + 60, my + 36, app.name, Color::WHITE, &font_reg);
-        ui::font::draw_text_font(s, mx + 60, my + 52, app.subtitle, palette.text_muted, &font_sm);
-        ui::font::draw_text_font(s, mx + 60, my + 66, app.publisher, palette.accent_primary, &font_sm);
-        ui::font::draw_text_font(s, mx + 240, my + 66, "[✓] Verified HMAC-SHA256", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 66, my + 38, app.name, Color::WHITE, &font_reg);
+        ui::font::draw_text_font(s, mx + 66, my + 54, app.subtitle, palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, mx + 66, my + 68, app.publisher, palette.accent_primary, &font_sm);
+        if mw >= 420 {
+            ui::font::draw_text_font(s, mx + 240, my + 68, "[✓] Verified HMAC-SHA256", palette.status_success, &font_sm);
+        }
 
         // Primary action buttons (top right)
         if is_inst {
-            let b_open = Rect::new(mx + mw - 146, my + 36, 64, 24);
-            s.fill_rect(b_open, palette.status_success);
+            let b_open = Rect::new(mx + mw - 146, my + 38, 64, 24);
+            ui::draw::draw_rounded_rect(s, b_open, 4, palette.status_success);
             ui::font::draw_text_font(s, b_open.x + 15, b_open.y + 5, "Open", Color::WHITE, &font_sm);
 
             if !app.is_core {
-                let b_un = Rect::new(mx + mw - 76, my + 36, 68, 24);
-                s.fill_rect(b_un, Color::rgb(33, 38, 45));
+                let b_un = Rect::new(mx + mw - 76, my + 38, 68, 24);
+                ui::draw::draw_rounded_rect(s, b_un, 4, Color::rgb(33, 38, 45));
                 draw_rect_outline(s, b_un, 1, Color::rgb(218, 54, 51));
                 ui::font::draw_text_font(s, b_un.x + 10, b_un.y + 5, "Uninstall", Color::rgb(218, 54, 51), &font_sm);
             }
         } else {
-            let b_inst = Rect::new(mx + mw - 96, my + 36, 86, 24);
-            s.fill_rect(b_inst, palette.accent_primary);
+            let b_inst = Rect::new(mx + mw - 96, my + 38, 86, 24);
+            ui::draw::draw_rounded_rect(s, b_inst, 4, palette.accent_primary);
             ui::font::draw_text_font(s, b_inst.x + 18, b_inst.y + 5, "Install", Color::WHITE, &font_sm);
         }
 
         // Horizontal Specs Strip (Ubuntu style)
-        let spec_y = my + 84;
+        let spec_y = my + 88;
         let spec_bar = Rect::new(mx + 12, spec_y, mw - 24, 22);
         s.fill_rect(spec_bar, Color::rgb(22, 27, 34));
         draw_rect_outline(s, spec_bar, 1, Color::rgb(48, 54, 61));
 
         ui::font::draw_text_font(s, spec_bar.x + 8, spec_y + 4, "Download: 482 KB", palette.text_muted, &font_sm);
-        ui::font::draw_text_font(s, spec_bar.x + 125, spec_y + 4, "| Ring-3 Isolated", palette.text_muted, &font_sm);
-        ui::font::draw_text_font(s, spec_bar.x + 230, spec_y + 4, "| Version: 1.0.0", palette.text_muted, &font_sm);
-        ui::font::draw_text_font(s, spec_bar.x + 335, spec_y + 4, "| License: MIT", palette.text_muted, &font_sm);
+        if mw >= 380 {
+            ui::font::draw_text_font(s, spec_bar.x + 125, spec_y + 4, "| Ring-3 Isolated", palette.text_muted, &font_sm);
+        }
+        if mw >= 480 {
+            ui::font::draw_text_font(s, spec_bar.x + 230, spec_y + 4, "| Version: 1.0.0", palette.text_muted, &font_sm);
+        }
+        if mw >= 560 {
+            ui::font::draw_text_font(s, spec_bar.x + 335, spec_y + 4, "| License: MIT", palette.text_muted, &font_sm);
+        }
 
         // App Description
-        ui::font::draw_text_font(s, mx + 14, my + 114, app.description, Color::rgb(240, 246, 252), &font_sm);
+        ui::font::draw_text_font(s, mx + 14, my + 118, app.description, Color::rgb(240, 246, 252), &font_sm);
 
         // Feature Highlights
-        ui::font::draw_text_font(s, mx + 14, my + 138, "Key Architecture & Features:", Color::WHITE, &font_sm);
-        ui::font::draw_text_font(s, mx + 20, my + 154, "✓ Pure Rust 1.99.1 Architecture (Zero C/C++ dependencies)", palette.status_success, &font_sm);
-        ui::font::draw_text_font(s, mx + 20, my + 170, "✓ Cryptographic HMAC-SHA256 Integrity Verified by NovaOS Keyring", palette.status_success, &font_sm);
-        ui::font::draw_text_font(s, mx + 20, my + 186, "✓ Seamless Window Manager Integration & Capability Sandbox Enforced", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 14, my + 142, "Key Architecture & Features:", Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 158, "✓ Pure Rust 1.99.1 Architecture (Zero C/C++ dependencies)", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 174, "✓ Cryptographic HMAC-SHA256 Integrity Verified by NovaOS Keyring", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, mx + 20, my + 190, "✓ Seamless Window Manager Integration & Capability Sandbox Enforced", palette.status_success, &font_sm);
 
         // App Preview Showcase Window
-        let prev_y = my + 210;
+        let prev_y = my + 214;
         let prev_h = (sb_y - prev_y - 8).max(60);
         if prev_h >= 60 {
             let prev_frame = Rect::new(mx + 12, prev_y, mw - 24, prev_h);
@@ -9594,7 +9851,7 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
     // --- VIEW B: Discover / Explore View (Hero Banner & Curated Shelves) ---
     if store.active_category == StoreCategory::Discover {
         // 1. Hero Gradient Banner (macOS + Ubuntu style)
-        let hero_rect = Rect::new(mx + 10, my + 8, mw - 20, 76);
+        let hero_rect = Rect::new(mx + 10, my + 8, mw - 20, 80);
         s.fill_rect(hero_rect, Color::rgb(15, 23, 42));
         s.fill_rect(Rect::new(hero_rect.x, hero_rect.y, hero_rect.w / 2, hero_rect.h), Color::rgb(30, 27, 75));
         s.fill_rect(Rect::new(hero_rect.x + hero_rect.w / 2, hero_rect.y, hero_rect.w / 2, hero_rect.h), Color::rgb(6, 78, 59));
@@ -9612,50 +9869,55 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
             ("S", Color::rgb(99, 102, 241)),
             ("V", Color::rgb(56, 189, 248)),
         ];
-        for (bi, (b_txt, b_col)) in badges.iter().enumerate() {
-            let bx = badge_x + (bi as i32 * 24);
-            let br = Rect::new(bx, hero_rect.y + 24, 20, 20);
-            ui::draw::draw_rounded_rect(s, br, 4, *b_col);
-            ui::font::draw_text_font(s, br.x + 5, br.y + 3, b_txt, Color::WHITE, &font_sm);
+        if hero_rect.w >= 440 {
+            for (bi, (b_txt, b_col)) in badges.iter().enumerate() {
+                let bx = badge_x + (bi as i32 * 24);
+                let br = Rect::new(bx, hero_rect.y + 26, 20, 20);
+                ui::draw::draw_rounded_rect(s, br, 4, *b_col);
+                ui::font::draw_text_font(s, br.x + 5, br.y + 3, b_txt, Color::WHITE, &font_sm);
+            }
         }
 
+        // Responsive card calculation for shelves:
+        let cols = if mw >= 560 { 3 } else { 2 };
+        let card_w = (mw - 24 - ((cols - 1) * 8)) / cols;
+        let card_h = 76;
+
         // 2. Shelf 1: "Top Sovereign Core Apps"
-        let shelf1_y = my + 92;
+        let shelf1_y = my + 96;
         ui::font::draw_text_font(s, mx + 12, shelf1_y, "Top Sovereign Core Apps", Color::WHITE, &font_reg);
         ui::font::draw_text_font(s, mx + mw - 76, shelf1_y + 2, "See All >", palette.accent_primary, &font_sm);
 
         let shelf1_apps = [0, 5, 6, 7]; // Zenith, Aero, Spectra, Vellum
-        let card_w = (mw - 36) / 4;
-        let card_h = 76;
-        for (i, &app_idx) in shelf1_apps.iter().enumerate() {
+        for (i, &app_idx) in shelf1_apps.iter().take(cols as usize).enumerate() {
             let app = STORE_APPS[app_idx];
             let is_inst = store.is_installed(app_idx);
-            let cx = mx + 10 + (i as i32 * (card_w + 5));
+            let cx = mx + 10 + (i as i32 * (card_w + 8));
             let cy = shelf1_y + 18;
             let c_rect = Rect::new(cx, cy, card_w, card_h);
 
-            s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+            ui::draw::draw_rounded_rect(s, c_rect, 6, Color::rgb(22, 27, 34));
             draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
 
             // Icon + Title
-            let ir = Rect::new(cx + 6, cy + 6, 20, 20);
-            ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
-            ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
-            ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+            let ir = Rect::new(cx + 8, cy + 8, 28, 28);
+            ui::draw::draw_rounded_rect(s, ir, 6, app.icon_bg);
+            ui::font::draw_text_font(s, ir.x + 7, ir.y + 6, app.icon_letter, Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, cx + 42, cy + 8, app.name, Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, cx + 42, cy + 24, app.subtitle, palette.text_muted, &font_sm);
 
-            // Subtitle
-            ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+            // Verified Badge on Left
+            ui::font::draw_text_font(s, cx + 8, cy + 52, "[✓] Verified", palette.status_success, &font_sm);
 
-            // Verified Badge & Action Button
-            ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
-            let b_w = 46;
-            let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+            // Action Button on Right
+            let b_w = 54;
+            let b_rect = Rect::new(cx + card_w - b_w - 8, cy + 48, b_w, 20);
             if is_inst {
-                s.fill_rect(b_rect, palette.status_success);
-                ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+                ui::draw::draw_rounded_rect(s, b_rect, 4, palette.status_success);
+                ui::font::draw_text_font(s, b_rect.x + 12, b_rect.y + 4, "Open", Color::WHITE, &font_sm);
             } else {
-                s.fill_rect(b_rect, palette.accent_primary);
-                ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+                ui::draw::draw_rounded_rect(s, b_rect, 4, palette.accent_primary);
+                ui::font::draw_text_font(s, b_rect.x + 9, b_rect.y + 4, "Install", Color::WHITE, &font_sm);
             }
         }
 
@@ -9666,67 +9928,67 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
             ui::font::draw_text_font(s, mx + mw - 76, shelf2_y + 2, "See All >", palette.accent_primary, &font_sm);
 
             let shelf2_apps = [4, 1, 2, 3]; // Vortex, DBNavigator, Lumina, ThunderCall
-            for (i, &app_idx) in shelf2_apps.iter().enumerate() {
+            for (i, &app_idx) in shelf2_apps.iter().take(cols as usize).enumerate() {
                 let app = STORE_APPS[app_idx];
                 let is_inst = store.is_installed(app_idx);
-                let cx = mx + 10 + (i as i32 * (card_w + 5));
+                let cx = mx + 10 + (i as i32 * (card_w + 8));
                 let cy = shelf2_y + 18;
                 let c_rect = Rect::new(cx, cy, card_w, card_h);
 
-                s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+                ui::draw::draw_rounded_rect(s, c_rect, 6, Color::rgb(22, 27, 34));
                 draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
 
-                let ir = Rect::new(cx + 6, cy + 6, 20, 20);
-                ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
-                ui::font::draw_text_font(s, ir.x + 4, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
-                ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+                let ir = Rect::new(cx + 8, cy + 8, 28, 28);
+                ui::draw::draw_rounded_rect(s, ir, 6, app.icon_bg);
+                ui::font::draw_text_font(s, ir.x + 7, ir.y + 6, app.icon_letter, Color::WHITE, &font_reg);
+                ui::font::draw_text_font(s, cx + 42, cy + 8, app.name, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, cx + 42, cy + 24, app.subtitle, palette.text_muted, &font_sm);
 
-                ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+                ui::font::draw_text_font(s, cx + 8, cy + 52, "[✓] Verified", palette.status_success, &font_sm);
 
-                ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
-                let b_w = 46;
-                let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+                let b_w = 54;
+                let b_rect = Rect::new(cx + card_w - b_w - 8, cy + 48, b_w, 20);
                 if is_inst {
-                    s.fill_rect(b_rect, palette.status_success);
-                    ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+                    ui::draw::draw_rounded_rect(s, b_rect, 4, palette.status_success);
+                    ui::font::draw_text_font(s, b_rect.x + 12, b_rect.y + 4, "Open", Color::WHITE, &font_sm);
                 } else {
-                    s.fill_rect(b_rect, palette.accent_primary);
-                    ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+                    ui::draw::draw_rounded_rect(s, b_rect, 4, palette.accent_primary);
+                    ui::font::draw_text_font(s, b_rect.x + 9, b_rect.y + 4, "Install", Color::WHITE, &font_sm);
                 }
             }
         }
 
-        // 4. Shelf 3: "Productivity & Entertainment" (if height allows)
+        // 4. Shelf 3: "Productivity & Utilities" (if height allows)
         let shelf3_y = shelf2_y + 100;
         if shelf3_y + card_h <= sb_y {
             ui::font::draw_text_font(s, mx + 12, shelf3_y, "Productivity & Utilities", Color::WHITE, &font_reg);
             let shelf3_apps = [8, 9, 10, 11]; // Terminal, Calc, Calendar, Game
-            for (i, &app_idx) in shelf3_apps.iter().enumerate() {
+            for (i, &app_idx) in shelf3_apps.iter().take(cols as usize).enumerate() {
                 let app = STORE_APPS[app_idx];
                 let is_inst = store.is_installed(app_idx);
-                let cx = mx + 10 + (i as i32 * (card_w + 5));
+                let cx = mx + 10 + (i as i32 * (card_w + 8));
                 let cy = shelf3_y + 18;
                 let c_rect = Rect::new(cx, cy, card_w, card_h);
 
-                s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+                ui::draw::draw_rounded_rect(s, c_rect, 6, Color::rgb(22, 27, 34));
                 draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
 
-                let ir = Rect::new(cx + 6, cy + 6, 20, 20);
-                ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
-                ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
-                ui::font::draw_text_font(s, cx + 30, cy + 8, app.name, Color::WHITE, &font_sm);
+                let ir = Rect::new(cx + 8, cy + 8, 28, 28);
+                ui::draw::draw_rounded_rect(s, ir, 6, app.icon_bg);
+                ui::font::draw_text_font(s, ir.x + 7, ir.y + 6, app.icon_letter, Color::WHITE, &font_reg);
+                ui::font::draw_text_font(s, cx + 42, cy + 8, app.name, Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, cx + 42, cy + 24, app.subtitle, palette.text_muted, &font_sm);
 
-                ui::font::draw_text_font(s, cx + 6, cy + 30, app.subtitle, palette.text_muted, &font_sm);
+                ui::font::draw_text_font(s, cx + 8, cy + 52, "[✓] Verified", palette.status_success, &font_sm);
 
-                ui::font::draw_text_font(s, cx + 6, cy + 54, "[✓] Verified", palette.status_success, &font_sm);
-                let b_w = 46;
-                let b_rect = Rect::new(cx + card_w - b_w - 6, cy + 50, b_w, 18);
+                let b_w = 54;
+                let b_rect = Rect::new(cx + card_w - b_w - 8, cy + 48, b_w, 20);
                 if is_inst {
-                    s.fill_rect(b_rect, palette.status_success);
-                    ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+                    ui::draw::draw_rounded_rect(s, b_rect, 4, palette.status_success);
+                    ui::font::draw_text_font(s, b_rect.x + 12, b_rect.y + 4, "Open", Color::WHITE, &font_sm);
                 } else {
-                    s.fill_rect(b_rect, palette.accent_primary);
-                    ui::font::draw_text_font(s, b_rect.x + 6, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+                    ui::draw::draw_rounded_rect(s, b_rect, 4, palette.accent_primary);
+                    ui::font::draw_text_font(s, b_rect.x + 9, b_rect.y + 4, "Install", Color::WHITE, &font_sm);
                 }
             }
         }
@@ -9739,7 +10001,7 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
         ui::font::draw_text_font(s, mx + 12, my + 28, "Manage sovereign software packages • 1-click launch and removal", palette.text_muted, &font_sm);
 
         let list_y = my + 44;
-        let row_h = 30;
+        let row_h = 34;
         for i in 0..STORE_APPS.len() {
             let ry = list_y + (i as i32 * (row_h + 3));
             if ry + row_h >= sb_y { break; }
@@ -9748,46 +10010,56 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
             let is_inst = store.is_installed(i);
 
             let r_rect = Rect::new(mx + 10, ry, mw - 20, row_h);
-            s.fill_rect(r_rect, Color::rgb(22, 27, 34));
+            ui::draw::draw_rounded_rect(s, r_rect, 4, Color::rgb(22, 27, 34));
             draw_rect_outline(s, r_rect, 1, Color::rgb(48, 54, 61));
 
             // Icon
-            let ir = Rect::new(r_rect.x + 6, ry + 5, 20, 20);
-            ui::draw::draw_rounded_rect(s, ir, 3, app.icon_bg);
-            ui::font::draw_text_font(s, ir.x + 5, ir.y + 3, app.icon_letter, Color::WHITE, &font_sm);
+            let ir = Rect::new(r_rect.x + 6, ry + 6, 22, 22);
+            ui::draw::draw_rounded_rect(s, ir, 4, app.icon_bg);
+            ui::font::draw_text_font(s, ir.x + 5, ir.y + 4, app.icon_letter, Color::WHITE, &font_sm);
 
-            // Name & Version
-            ui::font::draw_text_font(s, r_rect.x + 32, ry + 8, app.name, Color::WHITE, &font_sm);
-            ui::font::draw_text_font(s, r_rect.x + 130, ry + 8, app.version, palette.text_muted, &font_sm);
+            // Name
+            ui::font::draw_text_font(s, r_rect.x + 36, ry + 10, app.name, Color::WHITE, &font_sm);
 
-            // Size
-            ui::font::draw_text_font(s, r_rect.x + 190, ry + 8, "482 KB", palette.text_muted, &font_sm);
+            // Version & Size
+            if mw >= 420 {
+                ui::font::draw_text_font(s, r_rect.x + 160, ry + 10, app.version, Color::rgb(88, 166, 255), &font_sm);
+                ui::font::draw_text_font(s, r_rect.x + 210, ry + 10, "482 KB", palette.text_muted, &font_sm);
+            }
 
             // Status tag
-            if is_inst {
-                if app.is_core {
-                    ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[Core Default]", palette.accent_primary, &font_sm);
+            if mw >= 520 {
+                if is_inst {
+                    if app.is_core {
+                        ui::font::draw_text_font(s, r_rect.x + 280, ry + 10, "[Core Default]", palette.accent_primary, &font_sm);
+                    } else {
+                        ui::font::draw_text_font(s, r_rect.x + 280, ry + 10, "[User Package]", palette.status_success, &font_sm);
+                    }
                 } else {
-                    ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[User Package]", palette.status_success, &font_sm);
+                    ui::font::draw_text_font(s, r_rect.x + 280, ry + 10, "[Available]", Color::rgb(110, 118, 129), &font_sm);
                 }
+            }
 
-                // Open button
-                let b_open = Rect::new(r_rect.right() - 104, ry + 5, 46, 20);
-                s.fill_rect(b_open, palette.status_success);
-                ui::font::draw_text_font(s, b_open.x + 8, b_open.y + 3, "Open", Color::WHITE, &font_sm);
-
-                // Uninstall button
+            // Action Buttons
+            if is_inst {
                 if !app.is_core {
-                    let b_un = Rect::new(r_rect.right() - 52, ry + 5, 46, 20);
-                    s.fill_rect(b_un, Color::rgb(33, 38, 45));
+                    let b_open = Rect::new(r_rect.right() - 124, ry + 6, 52, 22);
+                    ui::draw::draw_rounded_rect(s, b_open, 4, palette.status_success);
+                    ui::font::draw_text_font(s, b_open.x + 11, b_open.y + 4, "Open", Color::WHITE, &font_sm);
+
+                    let b_un = Rect::new(r_rect.right() - 64, ry + 6, 56, 22);
+                    ui::draw::draw_rounded_rect(s, b_un, 4, Color::rgb(33, 38, 45));
                     draw_rect_outline(s, b_un, 1, Color::rgb(218, 54, 51));
-                    ui::font::draw_text_font(s, b_un.x + 5, b_un.y + 3, "Remove", Color::rgb(218, 54, 51), &font_sm);
+                    ui::font::draw_text_font(s, b_un.x + 7, b_un.y + 4, "Remove", Color::rgb(218, 54, 51), &font_sm);
+                } else {
+                    let b_open = Rect::new(r_rect.right() - 60, ry + 6, 52, 22);
+                    ui::draw::draw_rounded_rect(s, b_open, 4, palette.status_success);
+                    ui::font::draw_text_font(s, b_open.x + 11, b_open.y + 4, "Open", Color::WHITE, &font_sm);
                 }
             } else {
-                ui::font::draw_text_font(s, r_rect.x + 260, ry + 8, "[Available]", Color::rgb(110, 118, 129), &font_sm);
-                let b_inst = Rect::new(r_rect.right() - 76, ry + 5, 68, 20);
-                s.fill_rect(b_inst, palette.accent_primary);
-                ui::font::draw_text_font(s, b_inst.x + 10, b_inst.y + 3, "Install", Color::WHITE, &font_sm);
+                let b_inst = Rect::new(r_rect.right() - 68, ry + 6, 60, 22);
+                ui::draw::draw_rounded_rect(s, b_inst, 4, palette.accent_primary);
+                ui::font::draw_text_font(s, b_inst.x + 10, b_inst.y + 4, "Install", Color::WHITE, &font_sm);
             }
         }
         return;
@@ -9800,7 +10072,7 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
 
         // Security card 1
         let c1 = Rect::new(mx + 12, my + 48, mw - 24, 76);
-        s.fill_rect(c1, Color::rgb(22, 27, 34));
+        ui::draw::draw_rounded_rect(s, c1, 6, Color::rgb(22, 27, 34));
         draw_rect_outline(s, c1, 1, Color::rgb(48, 54, 61));
         ui::font::draw_text_font(s, c1.x + 12, c1.y + 10, "Cryptographic Signature Verification: ENFORCED", palette.status_success, &font_reg);
         ui::font::draw_text_font(s, c1.x + 12, c1.y + 30, "Algorithm: HMAC-SHA256 • Keyring: Root Sovereign Authority (CA)", Color::WHITE, &font_sm);
@@ -9808,7 +10080,7 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
 
         // Security card 2
         let c2 = Rect::new(mx + 12, my + 134, mw - 24, 76);
-        s.fill_rect(c2, Color::rgb(22, 27, 34));
+        ui::draw::draw_rounded_rect(s, c2, 6, Color::rgb(22, 27, 34));
         draw_rect_outline(s, c2, 1, Color::rgb(48, 54, 61));
         ui::font::draw_text_font(s, c2.x + 12, c2.y + 10, "In-Kernel Package Repository Server: ACTIVE", palette.accent_primary, &font_reg);
         ui::font::draw_text_font(s, c2.x + 12, c2.y + 30, "Port: 8080 • Kernel Syscall: SYS_PKGREPO_CTL (82)", Color::WHITE, &font_sm);
@@ -9829,7 +10101,7 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
     ui::font::draw_text_font(s, mx + 12, my + 28, "Verified pure-Rust software packages for NovaOS 2.0", palette.text_muted, &font_sm);
 
     let grid_w = (mw - 30) / 2;
-    let grid_h = 70;
+    let grid_h = 76;
     let start_y = my + 44;
     for (i, &app_idx) in cat_apps.iter().enumerate() {
         let col = (i % 2) as i32;
@@ -9842,26 +10114,26 @@ fn draw_store_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, store: &
         let is_inst = store.is_installed(app_idx);
         let c_rect = Rect::new(cx, cy, grid_w, grid_h);
 
-        s.fill_rect(c_rect, Color::rgb(22, 27, 34));
+        ui::draw::draw_rounded_rect(s, c_rect, 6, Color::rgb(22, 27, 34));
         draw_rect_outline(s, c_rect, 1, Color::rgb(48, 54, 61));
 
-        let ir = Rect::new(cx + 8, cy + 8, 24, 24);
-        ui::draw::draw_rounded_rect(s, ir, 4, app.icon_bg);
-        ui::font::draw_text_font(s, ir.x + 6, ir.y + 4, app.icon_letter, Color::WHITE, &font_sm);
+        let ir = Rect::new(cx + 8, cy + 8, 28, 28);
+        ui::draw::draw_rounded_rect(s, ir, 6, app.icon_bg);
+        ui::font::draw_text_font(s, ir.x + 7, ir.y + 6, app.icon_letter, Color::WHITE, &font_reg);
 
-        ui::font::draw_text_font(s, cx + 38, cy + 8, app.name, Color::WHITE, &font_sm);
-        ui::font::draw_text_font(s, cx + 38, cy + 24, app.subtitle, palette.text_muted, &font_sm);
+        ui::font::draw_text_font(s, cx + 42, cy + 8, app.name, Color::WHITE, &font_sm);
+        ui::font::draw_text_font(s, cx + 42, cy + 24, app.subtitle, palette.text_muted, &font_sm);
 
-        ui::font::draw_text_font(s, cx + 8, cy + 48, "[✓] Verified", palette.status_success, &font_sm);
+        ui::font::draw_text_font(s, cx + 8, cy + 52, "[✓] Verified", palette.status_success, &font_sm);
 
-        let b_w = 50;
-        let b_rect = Rect::new(cx + grid_w - b_w - 8, cy + 44, b_w, 20);
+        let b_w = 54;
+        let b_rect = Rect::new(cx + grid_w - b_w - 8, cy + 48, b_w, 20);
         if is_inst {
-            s.fill_rect(b_rect, palette.status_success);
-            ui::font::draw_text_font(s, b_rect.x + 10, b_rect.y + 3, "Open", Color::WHITE, &font_sm);
+            ui::draw::draw_rounded_rect(s, b_rect, 4, palette.status_success);
+            ui::font::draw_text_font(s, b_rect.x + 12, b_rect.y + 4, "Open", Color::WHITE, &font_sm);
         } else {
-            s.fill_rect(b_rect, palette.accent_primary);
-            ui::font::draw_text_font(s, b_rect.x + 8, b_rect.y + 3, "Install", Color::WHITE, &font_sm);
+            ui::draw::draw_rounded_rect(s, b_rect, 4, palette.accent_primary);
+            ui::font::draw_text_font(s, b_rect.x + 9, b_rect.y + 4, "Install", Color::WHITE, &font_sm);
         }
     }
 }
@@ -12000,5 +12272,71 @@ mod tests {
         wm.on_left_press(launch_btn_x, launch_btn_y);
         let new_top_idx = wm.z_order[MAX_WINDOWS - 1];
         assert_eq!(wm.windows[new_top_idx].label, 12, "Launching Zenith from App Store should bring Window 12 to front");
+    }
+
+    #[test]
+    fn test_wm_window_resizing_and_corner_grip() {
+        let mut wm = Wm::new_for_display(1024, 768);
+        wm.launch_or_restore(4); // Open App Store (Window 3 / label 4)
+        let top_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_idx].label, 4);
+        let orig_w = wm.windows[top_idx].w;
+        let orig_h = wm.windows[top_idx].h;
+        let orig_x = wm.windows[top_idx].x;
+        let orig_y = wm.windows[top_idx].y;
+
+        // 1. Edge & Corner Hit Testing
+        // Bottom-Right Corner Grip
+        let br_x = orig_x + orig_w - 4;
+        let br_y = orig_y + orig_h - 4;
+        let edge = wm.resize_edge_at(br_x, br_y);
+        assert_eq!(edge, Some((top_idx, ResizeEdge::BottomRight)));
+        assert_eq!(wm.cursor_shape_at(br_x, br_y), CursorShape::ResizeNWSE);
+
+        // Right Edge
+        let r_x = orig_x + orig_w;
+        let r_y = orig_y + 100;
+        assert_eq!(wm.resize_edge_at(r_x, r_y), Some((top_idx, ResizeEdge::Right)));
+        assert_eq!(wm.cursor_shape_at(r_x, r_y), CursorShape::ResizeEW);
+
+        // Bottom Edge
+        let b_x = orig_x + 100;
+        let b_y = orig_y + orig_h;
+        assert_eq!(wm.resize_edge_at(b_x, b_y), Some((top_idx, ResizeEdge::Bottom)));
+        assert_eq!(wm.cursor_shape_at(b_x, b_y), CursorShape::ResizeNS);
+
+        // 2. Mouse Drag Resizing (make window larger)
+        // Move pointer to bottom-right corner
+        wm.apply_mouse(ffi::MouseState {
+            dx: br_x - wm.cursor_x,
+            dy: br_y - wm.cursor_y,
+            left_button: false,
+            right_button: false,
+            middle_button: false,
+        });
+        // Press left button
+        wm.apply_mouse(ffi::MouseState { dx: 0, dy: 0, left_button: true, right_button: false, middle_button: false });
+        assert_eq!(wm.resizing, Some((top_idx, ResizeEdge::BottomRight)));
+
+        // Drag mouse +120, +80
+        wm.apply_mouse(ffi::MouseState { dx: 120, dy: 80, left_button: true, right_button: false, middle_button: false });
+        assert_eq!(wm.windows[top_idx].w, orig_w + 120);
+        assert_eq!(wm.windows[top_idx].h, orig_h + 80);
+
+        // Release mouse
+        wm.apply_mouse(ffi::MouseState { dx: 0, dy: 0, left_button: false, right_button: false, middle_button: false });
+        assert_eq!(wm.resizing, None);
+
+        // 3. Titlebar Double-Click Toggle Maximize
+        let tb_center_x = orig_x + 100;
+        let tb_center_y = orig_y + 10;
+        // First click
+        wm.apply_mouse(ffi::MouseState { dx: tb_center_x - wm.cursor_x, dy: tb_center_y - wm.cursor_y, left_button: true, right_button: false, middle_button: false });
+        wm.apply_mouse(ffi::MouseState { dx: 0, dy: 0, left_button: false, right_button: false, middle_button: false });
+        // Second click within threshold
+        wm.apply_mouse(ffi::MouseState { dx: 0, dy: 0, left_button: true, right_button: false, middle_button: false });
+        assert_eq!(wm.windows[top_idx].snap, SnapState::Maximize, "Double-clicking titlebar should maximize window");
+        assert_eq!(wm.windows[top_idx].w, 1024);
+        assert_eq!(wm.windows[top_idx].h, 708);
     }
 }
