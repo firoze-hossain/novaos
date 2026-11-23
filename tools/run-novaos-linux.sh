@@ -1,23 +1,20 @@
 #!/bin/bash
 # tools/run-novaos-linux.sh
 # Linux QEMU launcher for NovaOS:
-# 1. Fixes the Wayland mouse freeze issue in QEMU:
-#    Under native Wayland (Ubuntu/GNOME/KDE default), GTK prevents client-side
-#    pointer warping (gdk_device_warp is a no-op under Wayland). When QEMU
-#    emulates a relative PS/2 mouse, moving to the bottom of the screen (the dock /
-#    menu options) causes the host cursor to hit the window border. Upon clicking,
-#    Wayland loses pointer grab or stops reporting motion deltas because the host
-#    cursor cannot warp back to window center, causing the mouse cursor in QEMU to
-#    freeze.
-#    By routing through XWayland (GDK_BACKEND=x11) when WAYLAND_DISPLAY and DISPLAY
-#    are set, XWarpPointer and XGrabPointer function fully, providing smooth,
-#    reliable mouse tracking identical to macOS Cocoa.
+# 1. Resolves mouse grab freeze on modern Linux desktop environments (Wayland & X11):
+#    - For SDL: routes through native Wayland relative pointer protocols
+#      (zwp_relative_pointer_manager_v1) or X11, providing smooth, lag-free 60fps tracking.
+#    - For GTK: enables native Wayland/X11 backend without forcing broken XWayland pointer warping.
 # 2. Preserves terminal control and clean exit on Ctrl+C.
 
 set -e
 
-if [ -n "$WAYLAND_DISPLAY" ] && [ -n "$DISPLAY" ] && [ -z "$GDK_BACKEND" ]; then
-    export GDK_BACKEND=x11
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    export SDL_VIDEODRIVER=wayland,x11
+    # Allow GTK to use native Wayland instead of forcing legacy XWayland
+    if [ "$GDK_BACKEND" = "x11" ]; then
+        unset GDK_BACKEND
+    fi
 fi
 
 exec "$@"
