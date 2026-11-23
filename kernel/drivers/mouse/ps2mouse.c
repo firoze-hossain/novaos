@@ -58,6 +58,10 @@ static uint8_t mouse_read(void) {
 
 static void mouse_irq_handler(registers_t* regs) {
     (void)regs;
+    uint8_t ps2_stat = inb(PS2_STATUS);
+    if (!(ps2_stat & 0x01) || !(ps2_stat & 0x20)) {
+        return; /* Output buffer not full, or data is from keyboard */
+    }
     uint8_t byte = inb(PS2_DATA);
 
     if (packet_index == 0 && !(byte & 0x08)) {

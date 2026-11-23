@@ -254,7 +254,7 @@ pub struct DesktopIconSpec {
 }
 
 pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 12] = [
-    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 1, icon_type: 0 },
+    DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
     DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks", app_id: 6, icon_type: 6 },
@@ -3906,7 +3906,7 @@ impl WmSettingsApp {
 
 pub static mut SCREENSHOT_PIXEL_BUF: [u32; 1024 * 768] = [0u32; 1024 * 768];
 pub static mut SCREENSHOT_PNG_BUF: [u8; 3500 * 1024] = [0u8; 3500 * 1024];
-pub static mut SCREENSHOT_VID_BUF: [u8; 2500 * 1024] = [0u8; 2500 * 1024];
+pub static mut SCREENSHOT_VID_BUF: [u8; 128] = [0u8; 128];
 
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
@@ -5810,7 +5810,7 @@ impl Wm {
         let duration_ms = (frames * 1000) / 60;
 
         let out_buf = unsafe {
-            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(SCREENSHOT_VID_BUF) as *mut u8, 2500 * 1024)
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(SCREENSHOT_VID_BUF) as *mut u8, 128)
         };
 
         if let Some(hdr_len) = encode_video_header(self.screen_w as u32, self.screen_h as u32, 60, frames, duration_ms, out_buf) {
@@ -5953,7 +5953,7 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
-                if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5969,7 +5969,7 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
-                if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 {
+                if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5984,7 +5984,7 @@ impl Wm {
         // 3. Fallback: reuse the background-most window slot
         let bg_idx = self.z_order[0];
         self.windows[bg_idx].label = app_id;
-        if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 {
+        if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 {
             self.windows[bg_idx].w = 680;
             self.windows[bg_idx].h = 440;
             self.windows[bg_idx].x = (self.screen_w - 680) / 2;
@@ -6981,7 +6981,7 @@ impl Wm {
                 }
                 w.pre_snap = (w.x, w.y, w.w, w.h);
             }
-            if just_released {
+            if just_released || !m.left_button {
                 self.resizing = None;
             }
         }
@@ -6996,7 +6996,7 @@ impl Wm {
                     self.last_titlebar_click = (MAX_WINDOWS, 0);
                 }
             }
-            if just_released {
+            if just_released || !m.left_button {
                 self.on_drag_release_at(idx, self.cursor_x, self.cursor_y);
                 self.dragging = None;
                 self.preview_snap = None;
@@ -7015,7 +7015,7 @@ impl Wm {
         // 1. Desktop background & Desktop Icons
         if self.screen_h >= 600 && !is_high_contrast {
             draw_modern_desktop_wallpaper(surface, self.screen_w, self.desktop_h);
-            draw_desktop_icons(surface, self.menubar_h, self.hovered_desktop_icon, &palette);
+            draw_desktop_icons(surface, self.menubar_h, self.desktop_h, self.hovered_desktop_icon, &palette);
         } else {
             surface.fill_rect(Rect::new(0, 0, self.screen_w, self.desktop_h), palette.desktop_bg);
         }
@@ -8124,17 +8124,21 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
 fn draw_desktop_icons<S: Surface + ?Sized>(
     s: &mut S,
     menubar_h: i32,
+    desktop_h: i32,
     hovered_icon: Option<usize>,
     palette: &ThemePalette,
 ) {
     let font = Font::small();
     let start_y = if menubar_h > 0 { menubar_h + 16 } else { 16 };
-    let items_per_col = 6;
+    let items_per_col = ((desktop_h - start_y - 10) / 78).max(1) as usize;
     for (i, spec) in DESKTOP_SHORTCUTS.iter().enumerate() {
         let col = (i / items_per_col) as i32;
         let row = (i % items_per_col) as i32;
         let x = 18 + col * 86;
         let y = start_y + row * 78;
+        if y + 70 > desktop_h {
+            continue;
+        }
         let rect = Rect::new(x, y, 78, 70);
 
         let is_hovered = hovered_icon == Some(i);
@@ -13310,14 +13314,14 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
     }
 
     // In production desktop runtime, boot into a clean, spacious desktop:
-    // Only a centered, welcoming Terminal console window is open.
-    // Core applications (Files, Scratchpad, App Store) are neatly docked
+    // All windows start closed/minimized with no terminal popup on startup.
+    // Core applications (Terminal, Files, Scratchpad, App Store, Settings) are neatly docked
     // in the taskbar and desktop icons for instant 1-click launch/restore.
+    wm.windows[0].is_open = false;
+    wm.windows[0].is_minimized = true;
     wm.windows[1].is_minimized = true;
     wm.windows[2].is_minimized = true;
     wm.windows[3].is_minimized = true;
-    wm.windows[0].is_open = true;
-    wm.windows[0].is_minimized = false;
     if screen_w >= 800 && screen_h >= 600 {
         wm.windows[0].w = 560;
         wm.windows[0].h = 380;
@@ -13325,7 +13329,6 @@ pub extern "C" fn main(argc: i32, argv: *const *const u8, _envp: *const *const u
         wm.windows[0].y = (screen_h - 380) / 2 - 12;
         wm.windows[0].pre_snap = (wm.windows[0].x, wm.windows[0].y, wm.windows[0].w, wm.windows[0].h);
     }
-    wm.raise(0);
     wm.sync_rtc();
 
     // Render and present the initial frame immediately so the screen is never left black
@@ -15032,9 +15035,9 @@ mod tests {
         wm.on_key(27);
         assert!(!wm.screenshot_overlay.is_active, "Escape should dismiss overlay");
 
-        // F12 (0x58) also triggers screenshot overlay
-        wm.on_key(0x58);
-        assert!(wm.screenshot_overlay.is_active, "F12 should open screenshot overlay");
+        // PrtScn / F12 (250) triggers screenshot overlay
+        wm.on_key(250);
+        assert!(wm.screenshot_overlay.is_active, "PrtScn / F12 should open screenshot overlay");
 
         // 4. Trigger Photo Capture via Shutter Button / Enter key
         wm.on_key(b'\n' as i32);

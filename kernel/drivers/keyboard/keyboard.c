@@ -37,6 +37,10 @@ static void buffer_push(char c) {
 
 static void keyboard_irq_handler(registers_t* regs) {
     (void)regs;
+    uint8_t ps2_stat = inb(0x64);
+    if (!(ps2_stat & 0x01) || (ps2_stat & 0x20)) {
+        return; /* Output buffer not full, or data is from aux/mouse */
+    }
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
 
     if (scancode == 0xE0) {
@@ -51,9 +55,7 @@ static void keyboard_irq_handler(registers_t* regs) {
             buffer_push((char)250); /* KEY_PRINTSCREEN */
             return;
         }
-        if (scancode & 0x80) {
-            return; /* break code */
-        }
+        return; /* Extended keys other than PrintScreen are non-text; drop */
     }
 
     /* F12 key (0x58) maps to KEY_PRINTSCREEN for keyboards without PrtScn */
