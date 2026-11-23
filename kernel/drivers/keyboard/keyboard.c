@@ -24,6 +24,7 @@ static uint32_t buf_head = 0; /* next slot to write */
 static uint32_t buf_tail = 0; /* next slot to read  */
 
 static bool shift_held = false;
+static bool e0_extended = false;
 
 static void buffer_push(char c) {
     uint32_t next = (buf_head + 1) % BUFFER_SIZE;
@@ -37,6 +38,29 @@ static void buffer_push(char c) {
 static void keyboard_irq_handler(registers_t* regs) {
     (void)regs;
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
+
+    if (scancode == 0xE0) {
+        e0_extended = true;
+        return;
+    }
+
+    if (e0_extended) {
+        e0_extended = false;
+        /* Print Screen sends 0xE0, 0x37 or 0xE0, 0x54 */
+        if (scancode == 0x37 || scancode == 0x54) {
+            buffer_push((char)250); /* KEY_PRINTSCREEN */
+            return;
+        }
+        if (scancode & 0x80) {
+            return; /* break code */
+        }
+    }
+
+    /* F12 key (0x58) maps to KEY_PRINTSCREEN for keyboards without PrtScn */
+    if (scancode == 0x58) {
+        buffer_push((char)250);
+        return;
+    }
 
     if (scancode == SC_LSHIFT || scancode == SC_RSHIFT) {
         shift_held = true;

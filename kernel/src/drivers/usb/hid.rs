@@ -232,6 +232,7 @@ impl UsbKeyboard {
             0x36 => Some(if shift { b'<' } else { b',' }),
             0x37 => Some(if shift { b'>' } else { b'.' }),
             0x38 => Some(if shift { b'?' } else { b'/' }),
+            0x45 | 0x46 => Some(250), // F12 & PrintScreen
             _ => None,
         }
     }
@@ -239,6 +240,8 @@ impl UsbKeyboard {
     /// Convert HID Usage Code to Scan Code Set 1 (for PS/2 compatibility)
     pub fn usage_to_scancode(usage: u8) -> u8 {
         match usage {
+            0x45 => 0x58, // F12
+            0x46 => 0x37, // PrintScreen
             0x04 => 0x1E, // 'a'
             0x05 => 0x30, // 'b'
             0x06 => 0x2E, // 'c'

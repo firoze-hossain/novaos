@@ -674,7 +674,7 @@ static void handle_read_key(registers_t* regs) {
          * reaching its internal hlt-wait loop, which would otherwise
          * deadlock the kernel from inside an interrupts-disabled
          * syscall handler. See SYS_READ_KEY's comment in syscall.h. */
-        regs->eax = (uint32_t)(int)keyboard_get_char();
+        regs->eax = (uint32_t)(int)(unsigned char)keyboard_get_char();
     } else {
         regs->eax = (uint32_t)-1;
     }

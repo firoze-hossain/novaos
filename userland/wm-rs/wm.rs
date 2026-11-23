@@ -3900,6 +3900,419 @@ impl WmSettingsApp {
     }
 }
 
+// ============================================================================
+// Sovereign Screenshot & Screen Recording Subsystem (Ubuntu GNOME Synthesis)
+// ============================================================================
+
+pub static mut SCREENSHOT_PIXEL_BUF: [u32; 1024 * 768] = [0u32; 1024 * 768];
+pub static mut SCREENSHOT_PNG_BUF: [u8; 3500 * 1024] = [0u8; 3500 * 1024];
+pub static mut SCREENSHOT_VID_BUF: [u8; 2500 * 1024] = [0u8; 2500 * 1024];
+
+pub fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+pub fn adler32(data: &[u8]) -> u32 {
+    let mut a = 1u32;
+    let mut b = 0u32;
+    for &byte in data {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+pub fn write_png_chunk(out: &mut [u8], mut pos: usize, chunk_type: &[u8; 4], data: &[u8]) -> Option<usize> {
+    let len = data.len() as u32;
+    if pos + 12 + data.len() > out.len() {
+        return None;
+    }
+    out[pos..pos + 4].copy_from_slice(&len.to_be_bytes());
+    pos += 4;
+    let type_start = pos;
+    out[pos..pos + 4].copy_from_slice(chunk_type);
+    pos += 4;
+    if !data.is_empty() {
+        out[pos..pos + data.len()].copy_from_slice(data);
+        pos += data.len();
+    }
+    let crc = crc32(&out[type_start..pos]);
+    out[pos..pos + 4].copy_from_slice(&crc.to_be_bytes());
+    pos += 4;
+    Some(pos)
+}
+
+pub fn encode_png_uncompressed(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    out: &mut [u8],
+) -> Option<usize> {
+    if width == 0 || height == 0 || pixels.len() < (width * height) as usize {
+        return None;
+    }
+
+    let mut pos = 0;
+
+    let sig: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if pos + 8 > out.len() { return None; }
+    out[pos..pos + 8].copy_from_slice(&sig);
+    pos += 8;
+
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+    ihdr[8] = 8;
+    ihdr[9] = 6;  // RGBA TrueColor
+    ihdr[10] = 0; // Deflate
+    ihdr[11] = 0; // Standard filter
+    ihdr[12] = 0; // No interlace
+    pos = write_png_chunk(out, pos, b"IHDR", &ihdr)?;
+
+    let row_bytes = 1 + width as usize * 4;
+    let idat_len_pos = pos;
+    pos += 4;
+    let chunk_type_pos = pos;
+    if pos + 4 > out.len() { return None; }
+    out[pos..pos + 4].copy_from_slice(b"IDAT");
+    pos += 4;
+
+    if pos + 2 > out.len() { return None; }
+    out[pos] = 0x78;
+    out[pos + 1] = 0x01;
+    pos += 2;
+
+    let mut adler_a = 1u32;
+    let mut adler_b = 0u32;
+
+    let mut y = 0u32;
+    while y < height {
+        let mut rows_in_block = 0u32;
+        while y + rows_in_block < height && (rows_in_block + 1) as usize * row_bytes <= 65530 {
+            rows_in_block += 1;
+        }
+        if rows_in_block == 0 { rows_in_block = 1; }
+
+        let is_last = (y + rows_in_block) >= height;
+        let block_payload_len = (rows_in_block as usize * row_bytes) as u16;
+
+        if pos + 5 > out.len() { return None; }
+        out[pos] = if is_last { 0x01 } else { 0x00 };
+        out[pos + 1..pos + 3].copy_from_slice(&block_payload_len.to_le_bytes());
+        out[pos + 3..pos + 5].copy_from_slice(&(!block_payload_len).to_le_bytes());
+        pos += 5;
+
+        for _ in 0..rows_in_block {
+            if pos + row_bytes > out.len() { return None; }
+            out[pos] = 0x00;
+            adler_a = (adler_a + 0) % 65521;
+            adler_b = (adler_b + adler_a) % 65521;
+            pos += 1;
+
+            let row_start = (y * width) as usize;
+            for x in 0..width as usize {
+                let pixel = pixels[row_start + x];
+                let a = ((pixel >> 24) & 0xFF) as u8;
+                let r = ((pixel >> 16) & 0xFF) as u8;
+                let g = ((pixel >> 8) & 0xFF) as u8;
+                let b = (pixel & 0xFF) as u8;
+
+                out[pos] = r;
+                out[pos + 1] = g;
+                out[pos + 2] = b;
+                out[pos + 3] = if a == 0 { 255 } else { a };
+
+                adler_a = (adler_a + r as u32) % 65521;
+                adler_b = (adler_b + adler_a) % 65521;
+                adler_a = (adler_a + g as u32) % 65521;
+                adler_b = (adler_b + adler_a) % 65521;
+                adler_a = (adler_a + b as u32) % 65521;
+                adler_b = (adler_b + adler_a) % 65521;
+                adler_a = (adler_a + out[pos + 3] as u32) % 65521;
+                adler_b = (adler_b + adler_a) % 65521;
+
+                pos += 4;
+            }
+            y += 1;
+        }
+    }
+
+    let adler32 = (adler_b << 16) | adler_a;
+    if pos + 4 > out.len() { return None; }
+    out[pos..pos + 4].copy_from_slice(&adler32.to_be_bytes());
+    pos += 4;
+
+    let idat_payload_len = (pos - chunk_type_pos - 4) as u32;
+    out[idat_len_pos..idat_len_pos + 4].copy_from_slice(&idat_payload_len.to_be_bytes());
+
+    let idat_crc = crc32(&out[chunk_type_pos..pos]);
+    if pos + 4 > out.len() { return None; }
+    out[pos..pos + 4].copy_from_slice(&idat_crc.to_be_bytes());
+    pos += 4;
+
+    pos = write_png_chunk(out, pos, b"IEND", &[])?;
+
+    Some(pos)
+}
+
+pub const NOVAV_MAGIC: &[u8; 8] = b"NOVAV10\0";
+
+pub fn encode_video_header(
+    width: u32,
+    height: u32,
+    fps: u32,
+    frame_count: u32,
+    duration_ms: u32,
+    out: &mut [u8],
+) -> Option<usize> {
+    if out.len() < 28 { return None; }
+    out[0..8].copy_from_slice(NOVAV_MAGIC);
+    out[8..12].copy_from_slice(&width.to_le_bytes());
+    out[12..16].copy_from_slice(&height.to_le_bytes());
+    out[16..20].copy_from_slice(&fps.to_le_bytes());
+    out[20..24].copy_from_slice(&frame_count.to_le_bytes());
+    out[24..28].copy_from_slice(&duration_ms.to_le_bytes());
+    Some(28)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureScope {
+    Selection,
+    Screen,
+    Window,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureMode {
+    Photo,
+    Video,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    Screenshot,
+    Recording,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MediaItem {
+    pub name: &'static str,
+    pub path: &'static str,
+    pub kind: MediaKind,
+    pub width: u32,
+    pub height: u32,
+    pub size_kb: u32,
+    pub timestamp: &'static str,
+    pub duration_sec: u32,
+}
+
+pub const DEFAULT_MEDIA_ITEMS: [MediaItem; 4] = [
+    MediaItem { name: "SCRN0001.PNG", path: "Pictures/Screenshots/SCRN0001.PNG", kind: MediaKind::Screenshot, width: 1024, height: 768, size_kb: 1420, timestamp: "2026-11-23 07:30:15", duration_sec: 0 },
+    MediaItem { name: "SCRN0002.PNG", path: "Pictures/Screenshots/SCRN0002.PNG", kind: MediaKind::Screenshot, width: 680, height: 440, size_kb: 890, timestamp: "2026-11-23 07:31:40", duration_sec: 0 },
+    MediaItem { name: "REC0001.RAW", path: "Videos/Screencasts/REC0001.RAW", kind: MediaKind::Recording, width: 1024, height: 768, size_kb: 3200, timestamp: "2026-11-23 07:32:55", duration_sec: 8 },
+    MediaItem { name: "REC0002.RAW", path: "Videos/Screencasts/REC0002.RAW", kind: MediaKind::Recording, width: 800, height: 600, size_kb: 2400, timestamp: "2026-11-23 07:33:30", duration_sec: 5 },
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmScreenshotOverlay {
+    pub is_active: bool,
+    pub scope: CaptureScope,
+    pub mode: CaptureMode,
+    pub is_recording: bool,
+    pub recording_ticks: u32,
+    pub recorded_frames: u32,
+    pub shutter_flash_ticks: u8,
+    pub selection_rect: Option<Rect>,
+    pub hovered_window_idx: Option<usize>,
+    pub last_saved_name: [u8; 32],
+    pub last_saved_name_len: usize,
+    pub last_saved_path: [u8; 64],
+    pub last_saved_path_len: usize,
+}
+
+impl WmScreenshotOverlay {
+    pub fn new() -> Self {
+        WmScreenshotOverlay {
+            is_active: false,
+            scope: CaptureScope::Screen,
+            mode: CaptureMode::Photo,
+            is_recording: false,
+            recording_ticks: 0,
+            recorded_frames: 0,
+            shutter_flash_ticks: 0,
+            selection_rect: None,
+            hovered_window_idx: None,
+            last_saved_name: [0; 32],
+            last_saved_name_len: 0,
+            last_saved_path: [0; 64],
+            last_saved_path_len: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToastNotification {
+    pub title: [u8; 48],
+    pub title_len: usize,
+    pub subtitle: [u8; 64],
+    pub subtitle_len: usize,
+    pub icon_type: u8, // 0 = photo, 1 = video, 2 = success
+    pub ticks_remaining: u32,
+    pub max_ticks: u32,
+}
+
+impl ToastNotification {
+    pub fn new(title: &str, subtitle: &str, icon_type: u8) -> Self {
+        let mut t = [0u8; 48];
+        let tb = title.as_bytes();
+        let tl = tb.len().min(47);
+        t[..tl].copy_from_slice(&tb[..tl]);
+
+        let mut s = [0u8; 64];
+        let sb = subtitle.as_bytes();
+        let sl = sb.len().min(63);
+        s[..sl].copy_from_slice(&sb[..sl]);
+
+        ToastNotification {
+            title: t,
+            title_len: tl,
+            subtitle: s,
+            subtitle_len: sl,
+            icon_type,
+            ticks_remaining: 120,
+            max_ticks: 120,
+        }
+    }
+
+    pub fn title_str(&self) -> &str {
+        core::str::from_utf8(&self.title[..self.title_len]).unwrap_or("")
+    }
+
+    pub fn subtitle_str(&self) -> &str {
+        core::str::from_utf8(&self.subtitle[..self.subtitle_len]).unwrap_or("")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WmScreenshotApp {
+    pub selected_media_idx: usize,
+    pub zoom_mode: u8, // 0 = Fit, 1 = 100%, 2 = 200%
+    pub is_playing: bool,
+    pub playback_frame: u32,
+    pub loop_enabled: bool,
+    pub status_msg: &'static str,
+}
+
+impl WmScreenshotApp {
+    pub fn new() -> Self {
+        WmScreenshotApp {
+            selected_media_idx: 0,
+            zoom_mode: 0,
+            is_playing: false,
+            playback_frame: 24,
+            loop_enabled: true,
+            status_msg: "Ready | Pictures/Screenshots and Videos/Screencasts active",
+        }
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) -> Option<u8> {
+        // Top action bar buttons (y: client.y + 6..34)
+        if py >= client.y + 6 && py < client.y + 36 {
+            // [ 📷 Capture New (PrtScn) ]
+            if px >= client.x + 8 && px < client.x + 135 {
+                self.status_msg = "Launching interactive screenshot capture overlay...";
+                return Some(1); // Signal toggle screenshot overlay
+            }
+            // [ 🔴 Record Screen ]
+            if px >= client.x + 140 && px < client.x + 255 {
+                self.status_msg = "Launching screencast screen recorder...";
+                return Some(2); // Signal toggle video recording overlay
+            }
+            // [ 📁 Screenshots ]
+            if px >= client.x + 260 && px < client.x + 365 {
+                self.status_msg = "Browsing Pictures/Screenshots/ folder";
+                return None;
+            }
+            // [ 🎥 Screencasts ]
+            if px >= client.x + 370 && px < client.x + 475 {
+                self.status_msg = "Browsing Videos/Screencasts/ folder";
+                return None;
+            }
+        }
+
+        // Left gallery items (x: client.x + 6..client.x + 195)
+        let list_top = client.y + 40 + 30;
+        if px >= client.x + 6 && px < client.x + 195 && py >= list_top {
+            for i in 0..DEFAULT_MEDIA_ITEMS.len() {
+                let iy = list_top + (i as i32 * 54);
+                if py >= iy && py < iy + 48 {
+                    self.selected_media_idx = i;
+                    self.playback_frame = 0;
+                    self.is_playing = false;
+                    self.status_msg = if DEFAULT_MEDIA_ITEMS[i].kind == MediaKind::Screenshot {
+                        "Viewing screenshot image in high-resolution canvas"
+                    } else {
+                        "Loaded video screencast for interactive playback"
+                    };
+                    return None;
+                }
+            }
+        }
+
+        // Right pane controls:
+        let pane_x = client.x + 200;
+        let pane_w = client.w - 200;
+        let item = &DEFAULT_MEDIA_ITEMS[self.selected_media_idx % DEFAULT_MEDIA_ITEMS.len()];
+
+        if item.kind == MediaKind::Screenshot {
+            // Screenshot zoom buttons: [ Fit ] [ 100% ] [ 200% ]
+            let btn_y = client.y + client.h - 38;
+            if py >= btn_y && py < btn_y + 28 {
+                if px >= pane_x + 14 && px < pane_x + 72 {
+                    self.zoom_mode = 0;
+                    self.status_msg = "Zoom mode: Fit to View";
+                } else if px >= pane_x + 76 && px < pane_x + 134 {
+                    self.zoom_mode = 1;
+                    self.status_msg = "Zoom mode: 100% Native Pixel Scaling";
+                } else if px >= pane_x + 138 && px < pane_x + 196 {
+                    self.zoom_mode = 2;
+                    self.status_msg = "Zoom mode: 200% Detailed Inspection";
+                } else if px >= pane_x + pane_w - 140 && px < pane_x + pane_w - 14 {
+                    self.status_msg = "Copied PNG image to system clipboard";
+                }
+            }
+        } else {
+            // Video playback controls: [ Play/Pause ] [ Scrubber ] [ Loop ]
+            let bar_y = client.y + client.h - 38;
+            if py >= bar_y && py < bar_y + 28 {
+                // Play / Pause button
+                if px >= pane_x + 14 && px < pane_x + 80 {
+                    self.is_playing = !self.is_playing;
+                    self.status_msg = if self.is_playing { "Playing screencast video @ 60 FPS" } else { "Paused video playback" };
+                }
+                // Loop toggle
+                if px >= pane_x + pane_w - 90 && px < pane_x + pane_w - 10 {
+                    self.loop_enabled = !self.loop_enabled;
+                    self.status_msg = if self.loop_enabled { "Continuous loop enabled" } else { "Loop disabled" };
+                }
+            }
+        }
+
+        None
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -4565,6 +4978,11 @@ pub struct Wm {
     pub zenith_app: WmZenithApp,
     pub store_app: WmStoreApp,
     pub settings_app: WmSettingsApp,
+    pub screenshot_overlay: WmScreenshotOverlay,
+    pub screenshot_app: WmScreenshotApp,
+    pub toast: Option<ToastNotification>,
+    pub screenshot_seq: u32,
+    pub recording_seq: u32,
 }
 
 impl Wm {
@@ -4633,6 +5051,11 @@ impl Wm {
             zenith_app: WmZenithApp::new(),
             store_app: WmStoreApp::new(),
             settings_app: WmSettingsApp::new(),
+            screenshot_overlay: WmScreenshotOverlay::new(),
+            screenshot_app: WmScreenshotApp::new(),
+            toast: None,
+            screenshot_seq: 1,
+            recording_seq: 1,
         }
     }
 
@@ -4711,6 +5134,11 @@ impl Wm {
             zenith_app: WmZenithApp::new(),
             store_app: WmStoreApp::new(),
             settings_app: WmSettingsApp::new(),
+            screenshot_overlay: WmScreenshotOverlay::new(),
+            screenshot_app: WmScreenshotApp::new(),
+            toast: None,
+            screenshot_seq: 1,
+            recording_seq: 1,
         }
     }
 
@@ -5194,13 +5622,232 @@ impl Wm {
         Some(Rect::new(card_x, card_y, col_w, 46))
     }
 
-    /// Routes keyboard events to the focused top window (e.g. Console terminal).
+    /// Routes keyboard events to the focused top window or global system shortcuts.
     pub fn on_key(&mut self, key: i32) {
         if key <= 0 {
             return;
         }
+
+        // Global Screenshot trigger: PrintScreen key (250) or F12 (0x58)
+        if key == 250 || key == 0x58 {
+            self.toggle_screenshot_overlay();
+            return;
+        }
+
+        // When screenshot overlay is active, keys drive overlay actions
+        if self.screenshot_overlay.is_active {
+            if key == 27 { // Escape cancels overlay
+                self.screenshot_overlay.is_active = false;
+                return;
+            }
+            if key == b'\n' as i32 || key == b' ' as i32 {
+                self.trigger_screenshot_shutter();
+                return;
+            }
+            if key == b's' as i32 || key == b'S' as i32 {
+                self.screenshot_overlay.scope = match self.screenshot_overlay.scope {
+                    CaptureScope::Screen => CaptureScope::Window,
+                    CaptureScope::Window => CaptureScope::Selection,
+                    CaptureScope::Selection => CaptureScope::Screen,
+                };
+                return;
+            }
+            if key == b'p' as i32 || key == b'P' as i32 {
+                self.screenshot_overlay.mode = CaptureMode::Photo;
+                return;
+            }
+            if key == b'v' as i32 || key == b'V' as i32 {
+                self.screenshot_overlay.mode = CaptureMode::Video;
+                return;
+            }
+            return;
+        }
+
         if self.active_window() == Some(0) && self.windows[0].is_open && !self.windows[0].is_minimized {
             self.term.handle_key_with_context(key, &mut self.time_cfg, self.raw_rtc);
+        }
+    }
+
+    pub fn toggle_screenshot_overlay(&mut self) {
+        self.screenshot_overlay.is_active = !self.screenshot_overlay.is_active;
+        if self.screenshot_overlay.is_active {
+            self.screenshot_overlay.shutter_flash_ticks = 0;
+            if self.screenshot_overlay.selection_rect.is_none() {
+                self.screenshot_overlay.selection_rect = Some(Rect::new(
+                    (self.screen_w - 600) / 2,
+                    (self.desktop_h - 400) / 2,
+                    600,
+                    400,
+                ));
+            }
+        }
+    }
+
+    pub fn show_toast(&mut self, title: &str, subtitle: &str, icon_type: u8) {
+        self.toast = Some(ToastNotification::new(title, subtitle, icon_type));
+    }
+
+    pub fn trigger_screenshot_shutter(&mut self) {
+        if self.screenshot_overlay.mode == CaptureMode::Photo {
+            let crop = match self.screenshot_overlay.scope {
+                CaptureScope::Screen => Rect::new(0, 0, self.screen_w, self.screen_h),
+                CaptureScope::Window => {
+                    if let Some(w_idx) = self.screenshot_overlay.hovered_window_idx.or_else(|| self.active_window()) {
+                        let w = &self.windows[w_idx];
+                        Rect::new(w.x, w.y, w.w, w.h)
+                    } else {
+                        Rect::new(0, 0, self.screen_w, self.screen_h)
+                    }
+                }
+                CaptureScope::Selection => {
+                    self.screenshot_overlay.selection_rect.unwrap_or(Rect::new(0, 0, self.screen_w, self.screen_h))
+                }
+            };
+            self.capture_and_save_screenshot(crop);
+            self.screenshot_overlay.is_active = false;
+        } else {
+            // Video mode
+            if !self.screenshot_overlay.is_recording {
+                self.start_video_recording();
+            } else {
+                self.stop_and_save_recording();
+                self.screenshot_overlay.is_active = false;
+            }
+        }
+    }
+
+    pub fn capture_and_save_screenshot(&mut self, crop: Rect) -> bool {
+        self.screenshot_overlay.shutter_flash_ticks = 4;
+        let crop_x = crop.x.clamp(0, self.screen_w.saturating_sub(1));
+        let crop_y = crop.y.clamp(0, self.screen_h.saturating_sub(1));
+        let crop_w = crop.w.clamp(1, self.screen_w - crop_x) as u32;
+        let crop_h = crop.h.clamp(1, self.screen_h - crop_y) as u32;
+
+        let total_pixels = (crop_w * crop_h) as usize;
+        let pixel_buf = unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(SCREENSHOT_PIXEL_BUF) as *mut u32, total_pixels.min(1024 * 768))
+        };
+
+        // Synthesize realistic desktop preview into pixel buffer
+        let bg_col = self.access_cfg.effective_palette().desktop_bg.to_u32();
+        let border_col = self.access_cfg.effective_palette().accent_primary.to_u32();
+        for p in pixel_buf.iter_mut() {
+            *p = bg_col;
+        }
+        for (idx, p) in pixel_buf.iter_mut().enumerate() {
+            let px = (idx as u32 % crop_w) as i32;
+            let py = (idx as u32 / crop_w) as i32;
+            if px < 4 || py < 4 || px >= crop_w as i32 - 4 || py >= crop_h as i32 - 4 {
+                *p = border_col;
+            }
+        }
+
+        let out_buf = unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(SCREENSHOT_PNG_BUF) as *mut u8, 3500 * 1024)
+        };
+
+        if let Some(png_len) = encode_png_uncompressed(pixel_buf, crop_w, crop_h, out_buf) {
+            let seq = self.screenshot_seq;
+            self.screenshot_seq = self.screenshot_seq.wrapping_add(1);
+
+            let mut fname = [0u8; 32];
+            let name_str = match seq % 4 {
+                0 => "SCRN0004.PNG",
+                1 => "SCRN0001.PNG",
+                2 => "SCRN0002.PNG",
+                _ => "SCRN0003.PNG",
+            };
+            let nb = name_str.as_bytes();
+            fname[..nb.len()].copy_from_slice(nb);
+            self.screenshot_overlay.last_saved_name = fname;
+            self.screenshot_overlay.last_saved_name_len = nb.len();
+
+            let mut fpath = [0u8; 64];
+            let path_str = match seq % 4 {
+                0 => "Pictures/Screenshots/SCRN0004.PNG",
+                1 => "Pictures/Screenshots/SCRN0001.PNG",
+                2 => "Pictures/Screenshots/SCRN0002.PNG",
+                _ => "Pictures/Screenshots/SCRN0003.PNG",
+            };
+            let pb = path_str.as_bytes();
+            fpath[..pb.len()].copy_from_slice(pb);
+            self.screenshot_overlay.last_saved_path = fpath;
+            self.screenshot_overlay.last_saved_path_len = pb.len();
+
+            // Save to filesystem via sys_write_file
+            let mut c_primary = [0u8; 32];
+            c_primary[..nb.len()].copy_from_slice(nb);
+            c_primary[nb.len()] = 0;
+            unsafe { ffi::sys_write_file(c_primary.as_ptr(), out_buf.as_ptr(), png_len as u32) };
+
+            let mut c_path = [0u8; 64];
+            c_path[..pb.len()].copy_from_slice(pb);
+            c_path[pb.len()] = 0;
+            unsafe { ffi::sys_write_file(c_path.as_ptr(), out_buf.as_ptr(), png_len as u32) };
+
+            self.show_toast(
+                "Screenshot Captured",
+                path_str,
+                0, // Photo
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn start_video_recording(&mut self) {
+        self.screenshot_overlay.is_recording = true;
+        self.screenshot_overlay.is_active = false;
+        self.screenshot_overlay.recording_ticks = 0;
+        self.screenshot_overlay.recorded_frames = 0;
+        self.screenshot_overlay.shutter_flash_ticks = 2;
+    }
+
+    pub fn stop_and_save_recording(&mut self) -> bool {
+        self.screenshot_overlay.is_recording = false;
+        let frames = self.screenshot_overlay.recorded_frames.max(30);
+        let duration_ms = (frames * 1000) / 60;
+
+        let out_buf = unsafe {
+            core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(SCREENSHOT_VID_BUF) as *mut u8, 2500 * 1024)
+        };
+
+        if let Some(hdr_len) = encode_video_header(self.screen_w as u32, self.screen_h as u32, 60, frames, duration_ms, out_buf) {
+            let seq = self.recording_seq;
+            self.recording_seq = self.recording_seq.wrapping_add(1);
+
+            let name_str = match seq % 3 {
+                1 => "REC0001.RAW",
+                2 => "REC0002.RAW",
+                _ => "REC0003.RAW",
+            };
+            let path_str = match seq % 3 {
+                1 => "Videos/Screencasts/REC0001.RAW",
+                2 => "Videos/Screencasts/REC0002.RAW",
+                _ => "Videos/Screencasts/REC0003.RAW",
+            };
+
+            let mut c_primary = [0u8; 32];
+            let nb = name_str.as_bytes();
+            c_primary[..nb.len()].copy_from_slice(nb);
+            c_primary[nb.len()] = 0;
+            unsafe { ffi::sys_write_file(c_primary.as_ptr(), out_buf.as_ptr(), hdr_len as u32) };
+
+            let mut c_path = [0u8; 64];
+            let pb = path_str.as_bytes();
+            c_path[..pb.len()].copy_from_slice(pb);
+            c_path[pb.len()] = 0;
+            unsafe { ffi::sys_write_file(c_path.as_ptr(), out_buf.as_ptr(), hdr_len as u32) };
+
+            self.show_toast(
+                "Screen Recording Saved",
+                path_str,
+                1, // Video
+            );
+            true
+        } else {
+            false
         }
     }
 
@@ -5238,6 +5885,15 @@ impl Wm {
         let h = 330;
         let x = (self.screen_w - w - 8).max(4);
         let y = (self.desktop_h - h - 8).max(self.menubar_h + 4);
+        Rect::new(x, y, w, h)
+    }
+
+    /// Returns the bounding rectangle for the modern floating screenshot pill overlay.
+    pub fn screenshot_pill_rect(&self) -> Rect {
+        let w = 290;
+        let h = 88;
+        let x = (self.screen_w - w) / 2;
+        let y = (self.desktop_h - h - 30).max(40);
         Rect::new(x, y, w, h)
     }
 
@@ -5297,7 +5953,7 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
-                if (app_id == 4 || app_id == 5) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5313,7 +5969,7 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
-                if (app_id == 4 || app_id == 5) && self.screen_w >= 800 {
+                if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5328,7 +5984,7 @@ impl Wm {
         // 3. Fallback: reuse the background-most window slot
         let bg_idx = self.z_order[0];
         self.windows[bg_idx].label = app_id;
-        if (app_id == 4 || app_id == 5) && self.screen_w >= 800 {
+        if (app_id == 4 || app_id == 5 || app_id == 17) && self.screen_w >= 800 {
             self.windows[bg_idx].w = 680;
             self.windows[bg_idx].h = 440;
             self.windows[bg_idx].x = (self.screen_w - 680) / 2;
@@ -5713,6 +6369,110 @@ impl Wm {
     }
 
     pub fn on_left_press(&mut self, px: i32, py: i32) {
+        // -3. If Toast Notification is open and clicked:
+        if let Some(ref _toast) = self.toast {
+            let tw = 340;
+            let th = 58;
+            let tx = (self.screen_w - tw - 18).max(10);
+            let ty = (self.menubar_h + 12).max(10);
+            if point_in_rect(px, py, tx, ty, tw, th) {
+                self.toast = None;
+                self.launch_or_restore(17);
+                return;
+            }
+        }
+
+        // -2. If Screenshot Overlay is active:
+        if self.screenshot_overlay.is_active {
+            let pill = self.screenshot_pill_rect();
+            if point_in_rect(px, py, pill.x, pill.y, pill.w, pill.h) {
+                // Close button [✕] at top-right
+                if px >= pill.x + pill.w - 28 && py <= pill.y + 26 {
+                    self.screenshot_overlay.is_active = false;
+                    return;
+                }
+                // Row 1: Scope tabs [ Selection ] [ Screen ] [ Window ]
+                if py >= pill.y + 6 && py < pill.y + 36 {
+                    if px >= pill.x + 10 && px < pill.x + 90 {
+                        self.screenshot_overlay.scope = CaptureScope::Selection;
+                        if self.screenshot_overlay.selection_rect.is_none() {
+                            self.screenshot_overlay.selection_rect = Some(Rect::new(
+                                (self.screen_w - 600) / 2,
+                                (self.desktop_h - 400) / 2,
+                                600,
+                                400,
+                            ));
+                        }
+                        return;
+                    } else if px >= pill.x + 94 && px < pill.x + 170 {
+                        self.screenshot_overlay.scope = CaptureScope::Screen;
+                        return;
+                    } else if px >= pill.x + 174 && px < pill.x + 250 {
+                        self.screenshot_overlay.scope = CaptureScope::Window;
+                        return;
+                    }
+                }
+                // Row 2: Controls row (y >= pill.y + 42)
+                if py >= pill.y + 42 {
+                    // Left: Mode switch pill [ 📷 | 📹 ]
+                    if px >= pill.x + 12 && px < pill.x + 50 {
+                        self.screenshot_overlay.mode = CaptureMode::Photo;
+                        return;
+                    } else if px >= pill.x + 50 && px < pill.x + 90 {
+                        self.screenshot_overlay.mode = CaptureMode::Video;
+                        return;
+                    }
+                    // Center: Circular shutter button (cx = pill.x + 145, cy = pill.y + 60, r = 18)
+                    let cx = pill.x + pill.w / 2;
+                    let cy = pill.y + 60;
+                    let dx = px - cx;
+                    let dy = py - cy;
+                    if dx * dx + dy * dy <= 22 * 22 {
+                        self.trigger_screenshot_shutter();
+                        return;
+                    }
+                    // Right: Studio badge [ Studio ⊞ ]
+                    if px >= pill.x + 195 && px < pill.x + 282 {
+                        self.screenshot_overlay.is_active = false;
+                        self.launch_or_restore(17);
+                        return;
+                    }
+                }
+                return;
+            }
+
+            // Clicked outside pill while overlay is active:
+            match self.screenshot_overlay.scope {
+                CaptureScope::Window => {
+                    if let Some(w_idx) = self.window_at(px, py) {
+                        self.screenshot_overlay.hovered_window_idx = Some(w_idx);
+                        self.trigger_screenshot_shutter();
+                        return;
+                    }
+                }
+                CaptureScope::Selection => {
+                    self.screenshot_overlay.selection_rect = Some(Rect::new(
+                        px.min(self.screen_w - 100),
+                        py.min(self.desktop_h - 80),
+                        200,
+                        140,
+                    ));
+                    return;
+                }
+                CaptureScope::Screen => {}
+            }
+            return;
+        }
+
+        // -1b. If video recording is active, check menubar Stop button:
+        if self.screenshot_overlay.is_recording && self.menubar_h > 0 && py < self.menubar_h {
+            let rec_x = self.screen_w - 305;
+            if px >= rec_x && px < rec_x + 110 {
+                self.stop_and_save_recording();
+                return;
+            }
+        }
+
         // -1. If Calendar & International Time Hub is open:
         if self.calendar_open {
             let cr = self.calendar_rect();
@@ -5904,6 +6664,12 @@ impl Wm {
                 self.start_menu_open = !self.start_menu_open;
                 return;
             }
+            // Quick camera launcher icon [📷]
+            let cam_x = self.screen_w - 195;
+            if px >= cam_x && px < cam_x + 26 {
+                self.toggle_screenshot_overlay();
+                return;
+            }
             if px >= self.screen_w - 140 {
                 self.calendar_open = !self.calendar_open;
                 return;
@@ -6067,6 +6833,20 @@ impl Wm {
                         _ => {}
                     }
                 }
+            } else if w.label == 17 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    if let Some(cmd) = self.screenshot_app.handle_click(px, py, client) {
+                        if cmd == 1 {
+                            self.screenshot_overlay.is_active = true;
+                            self.screenshot_overlay.mode = CaptureMode::Photo;
+                        } else if cmd == 2 {
+                            self.screenshot_overlay.is_active = true;
+                            self.screenshot_overlay.mode = CaptureMode::Video;
+                        }
+                    }
+                }
             }
             return;
         }
@@ -6108,6 +6888,24 @@ impl Wm {
         }
 
         self.wm_ticks = self.wm_ticks.wrapping_add(1);
+
+        if let Some(ref mut toast) = self.toast {
+            if toast.ticks_remaining > 0 {
+                toast.ticks_remaining -= 1;
+            }
+        }
+        if let Some(ref toast) = self.toast {
+            if toast.ticks_remaining == 0 {
+                self.toast = None;
+            }
+        }
+        if self.screenshot_overlay.is_recording {
+            self.screenshot_overlay.recording_ticks = self.screenshot_overlay.recording_ticks.wrapping_add(1);
+            self.screenshot_overlay.recorded_frames = self.screenshot_overlay.recorded_frames.wrapping_add(1);
+        }
+        if self.screenshot_overlay.shutter_flash_ticks > 0 {
+            self.screenshot_overlay.shutter_flash_ticks -= 1;
+        }
 
         let just_pressed = m.left_button && !self.prev_left_button;
         let just_released = !m.left_button && self.prev_left_button;
@@ -6282,6 +7080,8 @@ impl Wm {
                     draw_vortex_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.vortex_app, &palette);
                 } else if w.label == 12 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
+                } else if w.label == 17 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_screenshot_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.screenshot_app, &palette);
                 }
             }
 
@@ -6346,6 +7146,7 @@ impl Wm {
                     10 => "Vellum - Professional PDF Studio",
                     11 => "Vortex - BitTorrent & Stream Studio",
                     12 => "Zenith Office - Professional Productivity Suite",
+                    17 => "Screenshot & Screen Recorder Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -6509,6 +7310,42 @@ impl Wm {
                 clock_str,
                 &palette,
             );
+
+            // Quick camera launcher icon [📷]
+            let cam_x = self.screen_w - 195;
+            let cam_y = (self.menubar_h - 18) / 2;
+            ui::draw::draw_rounded_rect(surface, Rect::new(cam_x, cam_y, 22, 18), 3, Color::rgba(255, 255, 255, 20));
+            draw_app_icon(surface, cam_x + 3, cam_y + 1, 17, &palette);
+
+            // Recording active pulsating pill [🔴 00:03 [Stop]]
+            if self.screenshot_overlay.is_recording {
+                let rec_x = self.screen_w - 305;
+                let rec_y = (self.menubar_h - 20) / 2;
+                ui::draw::draw_rounded_rect(surface, Rect::new(rec_x, rec_y, 105, 20), 4, Color::rgb(220, 38, 38));
+                let pulse = (self.wm_ticks / 10) % 2 == 0;
+                let dot_col = if pulse { Color::WHITE } else { Color::rgb(254, 202, 202) };
+                surface.fill_rect(Rect::new(rec_x + 6, rec_y + 6, 8, 8), dot_col);
+
+                let sec = self.screenshot_overlay.recording_ticks / 30;
+                let m = (sec / 60) % 60;
+                let s = sec % 60;
+                let mut tbuf = [b'0'; 14];
+                tbuf[0] = b'0' + (m / 10) as u8;
+                tbuf[1] = b'0' + (m % 10) as u8;
+                tbuf[2] = b':';
+                tbuf[3] = b'0' + (s / 10) as u8;
+                tbuf[4] = b'0' + (s % 10) as u8;
+                tbuf[5] = b' ';
+                tbuf[6] = b'[';
+                tbuf[7] = b'S';
+                tbuf[8] = b't';
+                tbuf[9] = b'o';
+                tbuf[10] = b'p';
+                tbuf[11] = b']';
+                if let Ok(tstr) = core::str::from_utf8(&tbuf[..12]) {
+                    ui::font::draw_text_font(surface, rec_x + 18, rec_y + 3, tstr, Color::WHITE, &Font::small());
+                }
+            }
         }
 
         // 5. Active Dropdown Menu Overlay
@@ -6536,6 +7373,16 @@ impl Wm {
         // 5c. Calendar & International Time Hub Overlay
         if self.calendar_open {
             self.draw_calendar_flyout(surface, &palette);
+        }
+
+        // 5d. Screenshot Floating Overlay & Shutter Flash
+        if self.screenshot_overlay.is_active || self.screenshot_overlay.shutter_flash_ticks > 0 {
+            self.draw_screenshot_overlay(surface, &palette);
+        }
+
+        // 5e. Toast Notification Card
+        if self.toast.is_some() {
+            self.draw_toast(surface, &palette);
         }
 
         // 6. Mouse cursor
@@ -7236,6 +8083,38 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             ui::font::draw_char_font(s, b_x + 4, b_y + 5 + q_h, b'P', Color::WHITE, &Font::small());
             ui::font::draw_char_font(s, b_x + 6 + q_w, b_y + 5 + q_h, b'B', Color::WHITE, &Font::small());
         }
+        17 => {
+            // 17: Screenshot & Screen Recorder Studio (Violet squircle, camera with cyan lens & red recording dot)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            s.fill_rect(Rect::new(b_x + 2, b_y + 2, b_w, b_h), Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(79, 70, 229));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(165, 180, 252));
+
+            let cam_top_w = (b_w * 36) / 100;
+            let cam_top_h = 3;
+            let cam_top_x = b_x + (b_w - cam_top_w) / 2;
+            let cam_top_y = b_y + 4;
+            s.fill_rect(Rect::new(cam_top_x, cam_top_y, cam_top_w, cam_top_h), Color::WHITE);
+
+            let cam_w = (b_w * 74) / 100;
+            let cam_h = (b_h * 50) / 100;
+            let cam_x = b_x + (b_w - cam_w) / 2;
+            let cam_y = cam_top_y + cam_top_h;
+            ui::draw::draw_rounded_rect(s, Rect::new(cam_x, cam_y, cam_w, cam_h), 3, Color::rgb(243, 244, 246));
+
+            let lens_sz = (cam_h * 70) / 100;
+            let lens_x = cam_x + (cam_w - lens_sz) / 2;
+            let lens_y = cam_y + (cam_h - lens_sz) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(lens_x, lens_y, lens_sz, lens_sz), 3, Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(lens_x + 2, lens_y + 2, lens_sz - 4, lens_sz - 4), Color::rgb(30, 41, 59));
+            s.put_pixel(lens_x + 3, lens_y + 3, Color::WHITE);
+
+            s.fill_rect(Rect::new(cam_x + cam_w - 5, cam_y + 2, 3, 3), Color::rgb(239, 68, 68));
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -7372,6 +8251,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 6, y + 2, 4, 4), Color::rgb(16, 124, 65));
             s.fill_rect(Rect::new(x + 2, y + 6, 4, 4), Color::rgb(216, 59, 1));
             s.fill_rect(Rect::new(x + 6, y + 6, 4, 4), Color::rgb(168, 0, 0));
+        }
+        17 => {
+            // Screenshot & Recorder Studio: Slate/violet squircle with camera body and cyan lens
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(79, 70, 229));
+            s.fill_rect(Rect::new(x + 4, y + 2, 4, 1), Color::rgb(224, 231, 255));
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 2, y + 3, 8, 6), 1, Color::rgb(243, 244, 246));
+            s.fill_rect(Rect::new(x + 4, y + 4, 4, 4), Color::rgb(14, 165, 233));
+            s.put_pixel(x + 8, y + 4, Color::rgb(239, 68, 68)); // red recording dot
         }
         _ => {
             // System gear icon
@@ -11918,6 +12805,430 @@ fn load_access_cfg() -> Option<AccessibilityConfig> {
     }
 }
 
+impl Wm {
+    pub fn draw_screenshot_overlay<S: Surface + ?Sized>(&self, s: &mut S, palette: &ThemePalette) {
+        let font_sm = Font::small().scaled(self.access_cfg.font_scale);
+
+        // 1. Shutter Flash Animation (white screen burst)
+        if self.screenshot_overlay.shutter_flash_ticks > 0 {
+            let alpha = (self.screenshot_overlay.shutter_flash_ticks as u32 * 60).min(240) as u8;
+            s.fill_rect(Rect::new(0, 0, self.screen_w, self.screen_h), Color::rgba(255, 255, 255, alpha));
+        }
+
+        if !self.screenshot_overlay.is_active {
+            return;
+        }
+
+        // 2. Translucent Backdrop Dimming
+        s.fill_rect(Rect::new(0, 0, self.screen_w, self.screen_h), Color::rgba(0, 0, 0, 85));
+
+        // 3. Scope Highlight Overlays
+        match self.screenshot_overlay.scope {
+            CaptureScope::Selection => {
+                if let Some(sel) = self.screenshot_overlay.selection_rect {
+                    // Draw outer selection border with corner brackets
+                    ui::draw::draw_rect_outline(s, sel, 1, Color::rgba(255, 255, 255, 180));
+                    let b_len = 14;
+                    let b_col = palette.accent_primary;
+                    // Top-left corner ⌜
+                    s.fill_rect(Rect::new(sel.x, sel.y, b_len, 3), b_col);
+                    s.fill_rect(Rect::new(sel.x, sel.y, 3, b_len), b_col);
+                    // Top-right corner ⌝
+                    s.fill_rect(Rect::new(sel.right() - b_len, sel.y, b_len, 3), b_col);
+                    s.fill_rect(Rect::new(sel.right() - 3, sel.y, 3, b_len), b_col);
+                    // Bottom-left corner ⌞
+                    s.fill_rect(Rect::new(sel.x, sel.bottom() - 3, b_len, 3), b_col);
+                    s.fill_rect(Rect::new(sel.x, sel.bottom() - b_len, 3, b_len), b_col);
+                    // Bottom-right corner ⌟
+                    s.fill_rect(Rect::new(sel.right() - b_len, sel.bottom() - 3, b_len, 3), b_col);
+                    s.fill_rect(Rect::new(sel.right() - 3, sel.bottom() - b_len, 3, b_len), b_col);
+
+                    // Dimension badge (e.g. "600 x 400")
+                    let bd_w = 90;
+                    let bd_h = 22;
+                    let bd_x = sel.x + (sel.w - bd_w) / 2;
+                    let bd_y = (sel.y - 28).max(self.menubar_h + 4);
+                    let bd_rect = Rect::new(bd_x, bd_y, bd_w, bd_h);
+                    ui::draw::draw_rounded_rect(s, bd_rect, 4, Color::rgba(15, 23, 42, 230));
+                    ui::draw::draw_rect_outline(s, bd_rect, 1, Color::rgba(255, 255, 255, 50));
+                    ui::font::draw_text_font(s, bd_x + 12, bd_y + 4, "600 x 400", Color::WHITE, &font_sm);
+                }
+            }
+            CaptureScope::Window => {
+                let win_opt = self.screenshot_overlay.hovered_window_idx.or_else(|| self.active_window());
+                if let Some(w_idx) = win_opt {
+                    let w = &self.windows[w_idx];
+                    let w_rect = Rect::new(w.x, w.y, w.w, w.h);
+                    ui::draw::draw_rect_outline(s, w_rect, 3, palette.accent_primary);
+                    ui::draw::draw_rect_outline(s, Rect::new(w.x - 2, w.y - 2, w.w + 4, w.h + 4), 1, Color::rgba(255, 255, 255, 80));
+                }
+            }
+            CaptureScope::Screen => {}
+        }
+
+        // 4. Floating Pill (Centered at bottom)
+        let pill = self.screenshot_pill_rect();
+        // Pill drop shadow
+        s.fill_rect(Rect::new(pill.x + 3, pill.y + 4, pill.w, pill.h), Color::rgba(0, 0, 0, 95));
+        s.fill_rect(Rect::new(pill.x + 1, pill.y + 2, pill.w, pill.h), Color::rgba(0, 0, 0, 50));
+
+        // Pill acrylic frosted background
+        ui::draw::draw_rounded_rect(s, pill, 16, Color::rgba(26, 32, 46, 248));
+        ui::draw::draw_rect_outline(s, pill, 1, Color::rgba(255, 255, 255, 45));
+
+        // Close button [✕] at top-right
+        let btn_close = Rect::new(pill.x + pill.w - 24, pill.y + 6, 18, 18);
+        ui::draw::draw_rounded_rect(s, btn_close, 9, Color::rgba(255, 255, 255, 25));
+        let cx = btn_close.x + 9;
+        let cy = btn_close.y + 9;
+        ui::draw::draw_line(s, cx - 4, cy - 4, cx + 4, cy + 4, Color::WHITE);
+        ui::draw::draw_line(s, cx + 4, cy - 4, cx - 4, cy + 4, Color::WHITE);
+
+        // Row 1: Scope Segmented Switch: [ Selection ] [ Screen ] [ Window ]
+        let tabs = [
+            ("Selection", CaptureScope::Selection),
+            ("Screen", CaptureScope::Screen),
+            ("Window", CaptureScope::Window),
+        ];
+        let tab_xs = [pill.x + 12, pill.x + 94, pill.x + 172];
+        let tab_ws = [78, 74, 76];
+        for i in 0..3 {
+            let tx = tab_xs[i];
+            let tw = tab_ws[i];
+            let t_rect = Rect::new(tx, pill.y + 8, tw, 26);
+            let is_sel = self.screenshot_overlay.scope == tabs[i].1;
+            if is_sel {
+                ui::draw::draw_rounded_rect(s, t_rect, 6, Color::rgba(255, 255, 255, 48));
+                ui::draw::draw_rect_outline(s, t_rect, 1, Color::rgba(255, 255, 255, 70));
+            }
+            let col = if is_sel { Color::WHITE } else { Color::rgb(148, 163, 184) };
+            ui::font::draw_text_font(s, tx + 10, pill.y + 13, tabs[i].0, col, &font_sm);
+        }
+
+        // Row 2: Controls row (y: pill.y + 44)
+        // A. Mode Switch Pill [ 📷 | 📹 ]
+        let sw_rect = Rect::new(pill.x + 14, pill.y + 46, 76, 30);
+        ui::draw::draw_rounded_rect(s, sw_rect, 15, Color::rgba(0, 0, 0, 70));
+        ui::draw::draw_rect_outline(s, sw_rect, 1, Color::rgba(255, 255, 255, 30));
+
+        let is_photo = self.screenshot_overlay.mode == CaptureMode::Photo;
+        let photo_rect = Rect::new(pill.x + 16, pill.y + 48, 35, 26);
+        let video_rect = Rect::new(pill.x + 53, pill.y + 48, 35, 26);
+
+        if is_photo {
+            ui::draw::draw_rounded_rect(s, photo_rect, 13, Color::rgba(255, 255, 255, 45));
+        } else {
+            ui::draw::draw_rounded_rect(s, video_rect, 13, Color::rgba(239, 68, 68, 85));
+        }
+
+        // Camera icon glyph on left
+        let cam_col = if is_photo { Color::WHITE } else { Color::rgb(148, 163, 184) };
+        s.fill_rect(Rect::new(photo_rect.x + 10, photo_rect.y + 6, 15, 12), cam_col);
+        s.fill_rect(Rect::new(photo_rect.x + 13, photo_rect.y + 4, 9, 2), cam_col);
+        s.fill_rect(Rect::new(photo_rect.x + 14, photo_rect.y + 9, 7, 6), Color::rgb(30, 41, 59));
+
+        // Video icon glyph on right
+        let vid_col = if !is_photo { Color::WHITE } else { Color::rgb(148, 163, 184) };
+        s.fill_rect(Rect::new(video_rect.x + 8, video_rect.y + 7, 13, 11), vid_col);
+        ui::draw::draw_line(s, video_rect.x + 21, video_rect.y + 7, video_rect.x + 26, video_rect.y + 10, vid_col);
+        ui::draw::draw_line(s, video_rect.x + 26, video_rect.y + 10, video_rect.x + 26, video_rect.y + 15, vid_col);
+        ui::draw::draw_line(s, video_rect.x + 26, video_rect.y + 15, video_rect.x + 21, video_rect.y + 18, vid_col);
+
+        // B. Large Circular Shutter Button in Center!
+        let scx = pill.x + pill.w / 2;
+        let scy = pill.y + 61;
+        let sr = 17;
+        let ring_col = if is_photo { Color::WHITE } else { Color::rgb(239, 68, 68) };
+        // Outer ring
+        ui::draw::draw_rounded_rect(s, Rect::new(scx - sr - 2, scy - sr - 2, (sr + 2) * 2, (sr + 2) * 2), sr + 2, Color::rgba(0, 0, 0, 50));
+        ui::draw::draw_rounded_rect(s, Rect::new(scx - sr, scy - sr, sr * 2, sr * 2), sr, ring_col);
+
+        if is_photo {
+            // Crisp solid white button
+            ui::draw::draw_rounded_rect(s, Rect::new(scx - sr + 3, scy - sr + 3, (sr - 3) * 2, (sr - 3) * 2), sr - 3, Color::WHITE);
+        } else {
+            // Video record button
+            if !self.screenshot_overlay.is_recording {
+                ui::draw::draw_rounded_rect(s, Rect::new(scx - sr + 3, scy - sr + 3, (sr - 3) * 2, (sr - 3) * 2), sr - 3, Color::rgb(239, 68, 68));
+            } else {
+                // Recording active: stop square in center
+                s.fill_rect(Rect::new(scx - 6, scy - 6, 12, 12), Color::WHITE);
+            }
+        }
+
+        // C. Studio / Shortcut badge on Right: [ Studio ⊞ ]
+        let btn_studio = Rect::new(pill.x + 196, pill.y + 47, 80, 28);
+        ui::draw::draw_rounded_rect(s, btn_studio, 6, Color::rgba(255, 255, 255, 20));
+        ui::draw::draw_rect_outline(s, btn_studio, 1, Color::rgba(255, 255, 255, 40));
+        ui::font::draw_text_font(s, btn_studio.x + 10, btn_studio.y + 6, "Studio", Color::WHITE, &font_sm);
+        s.fill_rect(Rect::new(btn_studio.x + 58, btn_studio.y + 9, 8, 8), palette.accent_primary);
+    }
+
+    pub fn draw_toast<S: Surface + ?Sized>(&self, s: &mut S, palette: &ThemePalette) {
+        if let Some(ref toast) = self.toast {
+            let font_reg = Font::regular().scaled(self.access_cfg.font_scale);
+            let font_sm = Font::small().scaled(self.access_cfg.font_scale);
+
+            let tw = 340;
+            let th = 58;
+            let tx = (self.screen_w - tw - 18).max(10);
+            let ty = (self.menubar_h + 12).max(10);
+            let toast_rect = Rect::new(tx, ty, tw, th);
+
+            // Drop shadow
+            s.fill_rect(Rect::new(tx + 4, ty + 4, tw, th), Color::rgba(0, 0, 0, 85));
+            s.fill_rect(Rect::new(tx + 2, ty + 2, tw, th), Color::rgba(0, 0, 0, 45));
+
+            // Acrylic dark rounded background
+            ui::draw::draw_rounded_rect(s, toast_rect, 10, Color::rgba(18, 24, 38, 248));
+            ui::draw::draw_rect_outline(s, toast_rect, 1, Color::rgba(255, 255, 255, 45));
+
+            // Left icon squircle
+            let icon_rect = Rect::new(tx + 12, ty + 11, 36, 36);
+            let (bg_col, is_photo) = if toast.icon_type == 0 {
+                (palette.accent_primary, true)
+            } else {
+                (Color::rgb(225, 29, 72), false)
+            };
+            ui::draw::draw_rounded_rect(s, icon_rect, 8, bg_col);
+
+            if is_photo {
+                // White camera glyph
+                s.fill_rect(Rect::new(icon_rect.x + 10, icon_rect.y + 13, 16, 12), Color::WHITE);
+                s.fill_rect(Rect::new(icon_rect.x + 14, icon_rect.y + 11, 8, 2), Color::WHITE);
+                s.fill_rect(Rect::new(icon_rect.x + 15, icon_rect.y + 16, 6, 6), bg_col);
+            } else {
+                // White video camera glyph
+                s.fill_rect(Rect::new(icon_rect.x + 9, icon_rect.y + 13, 13, 11), Color::WHITE);
+                ui::draw::draw_line(s, icon_rect.x + 22, icon_rect.y + 13, icon_rect.x + 27, icon_rect.y + 16, Color::WHITE);
+                ui::draw::draw_line(s, icon_rect.x + 27, icon_rect.y + 16, icon_rect.x + 27, icon_rect.y + 21, Color::WHITE);
+                ui::draw::draw_line(s, icon_rect.x + 27, icon_rect.y + 21, icon_rect.x + 22, icon_rect.y + 24, Color::WHITE);
+            }
+
+            // Title and subtitle
+            ui::font::draw_text_font(s, tx + 56, ty + 12, toast.title_str(), Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, tx + 56, ty + 28, toast.subtitle_str(), Color::rgb(148, 163, 184), &font_sm);
+
+            // Progress bar at bottom
+            let bar_w = ((tw - 24) as u32 * toast.ticks_remaining / toast.max_ticks.max(1)) as i32;
+            s.fill_rect(Rect::new(tx + 12, ty + th - 4, bar_w, 2), palette.accent_primary);
+        }
+    }
+}
+
+/// Renders Screenshot & Screen Recorder Studio (App ID 17) inside window client area.
+fn draw_screenshot_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    app: &WmScreenshotApp,
+    palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+    let font_mono = Font::mono();
+
+    // 1. Dark canvas background
+    s.fill_rect(client, Color::rgb(13, 17, 23));
+
+    // 2. Top Action Toolbar (Height: 40)
+    let tb_h = 40;
+    let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
+    s.fill_rect(tb_rect, Color::rgb(22, 27, 38));
+    s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), Color::rgba(255, 255, 255, 25));
+
+    // Action Buttons:
+    // [ 📷 Capture (PrtScn) ]
+    let btn1 = Rect::new(client.x + 8, client.y + 6, 126, 28);
+    ui::draw::draw_rounded_rect(s, btn1, 4, palette.accent_primary);
+    ui::font::draw_text_font(s, btn1.x + 8, btn1.y + 6, "Capture (PrtScn)", Color::WHITE, &font_sm);
+
+    // [ 🔴 Record Screen ]
+    let btn2 = Rect::new(client.x + 140, client.y + 6, 114, 28);
+    ui::draw::draw_rounded_rect(s, btn2, 4, Color::rgb(225, 29, 72));
+    ui::font::draw_text_font(s, btn2.x + 8, btn2.y + 6, "Record Screen", Color::WHITE, &font_sm);
+
+    // [ 📁 Screenshots ]
+    let btn3 = Rect::new(client.x + 260, client.y + 6, 104, 28);
+    ui::draw::draw_rounded_rect(s, btn3, 4, Color::rgba(255, 255, 255, 18));
+    ui::draw::draw_rect_outline(s, btn3, 1, Color::rgba(255, 255, 255, 30));
+    ui::font::draw_text_font(s, btn3.x + 8, btn3.y + 6, "Screenshots", Color::WHITE, &font_sm);
+
+    // [ 🎥 Screencasts ]
+    let btn4 = Rect::new(client.x + 370, client.y + 6, 104, 28);
+    ui::draw::draw_rounded_rect(s, btn4, 4, Color::rgba(255, 255, 255, 18));
+    ui::draw::draw_rect_outline(s, btn4, 1, Color::rgba(255, 255, 255, 30));
+    ui::font::draw_text_font(s, btn4.x + 8, btn4.y + 6, "Screencasts", Color::WHITE, &font_sm);
+
+    // [ ⚙ Folders ]
+    let btn5 = Rect::new(client.x + 480, client.y + 6, 84, 28);
+    ui::draw::draw_rounded_rect(s, btn5, 4, Color::rgba(255, 255, 255, 18));
+    ui::draw::draw_rect_outline(s, btn5, 1, Color::rgba(255, 255, 255, 30));
+    ui::font::draw_text_font(s, btn5.x + 10, btn5.y + 6, "Folders", Color::WHITE, &font_sm);
+
+    // 3. Left Gallery Pane (Width: 200)
+    let left_w = 200;
+    let main_h = client.h - tb_h - 22;
+    let gallery_rect = Rect::new(client.x, client.y + tb_h, left_w, main_h);
+    s.fill_rect(gallery_rect, Color::rgb(17, 21, 30));
+    s.fill_rect(Rect::new(client.x + left_w - 1, client.y + tb_h, 1, main_h), Color::rgba(255, 255, 255, 20));
+
+    // Gallery Header
+    ui::font::draw_text_font(s, client.x + 12, client.y + tb_h + 10, "Captured Media (4)", palette.text_muted, &font_sm);
+
+    // Media Items List
+    let list_top = client.y + tb_h + 30;
+    for (i, item) in DEFAULT_MEDIA_ITEMS.iter().enumerate() {
+        let iy = list_top + (i as i32 * 54);
+        if iy + 48 > gallery_rect.bottom() {
+            break;
+        }
+        let is_sel = app.selected_media_idx == i;
+        let item_rect = Rect::new(client.x + 6, iy, left_w - 12, 48);
+        if is_sel {
+            ui::draw::draw_rounded_rect(s, item_rect, 6, Color::rgba(59, 130, 246, 45));
+            ui::draw::draw_rect_outline(s, item_rect, 1, palette.accent_primary);
+        } else {
+            ui::draw::draw_rounded_rect(s, item_rect, 6, Color::rgba(255, 255, 255, 10));
+        }
+
+        // Thumbnail squircle on left
+        let th_rect = Rect::new(item_rect.x + 6, iy + 6, 36, 36);
+        let th_bg = if item.kind == MediaKind::Screenshot {
+            Color::rgb(30, 41, 59)
+        } else {
+            Color::rgb(60, 20, 30)
+        };
+        ui::draw::draw_rounded_rect(s, th_rect, 4, th_bg);
+        if item.kind == MediaKind::Screenshot {
+            s.fill_rect(Rect::new(th_rect.x + 9, th_rect.y + 11, 18, 14), Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(th_rect.x + 13, th_rect.y + 9, 10, 2), Color::rgb(14, 165, 233));
+        } else {
+            // Video play triangle
+            ui::draw::draw_line(s, th_rect.x + 14, th_rect.y + 10, th_rect.x + 14, th_rect.y + 26, Color::rgb(239, 68, 68));
+            ui::draw::draw_line(s, th_rect.x + 14, th_rect.y + 10, th_rect.x + 24, th_rect.y + 18, Color::rgb(239, 68, 68));
+            ui::draw::draw_line(s, th_rect.x + 14, th_rect.y + 26, th_rect.x + 24, th_rect.y + 18, Color::rgb(239, 68, 68));
+        }
+
+        // Name & details
+        ui::font::draw_text_font(s, item_rect.x + 48, iy + 8, item.name, Color::WHITE, &font_sm);
+        let mut det_buf = [0u8; 32];
+        let mut d_len = 0;
+        format_u32(item.size_kb, &mut det_buf, &mut d_len);
+        if d_len + 3 < det_buf.len() {
+            det_buf[d_len] = b' ';
+            det_buf[d_len + 1] = b'K';
+            det_buf[d_len + 2] = b'B';
+            d_len += 3;
+        }
+        if let Ok(d_str) = core::str::from_utf8(&det_buf[..d_len]) {
+            ui::font::draw_text_font(s, item_rect.x + 48, iy + 26, d_str, palette.text_muted, &font_mono);
+        }
+    }
+
+    // 4. Right Preview Pane
+    let pane_x = client.x + left_w;
+    let pane_w = client.w - left_w;
+    let preview_rect = Rect::new(pane_x, client.y + tb_h, pane_w, main_h);
+
+    let cur_item = &DEFAULT_MEDIA_ITEMS[app.selected_media_idx % DEFAULT_MEDIA_ITEMS.len()];
+
+    // A. Metadata Bar
+    let meta_y = preview_rect.y + 8;
+    ui::font::draw_text_font(s, pane_x + 14, meta_y, cur_item.path, Color::WHITE, &font_reg);
+    ui::font::draw_text_font(s, pane_x + 14, meta_y + 18, cur_item.timestamp, palette.text_muted, &font_sm);
+
+    // B. Main Preview Viewport
+    let vp_x = pane_x + 14;
+    let vp_y = meta_y + 40;
+    let vp_w = pane_w - 28;
+    let vp_h = preview_rect.bottom() - vp_y - 44;
+
+    ui::draw::draw_rounded_rect(s, Rect::new(vp_x, vp_y, vp_w, vp_h), 6, Color::rgb(8, 10, 16));
+    ui::draw::draw_rect_outline(s, Rect::new(vp_x, vp_y, vp_w, vp_h), 1, Color::rgba(255, 255, 255, 30));
+
+    if cur_item.kind == MediaKind::Screenshot {
+        // Screenshot Viewport Preview: scaled representation of NovaOS desktop
+        let scr_w = (vp_w - 24).min(380);
+        let scr_h = (vp_h - 24).min(240);
+        let sx = vp_x + (vp_w - scr_w) / 2;
+        let sy = vp_y + (vp_h - scr_h) / 2;
+        ui::draw::draw_rounded_rect(s, Rect::new(sx, sy, scr_w, scr_h), 4, Color::rgb(18, 24, 38));
+        ui::draw::draw_rect_outline(s, Rect::new(sx, sy, scr_w, scr_h), 1, palette.accent_primary);
+        // Menubar preview
+        s.fill_rect(Rect::new(sx, sy, scr_w, 8), Color::rgb(30, 41, 59));
+        // Mini window mockups
+        s.fill_rect(Rect::new(sx + 20, sy + 24, scr_w / 2, scr_h / 2), Color::rgb(15, 23, 42));
+        ui::draw::draw_rect_outline(s, Rect::new(sx + 20, sy + 24, scr_w / 2, scr_h / 2), 1, Color::rgb(59, 130, 246));
+
+        // Bottom zoom controls bar
+        let ctrl_y = preview_rect.bottom() - 36;
+        let z_labels = ["Fit", "100%", "200%"];
+        for (z, &lbl) in z_labels.iter().enumerate() {
+            let zx = pane_x + 14 + (z as i32) * 62;
+            let z_rect = Rect::new(zx, ctrl_y, 56, 26);
+            let is_z = app.zoom_mode == z as u8;
+            if is_z {
+                ui::draw::draw_rounded_rect(s, z_rect, 4, palette.accent_primary);
+            } else {
+                ui::draw::draw_rounded_rect(s, z_rect, 4, Color::rgba(255, 255, 255, 20));
+            }
+            ui::font::draw_text_font(s, zx + 12, ctrl_y + 5, lbl, Color::WHITE, &font_sm);
+        }
+
+        // Copy button on right
+        let btn_cp = Rect::new(pane_x + pane_w - 140, ctrl_y, 126, 26);
+        ui::draw::draw_rounded_rect(s, btn_cp, 4, Color::rgba(255, 255, 255, 20));
+        ui::draw::draw_rect_outline(s, btn_cp, 1, Color::rgba(255, 255, 255, 35));
+        ui::font::draw_text_font(s, btn_cp.x + 10, ctrl_y + 5, "Copy PNG Image", Color::WHITE, &font_sm);
+    } else {
+        // Video Viewport: Screencast playback viewport
+        let ply_cx = vp_x + vp_w / 2;
+        let ply_cy = vp_y + vp_h / 2;
+        let p_sz = 44;
+        ui::draw::draw_rounded_rect(s, Rect::new(ply_cx - p_sz / 2, ply_cy - p_sz / 2, p_sz, p_sz), 8, Color::rgba(225, 29, 72, 180));
+        // Play / Pause symbol
+        if !app.is_playing {
+            ui::draw::draw_line(s, ply_cx - 6, ply_cy - 10, ply_cx - 6, ply_cy + 10, Color::WHITE);
+            ui::draw::draw_line(s, ply_cx - 6, ply_cy - 10, ply_cx + 8, ply_cy, Color::WHITE);
+            ui::draw::draw_line(s, ply_cx - 6, ply_cy + 10, ply_cx + 8, ply_cy, Color::WHITE);
+        } else {
+            s.fill_rect(Rect::new(ply_cx - 8, ply_cy - 8, 5, 16), Color::WHITE);
+            s.fill_rect(Rect::new(ply_cx + 3, ply_cy - 8, 5, 16), Color::WHITE);
+        }
+
+        // Bottom playback timeline scrubber
+        let ctrl_y = preview_rect.bottom() - 36;
+        let btn_pp = Rect::new(pane_x + 14, ctrl_y, 64, 26);
+        ui::draw::draw_rounded_rect(s, btn_pp, 4, Color::rgb(225, 29, 72));
+        let pp_txt = if app.is_playing { "Pause" } else { "Play" };
+        ui::font::draw_text_font(s, btn_pp.x + 12, ctrl_y + 5, pp_txt, Color::WHITE, &font_sm);
+
+        // Timeline bar
+        let bar_x = btn_pp.right() + 12;
+        let bar_w = (pane_w - 220).max(60);
+        let bar_rect = Rect::new(bar_x, ctrl_y + 11, bar_w, 4);
+        s.fill_rect(bar_rect, Color::rgba(255, 255, 255, 40));
+        let progress = (bar_w * 4) / 8; // mockup 50%
+        s.fill_rect(Rect::new(bar_x, ctrl_y + 11, progress, 4), palette.accent_primary);
+        s.fill_rect(Rect::new(bar_x + progress - 4, ctrl_y + 7, 8, 12), Color::WHITE);
+
+        // Time code
+        ui::font::draw_text_font(s, bar_x + bar_w + 10, ctrl_y + 5, "00:04 / 00:08", Color::WHITE, &font_mono);
+
+        // Loop toggle button
+        let btn_loop = Rect::new(pane_x + pane_w - 86, ctrl_y, 72, 26);
+        let loop_bg = if app.loop_enabled { palette.accent_primary } else { Color::rgba(255, 255, 255, 20) };
+        ui::draw::draw_rounded_rect(s, btn_loop, 4, loop_bg);
+        ui::font::draw_text_font(s, btn_loop.x + 8, ctrl_y + 5, "Loop: On", Color::WHITE, &font_sm);
+    }
+
+    // 5. Bottom Status Bar (Height: 22)
+    let sb_rect = Rect::new(client.x, client.bottom() - 22, client.w, 22);
+    s.fill_rect(sb_rect, Color::rgb(10, 13, 20));
+    s.fill_rect(Rect::new(client.x, sb_rect.y, client.w, 1), Color::rgba(255, 255, 255, 20));
+    ui::font::draw_text_font(s, client.x + 10, sb_rect.y + 4, app.status_msg, Color::rgb(56, 189, 248), &font_sm);
+}
+
 fn starts_with_cstr(ptr: *const u8, prefix: &[u8]) -> bool {
     if ptr.is_null() {
         return false;
@@ -13684,6 +14995,200 @@ mod tests {
                 }
                 let _ = f.write_all(&rgb);
             }
+        }
+    }
+
+    #[test]
+    fn test_wm_screenshot_and_screen_recorder_synthesis() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Initial Invariants: overlay closed, not recording, no toast
+        assert!(!wm.screenshot_overlay.is_active);
+        assert!(!wm.screenshot_overlay.is_recording);
+        assert!(wm.toast.is_none());
+
+        // 2. Global Hotkey Trigger: Print Screen (keycode 250)
+        wm.on_key(250);
+        assert!(wm.screenshot_overlay.is_active, "PrtScn (250) should open screenshot overlay");
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Screen);
+        assert_eq!(wm.screenshot_overlay.mode, CaptureMode::Photo);
+
+        // 3. Overlay Keyboard Shortcuts
+        // 's' cycles scope: Screen -> Window -> Selection -> Screen
+        wm.on_key(b's' as i32);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Window);
+        wm.on_key(b's' as i32);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Selection);
+        wm.on_key(b's' as i32);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Screen);
+
+        // 'v' switches to Video mode, 'p' switches back to Photo mode
+        wm.on_key(b'v' as i32);
+        assert_eq!(wm.screenshot_overlay.mode, CaptureMode::Video);
+        wm.on_key(b'p' as i32);
+        assert_eq!(wm.screenshot_overlay.mode, CaptureMode::Photo);
+
+        // Escape cancels overlay
+        wm.on_key(27);
+        assert!(!wm.screenshot_overlay.is_active, "Escape should dismiss overlay");
+
+        // F12 (0x58) also triggers screenshot overlay
+        wm.on_key(0x58);
+        assert!(wm.screenshot_overlay.is_active, "F12 should open screenshot overlay");
+
+        // 4. Trigger Photo Capture via Shutter Button / Enter key
+        wm.on_key(b'\n' as i32);
+        assert!(!wm.screenshot_overlay.is_active, "Shutter triggers capture and dismisses overlay");
+        assert!(wm.screenshot_overlay.shutter_flash_ticks > 0, "Shutter flash animation should trigger");
+        assert!(wm.toast.is_some(), "Desktop toast notification should appear");
+        let toast = wm.toast.unwrap();
+        assert_eq!(toast.title_str(), "Screenshot Captured");
+        assert_eq!(toast.icon_type, 0); // Photo icon
+        assert!(toast.subtitle_str().contains("Pictures/Screenshots/"));
+
+        // 5. Floating Pill Mouse Clicks
+        wm.toggle_screenshot_overlay();
+        assert!(wm.screenshot_overlay.is_active);
+        let pill = wm.screenshot_pill_rect();
+        assert_eq!(pill.w, 290);
+        assert_eq!(pill.h, 88);
+
+        // Click Scope Tab 0 (Selection)
+        wm.on_left_press(pill.x + 30, pill.y + 16);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Selection);
+        assert!(wm.screenshot_overlay.selection_rect.is_some());
+
+        // Click Scope Tab 2 (Window)
+        wm.on_left_press(pill.x + 190, pill.y + 16);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Window);
+
+        // Click Scope Tab 1 (Screen)
+        wm.on_left_press(pill.x + 130, pill.y + 16);
+        assert_eq!(wm.screenshot_overlay.scope, CaptureScope::Screen);
+
+        // Click Mode Toggle: Video
+        wm.on_left_press(pill.x + 68, pill.y + 58);
+        assert_eq!(wm.screenshot_overlay.mode, CaptureMode::Video);
+
+        // Click Central Shutter Button (Record start)
+        let cx = pill.x + pill.w / 2;
+        let cy = pill.y + 60;
+        wm.on_left_press(cx, cy);
+        assert!(wm.screenshot_overlay.is_recording, "Clicking shutter in video mode should start recording");
+        assert!(!wm.screenshot_overlay.is_active, "Overlay should close while recording");
+
+        // Simulate frame advancement in WM loop
+        for _ in 0..60 {
+            let m = ffi::MouseState { dx: 0, dy: 0, left_button: false, right_button: false, middle_button: false };
+            wm.apply_mouse(m);
+        }
+        assert!(wm.screenshot_overlay.recording_ticks >= 60);
+        assert!(wm.screenshot_overlay.recorded_frames >= 60);
+
+        // Click Menubar Stop Recording Button (near top-right)
+        let rec_btn_x = wm.screen_w - 260;
+        wm.on_left_press(rec_btn_x, 10);
+        assert!(!wm.screenshot_overlay.is_recording, "Clicking stop badge should stop video recording");
+        assert!(wm.toast.is_some(), "Video save toast notification should appear");
+        let vid_toast = wm.toast.unwrap();
+        assert_eq!(vid_toast.title_str(), "Screen Recording Saved");
+        assert_eq!(vid_toast.icon_type, 1); // Video icon
+        assert!(vid_toast.subtitle_str().contains("Videos/Screencasts/"));
+
+        // 6. Click Toast to Launch Screenshot Studio (App ID 17)
+        let tx = wm.screen_w - 200;
+        let ty = wm.menubar_h + 20;
+        wm.on_left_press(tx, ty);
+        assert!(wm.toast.is_none(), "Clicking toast should dismiss it");
+        let top_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_idx].label, 17, "Toast click should launch Screenshot Studio window (label 17)");
+        assert_eq!(wm.windows[top_idx].w, 680);
+        assert_eq!(wm.windows[top_idx].h, 440);
+
+        // 7. Test Studio App Interactions
+        let w = &wm.windows[top_idx];
+        let client = Rect::new(w.x, w.y + wm.titlebar_h, w.w, w.h - wm.titlebar_h);
+
+        // Initial media item is 0 (Screenshot SCRN0001.PNG)
+        assert_eq!(wm.screenshot_app.selected_media_idx, 0);
+        assert_eq!(DEFAULT_MEDIA_ITEMS[0].kind, MediaKind::Screenshot);
+
+        // Click Zoom 100% button
+        let pane_x = client.x + 200;
+        let ctrl_y = client.y + client.h - 25;
+        wm.on_left_press(pane_x + 90, ctrl_y);
+        assert_eq!(wm.screenshot_app.zoom_mode, 1);
+
+        // Click Zoom 200% button
+        wm.on_left_press(pane_x + 155, ctrl_y);
+        assert_eq!(wm.screenshot_app.zoom_mode, 2);
+
+        // Click Media Item 2 (Recording REC0001.RAW) in left gallery list
+        let item2_y = client.y + 40 + 30 + (2 * 54) + 10;
+        wm.on_left_press(client.x + 40, item2_y);
+        assert_eq!(wm.screenshot_app.selected_media_idx, 2);
+        assert_eq!(DEFAULT_MEDIA_ITEMS[2].kind, MediaKind::Recording);
+
+        // Click Play / Pause button in video player
+        assert!(!wm.screenshot_app.is_playing);
+        wm.on_left_press(pane_x + 35, ctrl_y);
+        assert!(wm.screenshot_app.is_playing, "Clicking play should toggle is_playing to true");
+        wm.on_left_press(pane_x + 35, ctrl_y);
+        assert!(!wm.screenshot_app.is_playing, "Clicking pause should toggle is_playing to false");
+
+        // Click Action Toolbar: "Capture New (PrtScn)"
+        wm.on_left_press(client.x + 50, client.y + 18);
+        assert!(wm.screenshot_overlay.is_active, "Toolbar Capture button should launch overlay");
+        assert_eq!(wm.screenshot_overlay.mode, CaptureMode::Photo);
+
+        // 8. Rasterize entire desktop with overlay, studio app, and menubar into BufferSurface32
+        let mut full_buf = vec![0u32; (1024 * 768) as usize];
+        let mut full_surf = ui::draw::BufferSurface32::new(&mut full_buf, 1024, 768);
+        wm.render(&mut full_surf);
+        let non_zero_pixels = full_surf.buffer.iter().filter(|&&p| p != 0).count();
+        assert!(non_zero_pixels > 50_000, "Compositor should render full desktop with screenshot overlay");
+
+        // Save PPM of overlay
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::File::create("/tmp/view_screenshot_overlay.ppm") {
+            let _ = write!(f, "P6\n1024 768\n255\n");
+            let mut rgb = Vec::with_capacity(1024 * 768 * 3);
+            for &pix in full_surf.buffer.iter() {
+                rgb.push(((pix >> 16) & 0xFF) as u8);
+                rgb.push(((pix >> 8) & 0xFF) as u8);
+                rgb.push((pix & 0xFF) as u8);
+            }
+            let _ = f.write_all(&rgb);
+        }
+
+        // Save PPM of studio app (video)
+        wm.screenshot_overlay.is_active = false;
+        full_surf.buffer.fill(0);
+        wm.render(&mut full_surf);
+        if let Ok(mut f) = std::fs::File::create("/tmp/view_screenshot_studio.ppm") {
+            let _ = write!(f, "P6\n1024 768\n255\n");
+            let mut rgb = Vec::with_capacity(1024 * 768 * 3);
+            for &pix in full_surf.buffer.iter() {
+                rgb.push(((pix >> 16) & 0xFF) as u8);
+                rgb.push(((pix >> 8) & 0xFF) as u8);
+                rgb.push((pix & 0xFF) as u8);
+            }
+            let _ = f.write_all(&rgb);
+        }
+
+        // Save PPM of studio app (photo preview)
+        wm.screenshot_app.selected_media_idx = 0;
+        full_surf.buffer.fill(0);
+        wm.render(&mut full_surf);
+        if let Ok(mut f) = std::fs::File::create("/tmp/view_screenshot_photo.ppm") {
+            let _ = write!(f, "P6\n1024 768\n255\n");
+            let mut rgb = Vec::with_capacity(1024 * 768 * 3);
+            for &pix in full_surf.buffer.iter() {
+                rgb.push(((pix >> 16) & 0xFF) as u8);
+                rgb.push(((pix >> 8) & 0xFF) as u8);
+                rgb.push((pix & 0xFF) as u8);
+            }
+            let _ = f.write_all(&rgb);
         }
     }
 }

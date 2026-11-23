@@ -135,6 +135,8 @@ extern "C" {
     pub fn sys_open(filename: *const u8) -> i32;
     pub fn sys_read(handle: i32, buf: *mut u8, max_len: i32) -> i32;
     pub fn sys_close(handle: i32);
+    pub fn sys_write_file(filename: *const u8, data: *const u8, size: u32) -> i32;
+    pub fn sys_delete_file(filename: *const u8) -> i32;
 }
 
 #[cfg(test)]
@@ -187,3 +189,7 @@ pub unsafe fn sys_open(_filename: *const u8) -> i32 { -1 }
 pub unsafe fn sys_read(_handle: i32, _buf: *mut u8, _max_len: i32) -> i32 { 0 }
 #[cfg(test)]
 pub unsafe fn sys_close(_handle: i32) {}
+#[cfg(test)]
+pub unsafe fn sys_write_file(_filename: *const u8, _data: *const u8, size: u32) -> i32 { size as i32 }
+#[cfg(test)]
+pub unsafe fn sys_delete_file(_filename: *const u8) -> i32 { 0 }
