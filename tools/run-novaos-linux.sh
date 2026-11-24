@@ -11,9 +11,9 @@ set -e
 
 if [ -n "$WAYLAND_DISPLAY" ]; then
     export SDL_VIDEODRIVER=wayland,x11
-    # Allow GTK to use native Wayland instead of forcing legacy XWayland
-    if [ "$GDK_BACKEND" = "x11" ]; then
-        unset GDK_BACKEND
+    # For GTK backend: route through XWayland so relative mouse grabbing functions reliably
+    if [ -n "$DISPLAY" ] && [ -z "$GDK_BACKEND" ]; then
+        export GDK_BACKEND=x11
     fi
 fi
 

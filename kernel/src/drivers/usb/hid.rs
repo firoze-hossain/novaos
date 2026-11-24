@@ -532,6 +532,12 @@ pub fn run_hid_selftest() -> i32 {
     if mouse.buttons != 0x01 || mouse.accum_dx != 10 || mouse.accum_dy != -10 || mouse.accum_wheel != 1 {
         failures |= 1 << 8;
     }
+    // Button release: flush button state & delta so kernel mouse accumulator returns to neutral
+    let mouse_release = [0x00, 0x00, 0x00, 0x00];
+    mouse.process_report(&mouse_release);
+    if mouse.buttons != 0x00 {
+        failures |= 1 << 8;
+    }
 
     // 5. Multi-touch digitizer coordinate scaling & contact tracking
     let mut digitizer = UsbDigitizer::new(1024, 768);

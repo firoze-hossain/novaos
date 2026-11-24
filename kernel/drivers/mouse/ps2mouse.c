@@ -103,6 +103,12 @@ static void mouse_irq_handler(registers_t* regs) {
 
 void ps2mouse_init(void) {
     present = false;
+    spinlock_init(&mouse_lock);
+    accum_dx = 0;
+    accum_dy = 0;
+    left_button = false;
+    right_button = false;
+    middle_button = false;
 
     outb(PS2_COMMAND, 0xA8); /* enable the auxiliary (mouse) port */
 
