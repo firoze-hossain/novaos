@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.chronos"
+name = "Chronos Clock"
+version = "1.0.0"
+category = "Accessories"
+app_filename = "CLOCK.ELF"
+summary = "Sovereign pure-Rust timekeeping suite: World Clock, Alarms, Stopwatch & Timers"

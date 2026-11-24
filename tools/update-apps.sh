@@ -223,6 +223,22 @@ EOF
     fi
 }
 
+update_chronos() {
+    local repo="$OTHERS_DIR/chronos"
+    echo "========================================================"
+    echo " Updating Chronos (Default Sovereign Clock & Timer Suite)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "chronos"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -234,6 +250,10 @@ case "$TARGET_APP" in
         update_dbnavigator
         update_thundercall
         update_lumina
+        update_chronos
+        ;;
+    chronos|clock|nova-clock)
+        update_chronos
         ;;
     aero|browser|aero-browser)
         update_aero

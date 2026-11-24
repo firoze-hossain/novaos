@@ -25,7 +25,7 @@ cd "$(dirname "$0")/../.."
 echo "================================================================================"
 echo "           NovaOS Interface Track - Full Comprehensive UI QA Pass              "
 echo "================================================================================"
-echo "Target: 15 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
+echo "Target: 16 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
 echo "Date:   $(date)"
 echo "--------------------------------------------------------------------------------"
 
@@ -37,7 +37,7 @@ run_qa_step() {
     SCRIPT_PATH="$2"
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
     echo ""
-    echo ">>> Running QA Suite [$TOTAL_SUITES/15]: $SUITE_NAME"
+    echo ">>> Running QA Suite [$TOTAL_SUITES/16]: $SUITE_NAME"
     echo "--------------------------------------------------------------------------------"
     if [ -f "$SCRIPT_PATH" ]; then
         sh "$SCRIPT_PATH"
@@ -64,6 +64,7 @@ run_qa_step "12. Graphical Crash Reporter (userland/crashrep-rs)" "tools/tests/r
 run_qa_step "13. First-Run Setup Wizard (userland/firstrun-rs)" "tools/tests/run_firstrun_tests.sh"
 run_qa_step "14. Calendar & Schedule Hub (userland/desktop/apps/nova-calendar)" "tools/tests/run_nova_calendar_tests.sh"
 run_qa_step "15. Unified Calculator & Math Studio (userland/desktop/apps/nova-calc)" "tools/tests/run_nova_calc_tests.sh"
+run_qa_step "16. Sovereign Clock & Timekeeping Suite (userland/desktop/apps/nova-clock)" "tools/tests/run_nova_clock_tests.sh"
 
 echo ""
 echo "================================================================================"

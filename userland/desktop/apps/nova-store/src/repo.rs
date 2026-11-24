@@ -451,6 +451,49 @@ impl PackageRepository {
             InstallStatus::NotInstalled,
         );
 
+        // 14. Chronos Clock (Utilities - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.chronos",
+            "Chronos Clock",
+            "1.0.0",
+            AppCategory::Utilities,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign timekeeping suite: World Clock, Alarms, Stopwatch, and Timers",
+            "Unified default clock app synthesizing macOS Clock and Ubuntu GNOME Clocks. Features real-time solar terminator equirectangular map projection, live analog dials with day/night faces, multi-alarm weekday bitmasks, 9-minute snooze, 10ms centisecond stopwatch with lap telemetry (fastest in green, slowest in red), and Ubuntu-style 1m..1h Quick Start countdown presets.",
+            "Initial release with pure Rust 2D software rasterization, solar altitude geometry, and interactive modals.",
+            "[CLK]",
+            18 * 1024 * 1024,
+            42 * 1024 * 1024,
+            5.0,
+            3850,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "World Clock & Solar Terminator Map".into(),
+                    caption: "Mathematical day/night shading and global city analog dials".into(),
+                    accent_rgb: (56, 189, 248),
+                },
+                ScreenshotPreview {
+                    title: "Alarms & Repetition Schedules".into(),
+                    caption: "Weekday/weekend bitmask scheduling and animated switches".into(),
+                    accent_rgb: (46, 204, 113),
+                },
+                ScreenshotPreview {
+                    title: "Precision Stopwatch & Split Telemetry".into(),
+                    caption: "Centisecond timer with fastest (green) and slowest (red) lap highlights".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Quick Start Countdown Timers".into(),
+                    caption: "Ubuntu 1m..1h preset grid with dynamic remaining progress ring".into(),
+                    accent_rgb: (255, 107, 0),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {
