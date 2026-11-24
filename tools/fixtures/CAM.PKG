@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.iris"
+name = "Iris Camera"
+version = "1.0.0"
+category = "Multimedia"
+app_filename = "CAM.ELF"
+summary = "Sovereign pure-Rust camera and video studio synthesizing Ubuntu Camera (GNOME Snapshot)"

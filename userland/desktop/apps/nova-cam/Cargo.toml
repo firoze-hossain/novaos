@@ -1,0 +1,20 @@
+[package]
+name = "nova-cam"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Sovereign Camera & Video Studio Application (Ubuntu Snapshot Synthesized) for NovaOS"
+
+[dependencies]
+iris-core = { path = "../../../../../iris/crates/iris-core" }
+iris-ui = { path = "../../../../../iris/crates/iris-ui" }
+iris-platform = { path = "../../../../../iris/crates/iris-platform" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

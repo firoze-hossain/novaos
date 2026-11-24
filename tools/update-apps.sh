@@ -255,6 +255,22 @@ update_mnemos() {
     fi
 }
 
+update_iris() {
+    local repo="$OTHERS_DIR/iris"
+    echo "========================================================"
+    echo " Updating Iris (Default Sovereign Camera & Video Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "iris"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -268,6 +284,10 @@ case "$TARGET_APP" in
         update_lumina
         update_chronos
         update_mnemos
+        update_iris
+        ;;
+    iris|cam|camera|nova-cam)
+        update_iris
         ;;
     mnemos|clip|nova-clip)
         update_mnemos

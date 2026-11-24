@@ -537,6 +537,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 16. Iris Camera & Video Studio (Utilities - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.iris",
+            "Iris Camera",
+            "1.0.0",
+            AppCategory::Utilities,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign photo & video camera studio synthesizing Ubuntu Camera (GNOME Snapshot)",
+            "Default sovereign camera application synthesizing Ubuntu Camera (GNOME Snapshot). Features live viewfinder video feeds, dynamic built-in laptop and external USB webcam discovery, dynamic resolution scaling (480p SD up to 4K UHD), circular shutter/record buttons, countdown delays (3s..10s), screen flash animation, selfie mirror mode, composition guides (Rule of Thirds), and media library gallery.",
+            "Initial release with 2D viewfinder blitter, lossless Netpbm PPM snapshot export, and NovaOS ring-3 video capture IPC.",
+            "[CAM]",
+            24 * 1024 * 1024,
+            58 * 1024 * 1024,
+            5.0,
+            4680,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Live Viewfinder & Shutter".into(),
+                    caption: "Aspect-ratio preserved live feed with iconic double-ring shutter".into(),
+                    accent_rgb: (235, 52, 52),
+                },
+                ScreenshotPreview {
+                    title: "Dynamic Resolution Negotiation".into(),
+                    caption: "On-the-fly switching from 480p SD up to 4K UHD".into(),
+                    accent_rgb: (56, 189, 248),
+                },
+                ScreenshotPreview {
+                    title: "Hardware Webcam Detection".into(),
+                    caption: "Dynamic discovery of built-in laptop and external desktop USB cameras".into(),
+                    accent_rgb: (46, 204, 113),
+                },
+                ScreenshotPreview {
+                    title: "Video Recording & Duration Telemetry".into(),
+                    caption: "Pulsing recording badge with live elapsed session timer".into(),
+                    accent_rgb: (255, 107, 0),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

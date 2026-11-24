@@ -37,7 +37,7 @@ run_qa_step() {
     SCRIPT_PATH="$2"
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
     echo ""
-    echo ">>> Running QA Suite [$TOTAL_SUITES/17]: $SUITE_NAME"
+    echo ">>> Running QA Suite [$TOTAL_SUITES/18]: $SUITE_NAME"
     echo "--------------------------------------------------------------------------------"
     if [ -f "$SCRIPT_PATH" ]; then
         sh "$SCRIPT_PATH"
@@ -66,6 +66,7 @@ run_qa_step "14. Calendar & Schedule Hub (userland/desktop/apps/nova-calendar)" 
 run_qa_step "15. Unified Calculator & Math Studio (userland/desktop/apps/nova-calc)" "tools/tests/run_nova_calc_tests.sh"
 run_qa_step "16. Sovereign Clock & Timekeeping Suite (userland/desktop/apps/nova-clock)" "tools/tests/run_nova_clock_tests.sh"
 run_qa_step "17. Sovereign Clipboard Manager Suite (userland/desktop/apps/nova-clip)" "tools/tests/run_nova_clip_tests.sh"
+run_qa_step "18. Sovereign Camera & Video Studio (userland/desktop/apps/nova-cam)" "tools/tests/run_nova_cam_tests.sh"
 
 echo ""
 echo "================================================================================"
