@@ -7,6 +7,10 @@ description = "Fast, Distraction-Free Code & Text Editor with Piece-Table Buffer
 
 [dependencies]
 nova-ui = { path = "../../../libs/nova-ui" }
+glyph-core = { path = "../../../../../glyph/crates/glyph-core" }
+glyph-syntax = { path = "../../../../../glyph/crates/glyph-syntax" }
+glyph-ui = { path = "../../../../../glyph/crates/glyph-ui" }
+glyph-platform = { path = "../../../../../glyph/crates/glyph-platform" }
 
 [profile.release]
 opt-level = 3

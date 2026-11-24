@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.glyph"
+name = "Glyph Code Studio"
+version = "1.0.0"
+category = "Development"
+app_filename = "EDIT.ELF"
+summary = "Sovereign pure-Rust code & text editor with piece-table buffer & multi-language syntax"

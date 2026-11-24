@@ -3,9 +3,39 @@
 version = 4
 
 [[package]]
+name = "glyph-core"
+version = "1.0.0"
+
+[[package]]
+name = "glyph-platform"
+version = "1.0.0"
+dependencies = [
+ "glyph-core",
+]
+
+[[package]]
+name = "glyph-syntax"
+version = "1.0.0"
+dependencies = [
+ "glyph-core",
+]
+
+[[package]]
+name = "glyph-ui"
+version = "1.0.0"
+dependencies = [
+ "glyph-core",
+ "glyph-syntax",
+]
+
+[[package]]
 name = "nova-edit"
 version = "2.0.0"
 dependencies = [
+ "glyph-core",
+ "glyph-platform",
+ "glyph-syntax",
+ "glyph-ui",
  "nova-ui",
 ]
 

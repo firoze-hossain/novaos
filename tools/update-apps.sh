@@ -287,6 +287,22 @@ update_kairos() {
     fi
 }
 
+update_glyph() {
+    local repo="$OTHERS_DIR/glyph"
+    echo "========================================================"
+    echo " Updating Glyph (Default Sovereign Code & Text Editor)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "glyph"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -302,6 +318,10 @@ case "$TARGET_APP" in
         update_mnemos
         update_iris
         update_kairos
+        update_glyph
+        ;;
+    glyph|edit|editor|nova-edit)
+        update_glyph
         ;;
     kairos|calendar|nova-calendar)
         update_kairos

@@ -623,6 +623,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 18. Glyph Code Studio (Development - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.glyph",
+            "Glyph Code Studio",
+            "1.0.0",
+            AppCategory::Development,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign pure-Rust code & text editor with piece-table buffer & multi-language syntax",
+            "Default sovereign code and text editor for NovaOS and cross-platform desktop. Features piece-table text buffer for O(1) edits and full undo/redo history, synchronized multi-cursor carets, nested bracket matching and auto-closing, code folding with block scope discovery, polyglot syntax tokenization (Rust, C/C++, Python, Markdown, Shell, JSON), reverse-coordinate bulk find and replace, tabbed document sessions, and high-performance 2D double-buffered software rendering.",
+            "Initial release with piece-table buffer engine, multi-language tokenizers, and NovaOS ring-3 graphical VFS integration.",
+            "[GLY]",
+            22 * 1024 * 1024,
+            52 * 1024 * 1024,
+            5.0,
+            4890,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Piece-Table Code Workspace".into(),
+                    caption: "Distraction-free dark canvas with gutter line numbers and syntax colors".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Multi-Language Syntax Highlighting".into(),
+                    caption: "Polyglot tokenization across Rust, C/C++, Python, Markdown, and JSON".into(),
+                    accent_rgb: (191, 90, 242),
+                },
+                ScreenshotPreview {
+                    title: "Multi-Cursor & Bracket Matching".into(),
+                    caption: "Synchronized multiple carets and nested delimiter pair highlighting".into(),
+                    accent_rgb: (48, 209, 88),
+                },
+                ScreenshotPreview {
+                    title: "Project Tree & Tabbed Sessions".into(),
+                    caption: "File explorer sidebar with file type badges and dirty state indicators".into(),
+                    accent_rgb: (255, 159, 10),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

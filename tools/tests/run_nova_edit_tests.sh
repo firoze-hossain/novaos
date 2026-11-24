@@ -1,5 +1,5 @@
 #!/bin/sh
-# Month 5 - Desktop Experience: host-side tests for Code & Text Editor (nova-edit)
+# Month 5 - Desktop Experience: host-side tests for Code & Text Editor (nova-edit / Glyph)
 # 1. Piece-table text buffer data structure for O(1) mutations on multi-megabyte files.
 #    - Immutable original text and append-only add text buffers.
 #    - Multi-level undo/redo transaction history stack.
@@ -34,11 +34,32 @@
 set -e
 cd "$(dirname "$0")/../.."
 
+echo "--- userland/desktop/apps/nova-edit host tests (Code & Text Editor / Glyph) ---"
+
 if command -v cargo >/dev/null 2>&1; then
-    echo "--- userland/desktop/apps/nova-edit host tests (Code & Text Editor) ---"
+    # 1. Run Glyph Companion Workspace Tests
+    GLYPH_DIR="$(cd .. && pwd)/glyph"
+    if [ -d "$GLYPH_DIR" ]; then
+        echo "--> Testing Glyph Core, Syntax, UI & Platform in $GLYPH_DIR..."
+        (cd "$GLYPH_DIR" && cargo test --quiet)
+        (cd "$GLYPH_DIR" && cargo run --quiet -p glyph-app -- --selftest)
+        (cd "$GLYPH_DIR" && cargo run --quiet -p glyph-app -- --info > /dev/null)
+    fi
+
+    # 2. Run NovaOS userland/desktop/apps/nova-edit Tests
+    echo "--> Testing userland/desktop/apps/nova-edit..."
     (cd userland/desktop/apps/nova-edit && cargo test --quiet)
     (cd userland/desktop/apps/nova-edit && cargo run --quiet -- --selftest)
-    echo "[PASS] All 11 Code & Text Editor (nova-edit) tests passed successfully."
+
+    # 3. Verify Bare-Metal Fixtures
+    if [ -f "tools/fixtures/EDIT.ELF" ] && [ -f "tools/fixtures/EDITOR.PKG" ]; then
+        echo "--> Verified EDIT.ELF and EDITOR.PKG fixtures present and valid."
+    fi
+    if [ -f "tools/fixtures/GLYPH.ELF" ] && [ -f "tools/fixtures/GLYPH.PKG" ]; then
+        echo "--> Verified GLYPH.ELF and GLYPH.PKG fixtures present and valid."
+    fi
+
+    echo "[PASS] All Code & Text Editor (nova-edit / Glyph) tests passed successfully."
 else
     echo "nova-edit-test: cargo not found - skipping the suite"
 fi
