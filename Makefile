@@ -49,12 +49,13 @@ else ifeq ($(UNAME_S),Linux)
     # Linux launcher wrapper: routes through native Wayland/X11 protocols so
     # relative pointer capture operates smoothly without mouse freeze.
     QEMU_RUN_WRAPPER = ./tools/run-novaos-linux.sh
-    # Linux display: Prefer SDL for native Wayland relative pointer support (zwp_relative_pointer_v1)
-    # which prevents mouse grab freezing. Fallback to GTK with zoom-to-fit (without grab-on-hover).
-    ifeq ($(shell $(QEMU) -display sdl -version >/dev/null 2>&1 && echo ok),ok)
-        DISPLAY_FLAGS ?= -display sdl
-    else ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on -version >/dev/null 2>&1 && echo ok),ok)
+    # Linux display: Prefer GTK with zoom-to-fit (without grab-on-hover) or SDL.
+    # When routed through XWayland via run-novaos-linux.sh, pointer grabbing is seamless and
+    # never triggers "Allow inhibiting shortcuts" dialogs or lost pointer locks.
+    ifeq ($(shell $(QEMU) -display gtk,zoom-to-fit=on -version >/dev/null 2>&1 && echo ok),ok)
         DISPLAY_FLAGS ?= -display gtk,zoom-to-fit=on
+    else ifeq ($(shell $(QEMU) -display sdl -version >/dev/null 2>&1 && echo ok),ok)
+        DISPLAY_FLAGS ?= -display sdl
     else
         DISPLAY_FLAGS ?=
     endif
