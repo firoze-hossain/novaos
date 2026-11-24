@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.mnemos"
+name = "Mnemos Clipboard"
+version = "1.0.0"
+category = "Utilities"
+app_filename = "CLIP.ELF"
+summary = "Sovereign pure-Rust clipboard manager synthesizing macOS Maccy with fuzzy search & popover preview"

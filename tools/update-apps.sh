@@ -239,6 +239,22 @@ update_chronos() {
     fi
 }
 
+update_mnemos() {
+    local repo="$OTHERS_DIR/mnemos"
+    echo "========================================================"
+    echo " Updating Mnemos (Default Sovereign Clipboard Manager)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "mnemos"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -251,6 +267,10 @@ case "$TARGET_APP" in
         update_thundercall
         update_lumina
         update_chronos
+        update_mnemos
+        ;;
+    mnemos|clip|nova-clip)
+        update_mnemos
         ;;
     chronos|clock|nova-clock)
         update_chronos

@@ -494,6 +494,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 15. Mnemos Clipboard Manager (Utilities - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.mnemos",
+            "Mnemos Clipboard",
+            "1.0.0",
+            AppCategory::Utilities,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign cross-platform clipboard manager synthesizing macOS Maccy",
+            "Default sovereign clipboard manager synthesizing macOS Maccy. Features translucent acrylic floating card, instant prefix/substring/acronym fuzzy search header, inline color swatches (#284058), multiline indicators (↩), shortcuts 1..9, flyout preview popover with source application metadata, pin persistence, and confidential password manager filtering.",
+            "Initial release with 2D acrylic rasterizer, popover preview, and NovaOS ring-3 kernel clipboard IPC.",
+            "[MNM]",
+            12 * 1024 * 1024,
+            28 * 1024 * 1024,
+            5.0,
+            4120,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Acrylic Card & Fuzzy Search".into(),
+                    caption: "Compact 360px floating card with instant search and shortcuts".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Inline Color Swatches & Return Glyphs".into(),
+                    caption: "Automatic detection of hex codes, file URLs, and newlines".into(),
+                    accent_rgb: (40, 64, 88),
+                },
+                ScreenshotPreview {
+                    title: "Flyout Preview Popover".into(),
+                    caption: "Origin application badge, timestamps, copy count, and full text".into(),
+                    accent_rgb: (56, 189, 248),
+                },
+                ScreenshotPreview {
+                    title: "Preferences & Privacy Filtering".into(),
+                    caption: "Automatic password manager shield and pin persistence".into(),
+                    accent_rgb: (255, 179, 0),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

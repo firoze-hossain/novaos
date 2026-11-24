@@ -1,0 +1,20 @@
+[package]
+name = "nova-clip"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Sovereign Clipboard Manager Application (macOS Maccy Synthesized) for NovaOS"
+
+[dependencies]
+mnemos-core = { path = "../../../../../mnemos/crates/mnemos-core" }
+mnemos-ui = { path = "../../../../../mnemos/crates/mnemos-ui" }
+mnemos-platform = { path = "../../../../../mnemos/crates/mnemos-platform" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
