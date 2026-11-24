@@ -3,9 +3,30 @@
 version = 4
 
 [[package]]
+name = "kairos-core"
+version = "1.0.0"
+
+[[package]]
+name = "kairos-platform"
+version = "1.0.0"
+dependencies = [
+ "kairos-core",
+]
+
+[[package]]
+name = "kairos-ui"
+version = "1.0.0"
+dependencies = [
+ "kairos-core",
+]
+
+[[package]]
 name = "nova-calendar"
 version = "2.0.0"
 dependencies = [
+ "kairos-core",
+ "kairos-platform",
+ "kairos-ui",
  "nova-ui",
 ]
 

@@ -271,6 +271,22 @@ update_iris() {
     fi
 }
 
+update_kairos() {
+    local repo="$OTHERS_DIR/kairos"
+    echo "========================================================"
+    echo " Updating Kairos (Default Sovereign Calendar & Event Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "kairos"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -285,6 +301,10 @@ case "$TARGET_APP" in
         update_chronos
         update_mnemos
         update_iris
+        update_kairos
+        ;;
+    kairos|calendar|nova-calendar)
+        update_kairos
         ;;
     iris|cam|camera|nova-cam)
         update_iris

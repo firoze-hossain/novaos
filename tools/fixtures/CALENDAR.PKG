@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.kairos"
+name = "Kairos Calendar"
+version = "1.0.0"
+category = "Productivity"
+app_filename = "CALENDAR.ELF"
+summary = "Sovereign pure-Rust calendar & event scheduling studio synthesizing macOS & GNOME Ubuntu Calendar"

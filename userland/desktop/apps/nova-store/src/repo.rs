@@ -580,6 +580,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 17. Kairos Calendar & Event Studio (Productivity - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.kairos",
+            "Kairos Calendar",
+            "1.0.0",
+            AppCategory::Productivity,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign pure-Rust calendar & event scheduling studio synthesizing macOS & GNOME Ubuntu Calendar",
+            "Default sovereign calendar & scheduling application synthesizing macOS Calendar and Ubuntu GNOME Calendar. Features Month grid, 7-day multi-column Week schedule, single-day Agenda breakdown, 12-month annual density heat-map, vibrant category color pills (Work, Personal, Family, Health, Finance, System), recurrence rule engine, Tomohiko Sakamoto day-of-week anchor calculations, and lossless RFC 5545 iCalendar (.ics) export & import.",
+            "Initial release with pure 2D double-buffered software renderer, RFC 5545 iCalendar engine, and NovaOS ring-3 calendar integration.",
+            "[CAL]",
+            20 * 1024 * 1024,
+            48 * 1024 * 1024,
+            5.0,
+            4420,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Month Matrix & Event Badges".into(),
+                    caption: "Full monthly grid with current day highlight ring and +N indicators".into(),
+                    accent_rgb: (59, 130, 246),
+                },
+                ScreenshotPreview {
+                    title: "Hero Date Sidebar & Mini Navigator".into(),
+                    caption: "macOS-style acrylic header with miniature month picker".into(),
+                    accent_rgb: (99, 102, 241),
+                },
+                ScreenshotPreview {
+                    title: "Category Filter Pills".into(),
+                    caption: "Dynamic Work, Personal, Family, Health, and Finance toggles".into(),
+                    accent_rgb: (34, 197, 94),
+                },
+                ScreenshotPreview {
+                    title: "Event Inspector & RFC 5545 Export".into(),
+                    caption: "Detail card inspector with standard .ics export and recurrence rules".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

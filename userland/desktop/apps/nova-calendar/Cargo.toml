@@ -7,6 +7,9 @@ description = "Unified Calendar & Event Scheduling App (macOS + Windows 11 + Ubu
 
 [dependencies]
 nova-ui = { path = "../../../libs/nova-ui" }
+kairos-core = { path = "../../../../../kairos/crates/kairos-core" }
+kairos-ui = { path = "../../../../../kairos/crates/kairos-ui" }
+kairos-platform = { path = "../../../../../kairos/crates/kairos-platform" }
 
 [profile.release]
 opt-level = 3
