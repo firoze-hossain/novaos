@@ -20,7 +20,10 @@ typedef signed long long int64_t;
 
 // Boolean
 #if !defined(__bool_true_false_are_defined) && !defined(bool)
-typedef enum { false = 0, true = 1 } bool;
+#define bool _Bool
+#define true 1
+#define false 0
+#define __bool_true_false_are_defined 1
 #endif
 
 // Size type

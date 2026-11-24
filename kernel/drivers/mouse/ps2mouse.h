@@ -11,6 +11,8 @@ typedef struct {
     bool middle_button;
 } mouse_state_t;
 
+_Static_assert(sizeof(mouse_state_t) == 12, "mouse_state_t ABI must be exactly 12 bytes");
+
 /* Enables the 8042 controller's auxiliary (mouse) port, tells the
  * mouse to use default settings and start reporting, and registers
  * the IRQ12 handler that assembles the standard 3-byte packet format. */
