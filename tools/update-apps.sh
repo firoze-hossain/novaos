@@ -383,6 +383,22 @@ update_aegis() {
     fi
 }
 
+update_pulse() {
+    local repo="$OTHERS_DIR/pulse"
+    echo "========================================================"
+    echo " Updating Pulse (System & Resource Monitor)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "pulse"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -404,6 +420,10 @@ case "$TARGET_APP" in
         update_nexus
         update_stratum
         update_aegis
+        update_pulse
+        ;;
+    pulse|monitor|sysmon|nova-monitor)
+        update_pulse
         ;;
     aegis|firmware|nova-firmware)
         update_aegis

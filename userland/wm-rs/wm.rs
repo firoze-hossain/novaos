@@ -253,7 +253,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 21] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 22] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -275,6 +275,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 21] = [
     DesktopIconSpec { label: "Nexus",       sublabel: "Software & Updt",app_id: 19, icon_type: 19 },
     DesktopIconSpec { label: "Stratum",     sublabel: "Disks Utility",  app_id: 20, icon_type: 20 },
     DesktopIconSpec { label: "Aegis",       sublabel: "Firmware Studio",app_id: 22, icon_type: 22 },
+    DesktopIconSpec { label: "Pulse",       sublabel: "System Monitor", app_id: 23, icon_type: 23 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -7091,7 +7092,7 @@ impl Wm {
                     draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
                 } else if w.label == 17 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_screenshot_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.screenshot_app, &palette);
-                } else if w.label >= 13 && w.label <= 22 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                } else if w.label >= 13 && w.label <= 23 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_sovereign_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), w.label, &palette);
                 }
             }
@@ -7167,6 +7168,7 @@ impl Wm {
                     20 => "Stratum - Disks, Volume Topology & SMART Health",
                     21 => "Glyph - Sovereign Multilingual Code & Text Editor",
                     22 => "Aegis - Firmware & Hardware Security Studio",
+                    23 => "Pulse - Sovereign Real-Time System & Resource Monitor",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -8316,6 +8318,32 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             s.fill_rect(Rect::new(die_x + 3, die_y + 3, die_w - 6, die_h - 6), Color::rgb(22, 101, 52));
             s.put_pixel(die_x + die_w / 2, die_y + die_h / 2, Color::WHITE);
         }
+        23 => {
+            // 23: Pulse Sovereign System Monitor (Charcoal squircle card with vibrant ECG / heartbeat pulse line)
+            let b_w = (size * 78) / 100;
+            let b_h = (size * 78) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            // Charcoal slate card body
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(71, 85, 105));
+
+            // Horizontal baseline grid line
+            let mid_y = b_y + b_h / 2;
+            ui::draw::draw_line(s, b_x + 4, mid_y, b_x + 8, mid_y, Color::rgb(56, 189, 248));
+
+            // Electrocardiogram / heartbeat waveform (cyan to purple/magenta)
+            ui::draw::draw_line(s, b_x + 8, mid_y, b_x + 11, mid_y - 4, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, b_x + 11, mid_y - 4, b_x + 14, mid_y + 8, Color::rgb(14, 165, 233));
+            ui::draw::draw_line(s, b_x + 14, mid_y + 8, b_x + 18, mid_y - 10, Color::rgb(168, 85, 247));
+            ui::draw::draw_line(s, b_x + 18, mid_y - 10, b_x + 21, mid_y + 4, Color::rgb(236, 72, 153));
+            ui::draw::draw_line(s, b_x + 21, mid_y + 4, b_x + 24, mid_y, Color::rgb(236, 72, 153));
+            ui::draw::draw_line(s, b_x + 24, mid_y, b_x + b_w - 4, mid_y, Color::rgb(236, 72, 153));
+
+            // Peak glow point
+            s.put_pixel(b_x + 18, mid_y - 10, Color::WHITE);
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -8530,6 +8558,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.put_pixel(x + 5, y + 5, Color::rgb(134, 239, 172));
             s.put_pixel(x + 6, y + 6, Color::rgb(134, 239, 172));
         }
+        23 => {
+            // Pulse mini icon: dark card with cyan/magenta pulse line
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(30, 41, 59));
+            ui::draw::draw_line(s, x + 2, y + 6, x + 4, y + 6, Color::rgb(56, 189, 248));
+            ui::draw::draw_line(s, x + 4, y + 6, x + 6, y + 2, Color::rgb(168, 85, 247));
+            ui::draw::draw_line(s, x + 6, y + 2, x + 8, y + 8, Color::rgb(236, 72, 153));
+            ui::draw::draw_line(s, x + 8, y + 8, x + 10, y + 6, Color::rgb(236, 72, 153));
+        }
         _ => {
             // System gear icon
             let gear_col = Color::rgb(140, 160, 180);
@@ -8551,6 +8587,98 @@ fn draw_sovereign_app_client_body<S: Surface + ?Sized>(
     let font_sm = Font::small();
 
     match label {
+        23 => {
+            // Pulse System Monitor (Ubuntu System Monitor sovereign companion)
+            // 1. Top Tabs Toolbar
+            let tb_h = 28;
+            s.fill_rect(Rect::new(client.x, client.y, client.w, tb_h), palette.surface_sunken);
+            s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), palette.border_subtle);
+
+            let tab_w = 110;
+            let tab_x = client.x + 10;
+            // Tab 1: [Processes]
+            ui::draw::draw_rounded_rect(s, Rect::new(tab_x, client.y + 3, tab_w, 22), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, tab_x + 18, client.y + 6, "[Processes]", palette.text_primary, &font_sm);
+
+            // Tab 2: [Resources] (Selected)
+            let tab2_x = tab_x + tab_w + 6;
+            ui::draw::draw_rounded_rect(s, Rect::new(tab2_x, client.y + 3, tab_w, 22), 3, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, Rect::new(tab2_x, client.y + 3, tab_w, 22), 1, Color::rgb(59, 130, 246));
+            ui::font::draw_text_font(s, tab2_x + 18, client.y + 6, "[Resources]", Color::WHITE, &font_reg);
+
+            // Tab 3: [File Systems]
+            let tab3_x = tab2_x + tab_w + 6;
+            ui::draw::draw_rounded_rect(s, Rect::new(tab3_x, client.y + 3, tab_w, 22), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, tab3_x + 14, client.y + 6, "[File Systems]", palette.text_primary, &font_sm);
+
+            // 2. Main Telemetry Area (Vertical Stack of 4 Resources matching Screenshot 3)
+            let body_y = client.y + tb_h + 4;
+            let sec_w = client.w - 16;
+            let sec_h = ((client.bottom() - body_y - 40) / 4).max(36);
+
+            // Section 1: CPU History (Multi-Core Line Graph)
+            let s1_y = body_y;
+            s.fill_rect(Rect::new(client.x + 8, s1_y, sec_w, sec_h), Color::rgb(15, 18, 24));
+            ui::draw::draw_rect_outline(s, Rect::new(client.x + 8, s1_y, sec_w, sec_h), 1, Color::rgb(35, 42, 54));
+            ui::font::draw_text_font(s, client.x + 12, s1_y + 4, "v CPU History (Overall: 10.6%)", Color::WHITE, &font_sm);
+
+            // Core legends (Red, Orange, Yellow, Green)
+            let leg_y = s1_y + sec_h - 12;
+            s.fill_rect(Rect::new(client.x + 16, leg_y, 8, 8), Color::rgb(239, 68, 68));
+            ui::font::draw_text_font(s, client.x + 28, leg_y, "CPU1 7.1%", Color::rgb(239, 68, 68), &font_sm);
+
+            s.fill_rect(Rect::new(client.x + 120, leg_y, 8, 8), Color::rgb(249, 115, 22));
+            ui::font::draw_text_font(s, client.x + 132, leg_y, "CPU2 12.1%", Color::rgb(249, 115, 22), &font_sm);
+
+            s.fill_rect(Rect::new(client.x + 230, leg_y, 8, 8), Color::rgb(234, 179, 8));
+            ui::font::draw_text_font(s, client.x + 242, leg_y, "CPU3 12.0%", Color::rgb(234, 179, 8), &font_sm);
+
+            s.fill_rect(Rect::new(client.x + 340, leg_y, 8, 8), Color::rgb(34, 197, 94));
+            ui::font::draw_text_font(s, client.x + 352, leg_y, "CPU4 11.1%", Color::rgb(34, 197, 94), &font_sm);
+
+            // Waveform simulation
+            let wave_w = sec_w - 40;
+            for i in 0..30 {
+                let x0 = client.x + 20 + i * (wave_w / 30);
+                let x1 = x0 + (wave_w / 30);
+                let y_base = s1_y + sec_h - 18;
+                ui::draw::draw_line(s, x0, y_base - (i % 6) * 2, x1, y_base - ((i + 1) % 6) * 2, Color::rgb(249, 115, 22));
+                ui::draw::draw_line(s, x0, y_base - (i % 4) * 3, x1, y_base - ((i + 1) % 4) * 3, Color::rgb(34, 197, 94));
+            }
+
+            // Section 2: Memory & Swap History
+            let s2_y = s1_y + sec_h + 4;
+            s.fill_rect(Rect::new(client.x + 8, s2_y, sec_w, sec_h), Color::rgb(15, 18, 24));
+            ui::draw::draw_rect_outline(s, Rect::new(client.x + 8, s2_y, sec_w, sec_h), 1, Color::rgb(35, 42, 54));
+            ui::font::draw_text_font(s, client.x + 12, s2_y + 4, "v Memory and Swap", Color::WHITE, &font_sm);
+            let mem_leg_y = s2_y + sec_h - 12;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 16, mem_leg_y, 8, 8), 4, Color::rgb(239, 68, 68));
+            ui::font::draw_text_font(s, client.x + 28, mem_leg_y, "Memory: 8.6 GB (69.4%) of 12.4 GB, Cache 5.1 GB", Color::rgb(243, 244, 246), &font_sm);
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 380, mem_leg_y, 8, 8), 4, Color::rgb(34, 197, 94));
+            ui::font::draw_text_font(s, client.x + 392, mem_leg_y, "Swap: 2.1 GB (49.4%) of 4.3 GB", Color::rgb(34, 197, 94), &font_sm);
+
+            // Section 3: Network History
+            let s3_y = s2_y + sec_h + 4;
+            s.fill_rect(Rect::new(client.x + 8, s3_y, sec_w, sec_h), Color::rgb(15, 18, 24));
+            ui::draw::draw_rect_outline(s, Rect::new(client.x + 8, s3_y, sec_w, sec_h), 1, Color::rgb(35, 42, 54));
+            ui::font::draw_text_font(s, client.x + 12, s3_y + 4, "v Network Throughput", Color::WHITE, &font_sm);
+            let net_leg_y = s3_y + sec_h - 12;
+            ui::font::draw_text_font(s, client.x + 16, net_leg_y, "v Receiving: 0 bytes/s (Total 68.6 MiB)   |   ^ Sending: 0 bytes/s (Total 5.9 MiB)", Color::rgb(56, 189, 248), &font_sm);
+
+            // Section 4: Disk I/O History
+            let s4_y = s3_y + sec_h + 4;
+            s.fill_rect(Rect::new(client.x + 8, s4_y, sec_w, sec_h), Color::rgb(15, 18, 24));
+            ui::draw::draw_rect_outline(s, Rect::new(client.x + 8, s4_y, sec_w, sec_h), 1, Color::rgb(35, 42, 54));
+            ui::font::draw_text_font(s, client.x + 12, s4_y + 4, "v Disk Storage Activity", Color::WHITE, &font_sm);
+            let dsk_leg_y = s4_y + sec_h - 12;
+            ui::font::draw_text_font(s, client.x + 16, dsk_leg_y, "^ Reading: 0 bytes/s (Total 7.9 GiB)   |   v Writing: 536.0 KiB/s (Total 2.6 GiB)", Color::rgb(249, 115, 22), &font_sm);
+
+            // Bottom Action Bar: Process summary & End Process button
+            let b_y = client.bottom() - 30;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, b_y, 90, 22), 3, Color::rgb(220, 38, 38));
+            ui::font::draw_text_font(s, client.x + 14, b_y + 4, "End Process", Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, client.x + 110, b_y + 5, "Active Task: antigravity (PID 5259) | /dev/sda1 on / (92.9% used)", palette.text_muted, &font_sm);
+        }
         22 => {
             // Aegis Firmware Updater Studio (Ubuntu Firmware Updater sovereign companion)
             // Left Device List Sidebar (Width 180)
@@ -14397,7 +14525,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 21);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -15745,7 +15873,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Aegis shortcut exists at index 20 (app_id 22)
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 21);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
         assert_eq!(DESKTOP_SHORTCUTS[20].label, "Aegis");
         assert_eq!(DESKTOP_SHORTCUTS[20].app_id, 22);
 
@@ -15767,5 +15895,34 @@ mod tests {
         let mid_y = (w.y + w.h / 2) as usize;
         let pix = surf.buffer[mid_y * 1024 + mid_x];
         assert_ne!(pix, 0, "Window client body should render content");
+    }
+
+    #[test]
+    fn test_wm_pulse_launch_and_render() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // Pulse shortcut exists at index 21 (app_id 23)
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
+        assert_eq!(DESKTOP_SHORTCUTS[21].label, "Pulse");
+        assert_eq!(DESKTOP_SHORTCUTS[21].app_id, 23);
+
+        // Launch Pulse via launch_or_restore
+        wm.launch_or_restore(23);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 23);
+        assert!(wm.windows[top_win_idx].is_open);
+        assert!(!wm.windows[top_win_idx].is_minimized);
+
+        // Render to virtual surface
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surf = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surf);
+
+        // Check pixels were rendered in window client region
+        let w = &wm.windows[top_win_idx];
+        let mid_x = (w.x + w.w / 2) as usize;
+        let mid_y = (w.y + w.h / 2) as usize;
+        let pix = surf.buffer[mid_y * 1024 + mid_x];
+        assert_ne!(pix, 0, "Pulse window client body should render content");
     }
 }

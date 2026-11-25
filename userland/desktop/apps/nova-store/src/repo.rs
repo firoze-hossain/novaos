@@ -876,6 +876,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 24. Pulse System Monitor (System / Utilities - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.pulse",
+            "Pulse System Monitor",
+            "1.0.0",
+            AppCategory::Utilities,
+            "NovaOS Telemetry Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign real-time process manager, multi-core telemetry, memory gauges, and storage monitor",
+            "Default sovereign real-time process inspector, hardware telemetry profiler, and filesystem resource monitor synthesizing Ubuntu System Monitor. Features live multi-core CPU line graphs, memory and swap gauges, network rx/tx throughput curves, disk I/O bandwidth tracking, process tree inspection with protected signal termination, and storage volume topology.",
+            "Initial sovereign release with zero-dependency pure-Rust 2D double-buffered vector rasterizer, 60-second rolling telemetry history, and ring-3 microkernel process integration.",
+            "[PULS]",
+            12 * 1024 * 1024,
+            26 * 1024 * 1024,
+            5.0,
+            8420,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Live Process Inspector".into(),
+                    caption: "Process list, search filtering, and detailed process inspector modal".into(),
+                    accent_rgb: (249, 115, 22),
+                },
+                ScreenshotPreview {
+                    title: "Multi-Core CPU History".into(),
+                    caption: "Per-core utilization graphs with 60-second rolling sample history".into(),
+                    accent_rgb: (239, 68, 68),
+                },
+                ScreenshotPreview {
+                    title: "Memory & Storage Gauges".into(),
+                    caption: "Physical memory, swap usage, network rx/tx, and disk I/O throughput".into(),
+                    accent_rgb: (34, 197, 94),
+                },
+                ScreenshotPreview {
+                    title: "Storage Volume Topology".into(),
+                    caption: "Mounted filesystems with proportional usage progress bars".into(),
+                    accent_rgb: (56, 189, 248),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

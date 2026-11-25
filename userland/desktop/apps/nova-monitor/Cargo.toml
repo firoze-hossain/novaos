@@ -1,0 +1,12 @@
+[package]
+name = "nova-monitor"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "NovaOS In-Tree Real-Time System & Resource Monitor (Pulse)"
+
+[dependencies]
+pulse-core = { path = "../../../../../pulse/crates/pulse-core" }
+pulse-storage = { path = "../../../../../pulse/crates/pulse-storage" }
+pulse-render = { path = "../../../../../pulse/crates/pulse-render" }
+pulse-ui = { path = "../../../../../pulse/crates/pulse-ui" }
