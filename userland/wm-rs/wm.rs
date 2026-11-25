@@ -253,7 +253,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 20] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 21] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -274,6 +274,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 20] = [
     DesktopIconSpec { label: "Hermes",      sublabel: "Mail Client",    app_id: 16, icon_type: 16 },
     DesktopIconSpec { label: "Nexus",       sublabel: "Software & Updt",app_id: 19, icon_type: 19 },
     DesktopIconSpec { label: "Stratum",     sublabel: "Disks Utility",  app_id: 20, icon_type: 20 },
+    DesktopIconSpec { label: "Aegis",       sublabel: "Firmware Studio",app_id: 22, icon_type: 22 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -7090,7 +7091,7 @@ impl Wm {
                     draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
                 } else if w.label == 17 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_screenshot_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.screenshot_app, &palette);
-                } else if w.label >= 13 && w.label <= 21 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                } else if w.label >= 13 && w.label <= 22 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_sovereign_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), w.label, &palette);
                 }
             }
@@ -7165,6 +7166,7 @@ impl Wm {
                     19 => "Nexus - Software Sources, Latency & Updates",
                     20 => "Stratum - Disks, Volume Topology & SMART Health",
                     21 => "Glyph - Sovereign Multilingual Code & Text Editor",
+                    22 => "Aegis - Firmware & Hardware Security Studio",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -8283,6 +8285,37 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             ui::font::draw_char_font(s, b_x + 4, b_y + 6, b'{', Color::rgb(56, 189, 248), &Font::regular());
             ui::font::draw_char_font(s, b_x + b_w - 10, b_y + 6, b'}', Color::rgb(56, 189, 248), &Font::regular());
         }
+        22 => {
+            // 22: Aegis Sovereign Firmware Studio (Microchip with gold perimeter pins and emerald silicon die)
+            let b_w = (size * 76) / 100;
+            let b_h = (size * 76) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            // Ceramic black package body
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 4, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(51, 65, 85));
+
+            // Gold perimeter lead pins (top, bottom, left, right)
+            for px in (b_x + 4..b_x + b_w - 4).step_by(5) {
+                s.fill_rect(Rect::new(px, b_y - 2, 2, 2), Color::rgb(245, 158, 11));
+                s.fill_rect(Rect::new(px, b_y + b_h, 2, 2), Color::rgb(245, 158, 11));
+            }
+            for py in (b_y + 4..b_y + b_h - 4).step_by(5) {
+                s.fill_rect(Rect::new(b_x - 2, py, 2, 2), Color::rgb(245, 158, 11));
+                s.fill_rect(Rect::new(b_x + b_w, py, 2, 2), Color::rgb(245, 158, 11));
+            }
+
+            // Central silicon die / glowing emerald core
+            let die_w = (b_w * 50) / 100;
+            let die_h = (b_h * 50) / 100;
+            let die_x = b_x + (b_w - die_w) / 2;
+            let die_y = b_y + (b_h - die_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(die_x, die_y, die_w, die_h), 3, Color::rgb(34, 197, 94));
+            ui::draw::draw_rect_outline(s, Rect::new(die_x, die_y, die_w, die_h), 1, Color::rgb(134, 239, 172));
+            s.fill_rect(Rect::new(die_x + 3, die_y + 3, die_w - 6, die_h - 6), Color::rgb(22, 101, 52));
+            s.put_pixel(die_x + die_w / 2, die_y + die_h / 2, Color::WHITE);
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -8489,6 +8522,14 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.put_pixel(x + 4, y + 7, Color::rgb(34, 197, 94));
             s.put_pixel(x + 5, y + 7, Color::rgb(34, 197, 94));
         }
+        22 => {
+            // Aegis Firmware mini icon: Microchip with gold perimeter pins and emerald silicon core
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(x + 1, y + 1, 10, 10), 1, Color::rgb(245, 158, 11));
+            s.fill_rect(Rect::new(x + 3, y + 3, 6, 6), Color::rgb(22, 101, 52));
+            s.put_pixel(x + 5, y + 5, Color::rgb(134, 239, 172));
+            s.put_pixel(x + 6, y + 6, Color::rgb(134, 239, 172));
+        }
         _ => {
             // System gear icon
             let gear_col = Color::rgb(140, 160, 180);
@@ -8510,6 +8551,93 @@ fn draw_sovereign_app_client_body<S: Surface + ?Sized>(
     let font_sm = Font::small();
 
     match label {
+        22 => {
+            // Aegis Firmware Updater Studio (Ubuntu Firmware Updater sovereign companion)
+            // Left Device List Sidebar (Width 180)
+            let sb_w = 180.min(client.w / 3);
+            s.fill_rect(Rect::new(client.x, client.y, sb_w, client.h), palette.surface_sunken);
+            s.fill_rect(Rect::new(client.x + sb_w - 1, client.y, 1, client.h), palette.border_subtle);
+
+            ui::font::draw_text_font(s, client.x + 8, client.y + 8, "HARDWARE DEVICES", palette.text_muted, &font_sm);
+
+            // Device 1: Internal SPI Controller (BIOS) - Selected
+            let dev1_rect = Rect::new(client.x + 4, client.y + 26, sb_w - 8, 48);
+            s.fill_rect(dev1_rect, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, dev1_rect, 1, palette.border_focused);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 30, "Internal SPI (BIOS)", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 46, "v1.2.4 - Updatable", Color::rgb(34, 197, 94), &font_sm);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 58, "Motherboard SPI", palette.text_muted, &font_sm);
+
+            // Device 2: Internal SPI Controller (IFD descriptor region)
+            let dev2_rect = Rect::new(client.x + 4, client.y + 78, sb_w - 8, 44);
+            s.fill_rect(dev2_rect, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 82, "Internal SPI (IFD)", palette.text_primary, &font_reg);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 98, "v1.0.0 - Hardware Locked", palette.text_muted, &font_sm);
+
+            // Device 3: SSD 860 EVO 250GB
+            let dev3_rect = Rect::new(client.x + 4, client.y + 126, sb_w - 8, 44);
+            s.fill_rect(dev3_rect, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 130, "SSD 860 EVO 250GB", palette.text_primary, &font_reg);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 146, "RVT04B6Q - Up to date", Color::rgb(56, 189, 248), &font_sm);
+
+            // Right Canvas
+            let cx = client.x + sb_w + 12;
+            let cw = (client.w - sb_w - 24).max(50);
+            let cy = client.y + 10;
+
+            // Device Header Card
+            ui::font::draw_text_font(s, cx, cy, "Internal SPI Controller (BIOS)", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, cx, cy + 16, "Current Version: 1.2.4   |   Vendor: American Megatrends Inc.", palette.text_muted, &font_sm);
+
+            // GUID & Security Metadata Box
+            let guid_box_y = cy + 36;
+            let guid_box_h = 44;
+            ui::draw::draw_rounded_rect(s, Rect::new(cx, guid_box_y, cw, guid_box_h), 4, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(cx, guid_box_y, cw, guid_box_h), 1, Color::rgb(51, 65, 85));
+            ui::font::draw_text_font(s, cx + 8, guid_box_y + 6, "GUID: 230cbf02-4856-5597-ad64-e3952137f22b", Color::rgb(56, 189, 248), &font_sm);
+            ui::font::draw_text_font(s, cx + 8, guid_box_y + 24, "SHA-256: 8f4e2b10a9c3b88939b4b0877995a5f1a5a41dc56561bc140ad8f884176d655f", Color::rgb(245, 158, 11), &font_sm);
+
+            // Safety & Operational Flags Checklist
+            let flags_y = guid_box_y + guid_box_h + 10;
+            ui::font::draw_text_font(s, cx, flags_y, "SAFETY & OPERATIONAL CAPABILITIES", Color::rgb(148, 163, 184), &font_sm);
+
+            let flag_items: &[(&str, Color)] = &[
+                ("[v] Internal device (integrated motherboard SPI flash)", Color::rgb(34, 197, 94)),
+                ("[v] Updatable (capsule payload staging supported)", Color::rgb(34, 197, 94)),
+                ("[v] Needs a reboot after installation", Color::rgb(245, 158, 11)),
+                ("[v] Cryptographic hash verification is available", Color::rgb(34, 197, 94)),
+                ("[v] System requires external power source (AC Connected: 100%)", Color::rgb(34, 197, 94)),
+                ("[v] Device is usable for the duration of the update", Color::rgb(56, 189, 248)),
+            ];
+
+            for (f_idx, &(f_text, f_col)) in flag_items.iter().enumerate() {
+                let fy = flags_y + 16 + (f_idx as i32 * 16);
+                if fy + 14 < client.bottom() - 38 {
+                    ui::font::draw_text_font(s, cx + 6, fy, f_text, f_col, &font_sm);
+                }
+            }
+
+            // Bottom Action Toolbar: [ Update Checksums ] and [ Install Update ]
+            let btn_y = (client.bottom() - 34).max(flags_y + 120);
+            if btn_y + 26 <= client.bottom() {
+                // Update Checksums Button (Matching Ubuntu Firmware Updater)
+                let btn_cs_w = 140;
+                ui::draw::draw_rounded_rect(s, Rect::new(cx, btn_y, btn_cs_w, 24), 3, Color::rgb(14, 165, 233));
+                ui::font::draw_text_font(s, cx + 12, btn_y + 6, "Update Checksums", Color::WHITE, &font_sm);
+
+                // Install Update Button
+                let btn_inst_x = cx + btn_cs_w + 10;
+                let btn_inst_w = 120;
+                ui::draw::draw_rounded_rect(s, Rect::new(btn_inst_x, btn_y, btn_inst_w, 24), 3, Color::rgb(34, 197, 94));
+                ui::font::draw_text_font(s, btn_inst_x + 14, btn_y + 6, "Install Update", Color::WHITE, &font_sm);
+
+                // Power Interlock Verified Notice
+                let note_x = btn_inst_x + btn_inst_w + 12;
+                if note_x + 120 < client.right() {
+                    ui::font::draw_text_font(s, note_x, btn_y + 6, "AC Connected • Safety OK", Color::rgb(148, 163, 184), &font_sm);
+                }
+            }
+        }
         20 => {
             // Stratum Disks (gnome-disk-utility sovereign companion)
             // Left Drive List Sidebar (Width 180)
@@ -14269,7 +14397,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 20);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 21);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -15610,5 +15738,34 @@ mod tests {
             }
             let _ = f.write_all(&rgb);
         }
+    }
+
+    #[test]
+    fn test_wm_aegis_launch_and_render() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // Aegis shortcut exists at index 20 (app_id 22)
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 21);
+        assert_eq!(DESKTOP_SHORTCUTS[20].label, "Aegis");
+        assert_eq!(DESKTOP_SHORTCUTS[20].app_id, 22);
+
+        // Launch Aegis via launch_or_restore
+        wm.launch_or_restore(22);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 22);
+        assert!(wm.windows[top_win_idx].is_open);
+        assert!(!wm.windows[top_win_idx].is_minimized);
+
+        // Render to virtual surface
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surf = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surf);
+
+        // Check pixels were rendered in window client region
+        let w = &wm.windows[top_win_idx];
+        let mid_x = (w.x + w.w / 2) as usize;
+        let mid_y = (w.y + w.h / 2) as usize;
+        let pix = surf.buffer[mid_y * 1024 + mid_x];
+        assert_ne!(pix, 0, "Window client body should render content");
     }
 }

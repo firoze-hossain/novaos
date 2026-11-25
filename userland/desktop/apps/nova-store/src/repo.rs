@@ -838,6 +838,44 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 23. Aegis Firmware Studio (System / Settings - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.aegis",
+            "Aegis Firmware Studio",
+            "1.0.0",
+            AppCategory::Settings,
+            "NovaOS Hardware Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign firmware manager, hardware component discovery, cryptographic checksums, and flashing pipeline",
+            "Default sovereign firmware updater and hardware component integrity verifier. Discovers system SPI controllers (UEFI/BIOS, IFD regions), storage controller microcode (Samsung, NVMe drives), embedded controllers, and security elements. Features automated GUID generation, cryptographic SHA-256 live checksum verification, and 5-stage safe firmware flashing pipeline.",
+            "Initial sovereign release with zero-dependency pure-Rust 2D vector rasterizer, multi-component GUID allocation, and power interlock safety checks.",
+            "[FIRM]",
+            14 * 1024 * 1024,
+            32 * 1024 * 1024,
+            5.0,
+            6890,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Hardware Firmware Inventory".into(),
+                    caption: "Internal SPI controllers, storage drives, and component metadata".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Cryptographic Checksums".into(),
+                    caption: "SHA-256 live verification and hardware state validation".into(),
+                    accent_rgb: (34, 197, 94),
+                },
+                ScreenshotPreview {
+                    title: "5-Stage Flashing Pipeline".into(),
+                    caption: "Preflight power checks, capsule staging, and reboot scheduling".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

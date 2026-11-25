@@ -367,6 +367,22 @@ update_stratum() {
     fi
 }
 
+update_aegis() {
+    local repo="$OTHERS_DIR/aegis"
+    echo "========================================================"
+    echo " Updating Aegis (Firmware & Hardware Security Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "aegis"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -387,6 +403,10 @@ case "$TARGET_APP" in
         update_hermes
         update_nexus
         update_stratum
+        update_aegis
+        ;;
+    aegis|firmware|nova-firmware)
+        update_aegis
         ;;
     stratum|disks|nova-disks)
         update_stratum

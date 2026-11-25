@@ -1,0 +1,12 @@
+[package]
+name = "nova-firmware"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "NovaOS In-Tree Firmware & Hardware Security Studio (Aegis)"
+
+[dependencies]
+aegis-core = { path = "../../../../../aegis/crates/aegis-core" }
+aegis-storage = { path = "../../../../../aegis/crates/aegis-storage" }
+aegis-render = { path = "../../../../../aegis/crates/aegis-render" }
+aegis-ui = { path = "../../../../../aegis/crates/aegis-ui" }

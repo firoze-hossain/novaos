@@ -1,0 +1,8 @@
+[package]
+id = "org.novaos.aegis"
+name = "Aegis Firmware Studio"
+version = "1.0.0"
+category = "system"
+description = "Sovereign hardware firmware updates, SPI flash, and cryptographic integrity verifier"
+exec = "AEGIS.ELF"
+icon = "firmware"
