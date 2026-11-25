@@ -334,7 +334,7 @@ KERNEL_BIN = $(BUILD_DIR)/novaos.bin
 ISO_FILE = novaos.iso
 
 # Default target
-all: $(ISO_FILE)
+all: $(ISO_FILE) $(DISK_IMG)
 
 # Compile C files.
 #
@@ -374,12 +374,16 @@ $(KERNEL_SERVER_BIN): $(OBJS)
 
 # Create ISO
 $(ISO_FILE): $(KERNEL_BIN)
-	@mkdir -p $(ISO_DIR)/boot/grub
+	@mkdir -p $(ISO_DIR)/boot/grub $(ISO_DIR)/apps $(ISO_DIR)/packages
 	cp $(KERNEL_BIN) $(ISO_DIR)/boot/novaos.bin
 	cp $(KERNEL_BIN) $(ISO_DIR)/boot/novaos_b.bin
 	cp tools/grub.cfg $(ISO_DIR)/boot/grub/
+	cp $(DISK_FIXTURES_DIR)/*.ELF $(ISO_DIR)/apps/ 2>/dev/null || true
+	cp $(DISK_FIXTURES_DIR)/*.PKG $(ISO_DIR)/packages/ 2>/dev/null || true
+	cp $(DISK_FIXTURES_DIR)/*.CFG $(ISO_DIR)/ 2>/dev/null || true
+	cp $(DISK_FIXTURES_DIR)/*.TXT $(ISO_DIR)/ 2>/dev/null || true
 	$(GRUB_MKRESCUE) -o $(ISO_FILE) $(ISO_DIR)
-	@echo "✅ NovaOS ISO created: $(ISO_FILE)"
+	@echo "✅ NovaOS ISO created with all bundled apps & packages: $(ISO_FILE)"
 
 # Create the test disk image (Phase 3+; genuinely partitioned as of
 # Phase 25 - see tools/build-disk-image.sh for the full build process

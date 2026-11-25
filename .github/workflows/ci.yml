@@ -33,8 +33,10 @@ jobs:
             nasm gcc-multilib xorriso grub-pc-bin grub-common \
             qemu-system-x86 mtools parted e2fsprogs
 
-      - name: Build ISO
-        run: make
+      - name: Build ISO and Disk Image
+        run: |
+          make
+          make disk.img
 
       - name: libc host tests
         # Phase 73: the userland C library's allocator, printf, stdio and
@@ -69,6 +71,7 @@ jobs:
             echo "=== make test: attempt $attempt/3 ==="
             if make test; then
               echo "=== make test passed on attempt $attempt ==="
+              make disk.img
               exit 0
             fi
             echo "=== make test failed on attempt $attempt ==="
@@ -97,3 +100,9 @@ jobs:
         with:
           name: novaos-iso
           path: novaos.iso
+
+      - name: Upload Disk Image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novaos-disk-image
+          path: disk.img

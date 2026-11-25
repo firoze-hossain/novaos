@@ -25,7 +25,7 @@ cd "$(dirname "$0")/../.."
 echo "================================================================================"
 echo "           NovaOS Interface Track - Full Comprehensive UI QA Pass              "
 echo "================================================================================"
-echo "Target: 16 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
+echo "Target: 22 UI Subsystems & Applications (Months 1 - 6 Interface Track)"
 echo "Date:   $(date)"
 echo "--------------------------------------------------------------------------------"
 
@@ -37,7 +37,7 @@ run_qa_step() {
     SCRIPT_PATH="$2"
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
     echo ""
-    echo ">>> Running QA Suite [$TOTAL_SUITES/18]: $SUITE_NAME"
+    echo ">>> Running QA Suite [$TOTAL_SUITES/22]: $SUITE_NAME"
     echo "--------------------------------------------------------------------------------"
     if [ -f "$SCRIPT_PATH" ]; then
         sh "$SCRIPT_PATH"
@@ -70,6 +70,7 @@ run_qa_step "18. Sovereign Camera & Video Studio (userland/desktop/apps/nova-cam
 run_qa_step "19. Sovereign Vector Cartography & Navigation (userland/desktop/apps/nova-map)" "tools/tests/run_nova_map_tests.sh"
 run_qa_step "20. Sovereign Mail & Communication Studio (userland/desktop/apps/nova-mail)" "tools/tests/run_nova_mail_tests.sh"
 run_qa_step "21. Sovereign Software Sources & Updates Studio (userland/desktop/apps/nova-updates)" "tools/tests/run_nexus_tests.sh"
+run_qa_step "22. Sovereign Disks & Storage Management Studio (userland/desktop/apps/nova-disks)" "tools/tests/run_stratum_tests.sh"
 
 echo ""
 echo "================================================================================"

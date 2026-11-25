@@ -253,7 +253,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 12] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 20] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -266,6 +266,14 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 12] = [
     DesktopIconSpec { label: "App Store",   sublabel: "Packages",       app_id: 4, icon_type: 4 },
     DesktopIconSpec { label: "Settings",    sublabel: "Control Panel",  app_id: 5, icon_type: 5 },
     DesktopIconSpec { label: "README.txt",  sublabel: "Document",       app_id: 3, icon_type: 3 },
+    DesktopIconSpec { label: "Screenshot",  sublabel: "Screen Studio",  app_id: 17, icon_type: 17 },
+    DesktopIconSpec { label: "Chronos",     sublabel: "Clock & Alarms", app_id: 13, icon_type: 13 },
+    DesktopIconSpec { label: "Mnemos",      sublabel: "Clipboard",      app_id: 14, icon_type: 14 },
+    DesktopIconSpec { label: "Iris",        sublabel: "Camera Studio",  app_id: 18, icon_type: 18 },
+    DesktopIconSpec { label: "Atlas",       sublabel: "World Maps",     app_id: 15, icon_type: 15 },
+    DesktopIconSpec { label: "Hermes",      sublabel: "Mail Client",    app_id: 16, icon_type: 16 },
+    DesktopIconSpec { label: "Nexus",       sublabel: "Software & Updt",app_id: 19, icon_type: 19 },
+    DesktopIconSpec { label: "Stratum",     sublabel: "Disks Utility",  app_id: 20, icon_type: 20 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -5953,7 +5961,7 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
-                if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5969,7 +5977,7 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
-                if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 {
+                if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5984,7 +5992,7 @@ impl Wm {
         // 3. Fallback: reuse the background-most window slot
         let bg_idx = self.z_order[0];
         self.windows[bg_idx].label = app_id;
-        if (app_id >= 4 && app_id <= 17) && self.screen_w >= 800 {
+        if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 {
             self.windows[bg_idx].w = 680;
             self.windows[bg_idx].h = 440;
             self.windows[bg_idx].x = (self.screen_w - 680) / 2;
@@ -7082,6 +7090,8 @@ impl Wm {
                     draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
                 } else if w.label == 17 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_screenshot_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.screenshot_app, &palette);
+                } else if w.label >= 13 && w.label <= 21 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                    draw_sovereign_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), w.label, &palette);
                 }
             }
 
@@ -7146,7 +7156,15 @@ impl Wm {
                     10 => "Vellum - Professional PDF Studio",
                     11 => "Vortex - BitTorrent & Stream Studio",
                     12 => "Zenith Office - Professional Productivity Suite",
+                    13 => "Chronos - World Clock, Alarms & Stopwatches",
+                    14 => "Mnemos - Clipboard History & Snippets Studio",
+                    15 => "Atlas - High-Precision Vector Maps & Navigation",
+                    16 => "Hermes - Unified Sovereign Mail & Communication",
                     17 => "Screenshot & Screen Recorder Studio",
+                    18 => "Iris - Professional Camera & Video Studio",
+                    19 => "Nexus - Software Sources, Latency & Updates",
+                    20 => "Stratum - Disks, Volume Topology & SMART Health",
+                    21 => "Glyph - Sovereign Multilingual Code & Text Editor",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -8115,6 +8133,156 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
 
             s.fill_rect(Rect::new(cam_x + cam_w - 5, cam_y + 2, 3, 3), Color::rgb(239, 68, 68));
         }
+        13 => {
+            // 13: Chronos Clock (Sleek circular dial, golden bezel, hour/minute hands, electric cyan second hand)
+            let d_sz = (size * 84) / 100;
+            let cx = x + size / 2;
+            let cy = y + size / 2;
+            let rad = d_sz / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - rad + 1, cy - rad + 1, d_sz, d_sz), rad, Color::rgba(0, 0, 0, 50));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - rad, cy - rad, d_sz, d_sz), rad, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(cx - rad, cy - rad, d_sz, d_sz), 1, Color::rgb(245, 158, 11));
+            // 12, 3, 6, 9 hour ticks
+            s.fill_rect(Rect::new(cx - 1, cy - rad + 3, 2, 3), Color::rgb(226, 232, 240));
+            s.fill_rect(Rect::new(cx - 1, cy + rad - 6, 2, 3), Color::rgb(226, 232, 240));
+            s.fill_rect(Rect::new(cx - rad + 3, cy - 1, 3, 2), Color::rgb(226, 232, 240));
+            s.fill_rect(Rect::new(cx + rad - 6, cy - 1, 3, 2), Color::rgb(226, 232, 240));
+            // Hands: Hour (pointing ~10), Minute (pointing ~2), Second (cyan)
+            ui::draw::draw_line(s, cx, cy, cx - (rad * 4) / 10, cy - (rad * 4) / 10, Color::rgb(245, 158, 11));
+            ui::draw::draw_line(s, cx, cy, cx + (rad * 6) / 10, cy - (rad * 4) / 10, Color::WHITE);
+            ui::draw::draw_line(s, cx, cy, cx + (rad * 3) / 10, cy + (rad * 6) / 10, Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(cx - 1, cy - 1, 3, 3), Color::rgb(245, 158, 11));
+        }
+        14 => {
+            // 14: Mnemos Clipboard (Parchment clipboard, golden brass clamp, snippet bars)
+            let b_w = (size * 76) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2 + 1;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 3, Color::rgb(51, 65, 85));
+            // Brass clip at top
+            let clp_w = (b_w * 44) / 100;
+            let clp_x = b_x + (b_w - clp_w) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(clp_x, b_y - 2, clp_w, 4), 1, Color::rgb(234, 179, 8));
+            // Paper note
+            let p_w = b_w - 6;
+            let p_h = b_h - 8;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x + 3, b_y + 4, p_w, p_h), 2, Color::rgb(248, 250, 252));
+            // Text snippet lines
+            s.fill_rect(Rect::new(b_x + 6, b_y + 8, p_w - 6, 2), Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(b_x + 6, b_y + 13, p_w - 10, 2), Color::rgb(99, 102, 241));
+            s.fill_rect(Rect::new(b_x + 6, b_y + 18, p_w - 8, 2), Color::rgb(16, 185, 129));
+            s.fill_rect(Rect::new(b_x + 6, b_y + 23, (p_w * 50) / 100, 2), Color::rgb(148, 163, 184));
+        }
+        15 => {
+            // 15: Atlas Maps (Folding map canvas with highway route, blue ocean, red navigation pin)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 5, Color::rgb(16, 185, 129));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(5, 150, 105));
+            // Ocean curve
+            s.fill_rect(Rect::new(b_x + 2, b_y + b_h - 8, b_w - 4, 6), Color::rgb(14, 165, 233));
+            // Road line
+            ui::draw::draw_line(s, b_x + 3, b_y + 18, b_x + b_w - 4, b_y + 6, Color::rgb(245, 158, 11));
+            // Red destination pin
+            let px = b_x + b_w / 2;
+            let py = b_y + 6;
+            s.fill_rect(Rect::new(px - 3, py, 6, 6), Color::rgb(239, 68, 68));
+            s.put_pixel(px - 1, py + 2, Color::WHITE);
+            ui::draw::draw_line(s, px, py + 6, px, py + 10, Color::rgb(239, 68, 68));
+        }
+        16 => {
+            // 16: Hermes Mail (Sleek postal envelope with sapphire gradient and crimson stamp)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 68) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2 + 1;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 3, Color::rgb(248, 250, 252));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(203, 213, 225));
+            // Flap diagonal folds
+            let mid_x = b_x + b_w / 2;
+            let flap_tip_y = b_y + (b_h * 55) / 100;
+            ui::draw::draw_line(s, b_x + 1, b_y + 1, mid_x, flap_tip_y, Color::rgb(14, 165, 233));
+            ui::draw::draw_line(s, b_x + b_w - 2, b_y + 1, mid_x, flap_tip_y, Color::rgb(14, 165, 233));
+            // Postal stamp in top-right
+            s.fill_rect(Rect::new(b_x + b_w - 8, b_y + 3, 5, 5), Color::rgb(239, 68, 68));
+        }
+        18 => {
+            // 18: Iris Camera (Professional camera with dark obsidian chassis, metallic lens & glass sheen)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 68) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2 + 2;
+            // Pentaprism top bump
+            let bmp_w = (b_w * 40) / 100;
+            let bmp_x = b_x + (b_w - bmp_w) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(bmp_x, b_y - 3, bmp_w, 4), 1, Color::rgb(30, 41, 59));
+            // Main body
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 4, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(71, 85, 105));
+            // Lens ring
+            let l_sz = (b_h * 75) / 100;
+            let lx = b_x + (b_w - l_sz) / 2;
+            let ly = b_y + (b_h - l_sz) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(lx, ly, l_sz, l_sz), l_sz / 2, Color::rgb(51, 65, 85));
+            ui::draw::draw_rounded_rect(s, Rect::new(lx + 2, ly + 2, l_sz - 4, l_sz - 4), (l_sz - 4) / 2, Color::rgb(14, 165, 233));
+            s.put_pixel(lx + 4, ly + 4, Color::WHITE);
+            // Red recording / sensor dot
+            s.fill_rect(Rect::new(b_x + b_w - 6, b_y + 3, 3, 3), Color::rgb(239, 68, 68));
+        }
+        19 => {
+            // 19: Nexus Updates (Ubuntu orange/auburn gradient badge with circular sync arrows & gear)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(234, 88, 12));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(251, 146, 60));
+            // Circular sync arrows
+            let mid_x = b_x + b_w / 2;
+            let mid_y = b_y + b_h / 2;
+            ui::draw::draw_line(s, mid_x - 5, mid_y - 4, mid_x + 5, mid_y - 4, Color::WHITE);
+            ui::draw::draw_line(s, mid_x + 5, mid_y - 4, mid_x + 2, mid_y - 7, Color::WHITE);
+            ui::draw::draw_line(s, mid_x + 5, mid_y + 4, mid_x - 5, mid_y + 4, Color::WHITE);
+            ui::draw::draw_line(s, mid_x - 5, mid_y + 4, mid_x - 2, mid_y + 7, Color::WHITE);
+            s.put_pixel(mid_x, mid_y, Color::rgb(254, 240, 138));
+        }
+        20 => {
+            // 20: Stratum Disks (Modern 2.5" SSD/HDD enclosure with metallic drive rails and partitioned storage strip)
+            let b_w = (size * 84) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 4, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(100, 116, 139));
+            // Drive label plate
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x + 3, b_y + 3, b_w - 6, 8), 2, Color::rgb(248, 250, 252));
+            s.fill_rect(Rect::new(b_x + 5, b_y + 6, b_w - 12, 2), Color::rgb(14, 165, 233));
+            // Proportional partition strip across middle (Ubuntu disks style!)
+            let bar_y = b_y + 14;
+            let bar_w = b_w - 6;
+            let p1_w = (bar_w * 25) / 100;
+            let p2_w = (bar_w * 50) / 100;
+            let p3_w = bar_w - p1_w - p2_w;
+            s.fill_rect(Rect::new(b_x + 3, bar_y, p1_w, 6), Color::rgb(14, 165, 233)); // EFI (cyan)
+            s.fill_rect(Rect::new(b_x + 3 + p1_w, bar_y, p2_w, 6), Color::rgb(34, 197, 94)); // Root (emerald)
+            s.fill_rect(Rect::new(b_x + 3 + p1_w + p2_w, bar_y, p3_w, 6), Color::rgb(59, 130, 246)); // Data (blue)
+            // Activity status LED (green)
+            s.put_pixel(b_x + b_w - 6, b_y + b_h - 5, Color::rgb(34, 197, 94));
+        }
+        21 => {
+            // 21: Glyph Code & Text Editor (Parchment slate with code brackets { })
+            let b_w = (size * 78) / 100;
+            let b_h = (size * 84) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 3, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(56, 189, 248));
+            ui::font::draw_char_font(s, b_x + 4, b_y + 6, b'{', Color::rgb(56, 189, 248), &Font::regular());
+            ui::font::draw_char_font(s, b_x + b_w - 10, b_y + 6, b'}', Color::rgb(56, 189, 248), &Font::regular());
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -8264,12 +8432,261 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             s.fill_rect(Rect::new(x + 4, y + 4, 4, 4), Color::rgb(14, 165, 233));
             s.put_pixel(x + 8, y + 4, Color::rgb(239, 68, 68)); // red recording dot
         }
+        13 => {
+            // Chronos mini icon: circle with clock hands
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 5, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(x + 1, y + 1, 10, 10), 1, Color::rgb(245, 158, 11));
+            ui::draw::draw_line(s, x + 6, y + 6, x + 6, y + 3, Color::WHITE);
+            ui::draw::draw_line(s, x + 6, y + 6, x + 8, y + 6, Color::rgb(14, 165, 233));
+        }
+        14 => {
+            // Mnemos mini icon: clipboard
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 2, y + 2, 8, 9), 1, Color::rgb(51, 65, 85));
+            s.fill_rect(Rect::new(x + 4, y + 1, 4, 2), Color::rgb(234, 179, 8));
+            s.fill_rect(Rect::new(x + 4, y + 4, 4, 1), Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(x + 4, y + 6, 4, 1), Color::WHITE);
+        }
+        15 => {
+            // Atlas mini icon: map with pin
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(16, 185, 129));
+            s.put_pixel(x + 6, y + 4, Color::rgb(239, 68, 68));
+            s.put_pixel(x + 6, y + 5, Color::rgb(239, 68, 68));
+            ui::draw::draw_line(s, x + 2, y + 8, x + 9, y + 8, Color::rgb(14, 165, 233));
+        }
+        16 => {
+            // Hermes mini icon: mail envelope
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 2, 10, 8), 1, Color::WHITE);
+            ui::draw::draw_line(s, x + 1, y + 2, x + 6, y + 6, Color::rgb(14, 165, 233));
+            ui::draw::draw_line(s, x + 10, y + 2, x + 6, y + 6, Color::rgb(14, 165, 233));
+        }
+        18 => {
+            // Iris mini icon: camera
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 2, 10, 8), 2, Color::rgb(30, 41, 59));
+            s.fill_rect(Rect::new(x + 4, y + 4, 4, 4), Color::rgb(14, 165, 233));
+            s.put_pixel(x + 8, y + 3, Color::rgb(239, 68, 68));
+        }
+        19 => {
+            // Nexus mini icon: update sync circle
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(234, 88, 12));
+            ui::draw::draw_line(s, x + 3, y + 3, x + 8, y + 3, Color::WHITE);
+            ui::draw::draw_line(s, x + 8, y + 3, x + 8, y + 6, Color::WHITE);
+            ui::draw::draw_line(s, x + 8, y + 8, x + 3, y + 8, Color::WHITE);
+            ui::draw::draw_line(s, x + 3, y + 8, x + 3, y + 5, Color::WHITE);
+        }
+        20 => {
+            // Stratum mini icon: disk drive with partition stripe
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(30, 41, 59));
+            s.fill_rect(Rect::new(x + 2, y + 5, 3, 3), Color::rgb(14, 165, 233));
+            s.fill_rect(Rect::new(x + 5, y + 5, 4, 3), Color::rgb(34, 197, 94));
+            s.put_pixel(x + 8, y + 2, Color::rgb(34, 197, 94));
+        }
+        21 => {
+            // Glyph mini icon: code file
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 2, y + 1, 8, 10), 1, Color::rgb(15, 23, 42));
+            s.put_pixel(x + 4, y + 4, Color::rgb(56, 189, 248));
+            s.put_pixel(x + 5, y + 4, Color::rgb(56, 189, 248));
+            s.put_pixel(x + 6, y + 4, Color::rgb(56, 189, 248));
+            s.put_pixel(x + 4, y + 7, Color::rgb(34, 197, 94));
+            s.put_pixel(x + 5, y + 7, Color::rgb(34, 197, 94));
+        }
         _ => {
             // System gear icon
             let gear_col = Color::rgb(140, 160, 180);
             s.fill_rect(Rect::new(x + 4, y + 2, 4, 8), gear_col);
             s.fill_rect(Rect::new(x + 2, y + 4, 8, 4), gear_col);
             s.fill_rect(Rect::new(x + 5, y + 5, 2, 2), palette.titlebar_active);
+        }
+    }
+}
+
+/// Renders sovereign application client previews (Chronos, Mnemos, Atlas, Hermes, Iris, Nexus, Stratum, Glyph).
+fn draw_sovereign_app_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    label: u8,
+    palette: &ThemePalette,
+) {
+    let font_reg = Font::regular();
+    let font_sm = Font::small();
+
+    match label {
+        20 => {
+            // Stratum Disks (gnome-disk-utility sovereign companion)
+            // Left Drive List Sidebar (Width 180)
+            let sb_w = 180.min(client.w / 3);
+            s.fill_rect(Rect::new(client.x, client.y, sb_w, client.h), palette.surface_sunken);
+            s.fill_rect(Rect::new(client.x + sb_w - 1, client.y, 1, client.h), palette.border_subtle);
+
+            ui::font::draw_text_font(s, client.x + 8, client.y + 8, "STORAGE DRIVES", palette.text_muted, &font_sm);
+
+            // Drive 1: Samsung SSD 860 EVO (Selected)
+            let d1_rect = Rect::new(client.x + 4, client.y + 26, sb_w - 8, 48);
+            s.fill_rect(d1_rect, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, d1_rect, 1, palette.border_focused);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 30, "Samsung SSD 860", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 46, "250 GB - 34 deg C OK", Color::rgb(34, 197, 94), &font_sm);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 58, "/dev/sda (GPT)", palette.text_muted, &font_sm);
+
+            // Drive 2: ASUS Optical CD/DVD
+            let d2_rect = Rect::new(client.x + 4, client.y + 80, sb_w - 8, 40);
+            s.fill_rect(d2_rect, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 84, "DRW-24D3ST", palette.text_primary, &font_reg);
+            ui::font::draw_text_font(s, client.x + 10, client.y + 100, "Optical - No Media", palette.text_muted, &font_sm);
+
+            // Right Canvas
+            let cx = client.x + sb_w + 12;
+            let cw = (client.w - sb_w - 24).max(50);
+            let cy = client.y + 10;
+
+            // Drive Header Card
+            ui::font::draw_text_font(s, cx, cy, "Samsung SSD 860 EVO 250GB", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, cx, cy + 16, "Serial: S3Z9NB0K123456V  |  Firmware: RVT04B6Q  |  SMART Assessment: Passed", palette.text_muted, &font_sm);
+
+            // Volumes Proportional Layout Section
+            ui::font::draw_text_font(s, cx, cy + 38, "VOLUMES & PARTITION TOPOLOGY", Color::rgb(56, 189, 248), &font_sm);
+            let bar_y = cy + 54;
+            let bar_h = 42;
+            ui::draw::draw_rounded_rect(s, Rect::new(cx, bar_y, cw, bar_h), 4, Color::rgb(15, 23, 42));
+            ui::draw::draw_rect_outline(s, Rect::new(cx, bar_y, cw, bar_h), 1, Color::rgb(51, 65, 85));
+
+            // Proportional segments: EFI (1.1 GB, ~5%), Root (143 GB, ~57%), Dev (106 GB, ~38%)
+            let s1_w = ((cw as u32 * 6) / 100).max(30) as i32;
+            let s2_w = ((cw as u32 * 56) / 100).max(50) as i32;
+            let s3_w = cw - s1_w - s2_w - 4;
+
+            // Segment 1: EFI System Partition (FAT32)
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 2, bar_y + 2, s1_w, bar_h - 4), 2, Color::rgb(14, 165, 233));
+            ui::font::draw_text_font(s, cx + 6, bar_y + 8, "EFI", Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, cx + 6, bar_y + 22, "1.1 GB", Color::rgba(255, 255, 255, 200), &font_sm);
+
+            // Segment 2: Linux Root Filesystem (Ext4) - Selected
+            let seg2_x = cx + 3 + s1_w;
+            ui::draw::draw_rounded_rect(s, Rect::new(seg2_x, bar_y + 2, s2_w, bar_h - 4), 2, Color::rgb(34, 197, 94));
+            ui::draw::draw_rect_outline(s, Rect::new(seg2_x, bar_y + 2, s2_w, bar_h - 4), 2, Color::WHITE);
+            ui::font::draw_text_font(s, seg2_x + 8, bar_y + 8, "Filesystem Root (ext4) [/]", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, seg2_x + 8, bar_y + 24, "143 GB  |  Active Mount  |  UUID: 4f8a-92b1-ext4", Color::rgba(255, 255, 255, 220), &font_sm);
+
+            // Segment 3: Developer Storage (Ext4)
+            if s3_w > 20 {
+                let seg3_x = seg2_x + s2_w + 1;
+                ui::draw::draw_rounded_rect(s, Rect::new(seg3_x, bar_y + 2, s3_w, bar_h - 4), 2, Color::rgb(59, 130, 246));
+                ui::font::draw_text_font(s, seg3_x + 6, bar_y + 8, "Dev /home", Color::WHITE, &font_sm);
+                ui::font::draw_text_font(s, seg3_x + 6, bar_y + 22, "106 GB", Color::rgba(255, 255, 255, 200), &font_sm);
+            }
+
+            // Toolbar Controls Below Volumes Bar
+            let tb_y = bar_y + bar_h + 8;
+            // Play/Mount Button
+            ui::draw::draw_rounded_rect(s, Rect::new(cx, tb_y, 28, 22), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, cx + 8, tb_y + 4, "|>", Color::rgb(34, 197, 94), &font_sm);
+            // Gear Settings Button
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 34, tb_y, 28, 22), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, cx + 42, tb_y + 4, "*", Color::WHITE, &font_sm);
+            // Benchmark Button
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 68, tb_y, 76, 22), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, cx + 74, tb_y + 4, "Benchmark", Color::rgb(245, 158, 11), &font_sm);
+
+            // Partition Details Grid
+            let det_y = tb_y + 30;
+            ui::draw::draw_rounded_rect(s, Rect::new(cx, det_y, cw, (client.bottom() - det_y - 8).max(40)), 4, palette.surface_sunken);
+            ui::font::draw_text_font(s, cx + 10, det_y + 8, "Size: 143 GB (143,100,526,592 bytes)    Device: /dev/sda2", Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, cx + 10, det_y + 22, "Type: Linux Filesystem (ext4)             Mount: / (rw,relatime)", palette.text_primary, &font_sm);
+            ui::font::draw_text_font(s, cx + 10, det_y + 36, "SMART Health: Good (34 deg C)            Read Speed: 540 MB/s", Color::rgb(34, 197, 94), &font_sm);
+        }
+        19 => {
+            // Nexus Software & Updates
+            let cy = client.y + 8;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, cy, client.w - 16, 26), 4, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 14, cy + 6, "[NovaOS Software]   [Other PPAs]   [Updates (4)]   [Keys]   [Drivers]   [Latency]", Color::WHITE, &font_sm);
+
+            let body_y = cy + 34;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, body_y, client.w - 16, (client.bottom() - body_y - 8).max(40)), 4, palette.surface_sunken);
+            ui::font::draw_text_font(s, client.x + 16, body_y + 8, "Official NovaOS Sovereign Repositories (Primary Channel: main, universe)", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, client.x + 16, body_y + 26, "Download Server: repo.novaos.org (Mirror Latency: 12 ms - FASTEST)", Color::rgb(34, 197, 94), &font_sm);
+            ui::font::draw_text_font(s, client.x + 16, body_y + 42, "Ed25519 Cryptographic Trust Anchor: 0x9A4F...B82E (Verified)", Color::rgb(56, 189, 248), &font_sm);
+            ui::font::draw_text_font(s, client.x + 16, body_y + 60, "Pending Updates Available: 4 packages (191.9 MB payload)", Color::rgb(245, 158, 11), &font_sm);
+        }
+        16 => {
+            // Hermes Mail
+            let sb_w = 120.min(client.w / 4);
+            s.fill_rect(Rect::new(client.x, client.y, sb_w, client.h), palette.surface_sunken);
+            ui::font::draw_text_font(s, client.x + 8, client.y + 8, "MAILBOXES", palette.text_muted, &font_sm);
+            ui::font::draw_text_font(s, client.x + 8, client.y + 24, "Inbox (3)", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, client.x + 8, client.y + 40, "Starred", palette.text_primary, &font_sm);
+            ui::font::draw_text_font(s, client.x + 8, client.y + 54, "Sent", palette.text_primary, &font_sm);
+            ui::font::draw_text_font(s, client.x + 8, client.y + 68, "Drafts", palette.text_primary, &font_sm);
+
+            let msg_x = client.x + sb_w + 8;
+            ui::font::draw_text_font(s, msg_x, client.y + 8, "Hermes Sovereign Mail - Unified Inbox", Color::WHITE, &font_reg);
+            ui::draw::draw_rounded_rect(s, Rect::new(msg_x, client.y + 26, client.w - sb_w - 16, 40), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, msg_x + 6, client.y + 30, "NovaOS Security Team  <security@novaos.org>", Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, msg_x + 6, client.y + 44, "Subject: Sovereign Root Keys & Ed25519 Audit Passed", Color::rgb(34, 197, 94), &font_sm);
+        }
+        15 => {
+            // Atlas Maps
+            s.fill_rect(client, Color::rgb(15, 23, 42));
+            // Grid lines
+            for gx in (client.x..client.right()).step_by(40) {
+                ui::draw::draw_line(s, gx, client.y, gx, client.bottom(), Color::rgb(30, 41, 59));
+            }
+            for gy in (client.y..client.bottom()).step_by(40) {
+                ui::draw::draw_line(s, client.x, gy, client.right(), gy, Color::rgb(30, 41, 59));
+            }
+            // Ocean / river
+            ui::draw::draw_line(s, client.x + 20, client.bottom() - 30, client.right() - 20, client.y + 30, Color::rgb(14, 165, 233));
+            // Navigation search card
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 12, client.y + 12, 220, 32), 4, Color::rgba(0, 0, 0, 180));
+            ui::font::draw_text_font(s, client.x + 20, client.y + 20, "Search location or route...", palette.text_muted, &font_sm);
+            // Waypoint pin
+            let px = client.x + client.w / 2;
+            let py = client.y + client.h / 2;
+            s.fill_rect(Rect::new(px - 4, py - 4, 8, 8), Color::rgb(239, 68, 68));
+            ui::font::draw_text_font(s, px + 8, py - 4, "Destination: Nova Station", Color::WHITE, &font_sm);
+        }
+        18 => {
+            // Iris Camera
+            s.fill_rect(client, Color::rgb(10, 12, 16));
+            // Viewfinder crosshair grid
+            let cx = client.x + client.w / 2;
+            let cy = client.y + client.h / 2;
+            ui::draw::draw_line(s, cx - 20, cy, cx + 20, cy, Color::rgba(255, 255, 255, 80));
+            ui::draw::draw_line(s, cx, cy - 20, cx, cy + 20, Color::rgba(255, 255, 255, 80));
+            // Camera HUD
+            ui::font::draw_text_font(s, client.x + 12, client.y + 10, "IRIS 4K UHD (3840x2160 @ 60fps)  |  HDR On", Color::WHITE, &font_sm);
+            // Shutter button at bottom
+            let btn_r = 16;
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - btn_r, client.bottom() - 40, btn_r * 2, btn_r * 2), btn_r, Color::WHITE);
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - btn_r + 2, client.bottom() - 38, (btn_r - 2) * 2, (btn_r - 2) * 2), btn_r - 2, Color::rgb(239, 68, 68));
+        }
+        14 => {
+            // Mnemos Clipboard
+            let cy = client.y + 8;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, cy, client.w - 16, 26), 4, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 16, cy + 6, "Search clips...   [All]   [Text]   [Code]   [Images]", Color::WHITE, &font_sm);
+
+            let l_y = cy + 34;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, l_y, client.w - 16, 36), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 16, l_y + 6, "1. cargo test --package stratum-core  (Terminal Command)", Color::WHITE, &font_sm);
+            ui::font::draw_text_font(s, client.x + 16, l_y + 20, "Copied 2m ago - 42 bytes", palette.text_muted, &font_sm);
+
+            let l2_y = l_y + 42;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, l2_y, client.w - 16, 36), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 16, l2_y + 6, "2. https://repo.novaos.org/v2/packages/stratum.pkg", palette.text_primary, &font_sm);
+            ui::font::draw_text_font(s, client.x + 16, l2_y + 20, "Copied 15m ago - URL Link", palette.text_muted, &font_sm);
+        }
+        13 => {
+            // Chronos Clock
+            s.fill_rect(client, Color::rgb(15, 23, 42));
+            let cx = client.x + client.w / 2;
+            let cy = client.y + client.h / 2;
+            ui::font::draw_text_font(s, cx - 60, cy - 30, "18:45:30", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, cx - 80, cy - 10, "Wednesday, November 25, 2026", Color::rgb(14, 165, 233), &font_sm);
+            ui::font::draw_text_font(s, cx - 110, cy + 18, "UTC 12:45  |  London 12:45  |  Tokyo 21:45  |  NY 07:45", palette.text_muted, &font_sm);
+        }
+        _ => {
+            // Glyph / Default
+            ui::font::draw_text_font(s, client.x + 12, client.y + 12, "Sovereign Application Workspace", Color::WHITE, &font_reg);
+            ui::font::draw_text_font(s, client.x + 12, client.y + 30, "Zero external dependencies. Microkernel Ring-3 sandbox active.", palette.text_muted, &font_sm);
         }
     }
 }
@@ -13852,7 +14269,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 12);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 20);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));

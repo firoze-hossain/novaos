@@ -795,6 +795,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 22. Stratum Disks (System / Settings - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.stratum",
+            "Stratum Disks",
+            "1.0.0",
+            AppCategory::Settings,
+            "NovaOS Storage Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign storage management, proportional volume layout, SMART telemetry, and disk benchmarks",
+            "Default sovereign storage management utility, drive topology inspector, proportional partition bar visualizer, live read/write performance benchmarker, disk image creator/restorer, and SMART telemetry health monitor. Fully compatible with GPT/MBR partition tables and multi-filesystem volume architectures.",
+            "Initial sovereign release with zero external C dependencies, pure-Rust 2D rasterizer, multi-partition proportional layout, and automated benchmark curves.",
+            "[DISK]",
+            16 * 1024 * 1024,
+            38 * 1024 * 1024,
+            5.0,
+            7180,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Drive & Partition Topology".into(),
+                    caption: "Proportional volume layout and Samsung SSD 860 EVO specifications".into(),
+                    accent_rgb: (34, 197, 94),
+                },
+                ScreenshotPreview {
+                    title: "SMART Health Assessment".into(),
+                    caption: "Raw telemetry attributes, temperature curve, and self-tests".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Disk Benchmark Curves".into(),
+                    caption: "Real-time read/write transfer rates and access latency graph".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+                ScreenshotPreview {
+                    title: "Optical Drive & Image Tools".into(),
+                    caption: "ASUS DRW-24D3ST optical drive view and disk image creation".into(),
+                    accent_rgb: (168, 85, 247),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

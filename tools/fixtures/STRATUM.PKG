@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.stratum"
+name = "Stratum Disks"
+version = "1.0.0"
+category = "System"
+app_filename = "DISKS.ELF"
+summary = "Sovereign disk management, partition partitioning, SMART telemetry, and storage benchmark studio"

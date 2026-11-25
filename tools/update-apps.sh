@@ -351,6 +351,22 @@ update_nexus() {
     fi
 }
 
+update_stratum() {
+    local repo="$OTHERS_DIR/stratum"
+    echo "========================================================"
+    echo " Updating Stratum (Disks & Volume Topology Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "stratum"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -370,6 +386,10 @@ case "$TARGET_APP" in
         update_atlas
         update_hermes
         update_nexus
+        update_stratum
+        ;;
+    stratum|disks|nova-disks)
+        update_stratum
         ;;
     nexus|updates|nova-updates)
         update_nexus
