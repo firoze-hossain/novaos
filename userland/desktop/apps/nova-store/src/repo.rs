@@ -709,6 +709,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 20. Hermes Mail Studio (Internet - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.hermes",
+            "Hermes Mail",
+            "1.0.0",
+            AppCategory::Internet,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign pure-Rust email & messaging studio synthesizing macOS Mail & Mozilla Thunderbird",
+            "Default sovereign email and messaging client synthesizing macOS Mail and Mozilla Thunderbird. Features full RFC 5322 MIME engine, multi-account synchronization (Google, iCloud, Exchange, IMAP/SMTP), macOS Sequoia smart category tabs (Primary, Transactions, Updates, Promotions), three-pane translucent acrylic layout, instant multi-criteria search, quick filter bar, DKIM/SPF cryptographic shields, Add Account onboarding sheets, and rich email composition studio.",
+            "Initial release with RFC 5322 engine, multi-account routing, macOS Sequoia category sorting, and 2D software renderer.",
+            "[MAIL]",
+            24 * 1024 * 1024,
+            56 * 1024 * 1024,
+            5.0,
+            5340,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Three-Pane Sovereign Layout".into(),
+                    caption: "Translucent acrylic sidebar with accounts, folders, and unread badges".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "macOS Sequoia Smart Categories".into(),
+                    caption: "Dynamic Primary, Transactions, Updates, and Promotions sorting".into(),
+                    accent_rgb: (52, 199, 89),
+                },
+                ScreenshotPreview {
+                    title: "Add Account Onboarding Sheets".into(),
+                    caption: "One-click setup for Google, iCloud, Exchange, and standard IMAP/SMTP".into(),
+                    accent_rgb: (99, 102, 241),
+                },
+                ScreenshotPreview {
+                    title: "Rich Header & Security Shield".into(),
+                    caption: "DKIM/SPF verification badges, attachment chips, and quick reply bar".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

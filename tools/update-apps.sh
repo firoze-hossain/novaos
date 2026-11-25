@@ -319,6 +319,22 @@ update_atlas() {
     fi
 }
 
+update_hermes() {
+    local repo="$OTHERS_DIR/hermes"
+    echo "========================================================"
+    echo " Updating Hermes (Default Sovereign Mail Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "hermes"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -336,6 +352,10 @@ case "$TARGET_APP" in
         update_kairos
         update_glyph
         update_atlas
+        update_hermes
+        ;;
+    hermes|mail|nova-mail)
+        update_hermes
         ;;
     atlas|map|maps|nova-map)
         update_atlas

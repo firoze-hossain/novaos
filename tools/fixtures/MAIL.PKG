@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.hermes"
+name = "Hermes Mail"
+version = "1.0.0"
+category = "Internet"
+app_filename = "MAIL.ELF"
+summary = "Sovereign pure-Rust email & messaging studio synthesizing macOS Mail & Mozilla Thunderbird"
