@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.nexus"
+name = "Nexus Software & Updates"
+version = "1.0.0"
+category = "System"
+app_filename = "NEXUS.ELF"
+summary = "Sovereign software sources, mirror latency speed benchmark, cryptographic trust store, and system updater"

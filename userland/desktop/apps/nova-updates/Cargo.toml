@@ -1,0 +1,21 @@
+[package]
+name = "nova-updates"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Sovereign Software Sources, Mirror Latency Benchmark, Cryptographic Trust Store, and System Updater for NovaOS"
+
+[dependencies]
+nexus-core = { path = "../../../../../nexus/crates/nexus-core" }
+nexus-storage = { path = "../../../../../nexus/crates/nexus-storage" }
+nexus-render = { path = "../../../../../nexus/crates/nexus-render" }
+nexus-ui = { path = "../../../../../nexus/crates/nexus-ui" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

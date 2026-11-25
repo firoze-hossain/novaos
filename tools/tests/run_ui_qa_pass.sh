@@ -69,6 +69,7 @@ run_qa_step "17. Sovereign Clipboard Manager Suite (userland/desktop/apps/nova-c
 run_qa_step "18. Sovereign Camera & Video Studio (userland/desktop/apps/nova-cam)" "tools/tests/run_nova_cam_tests.sh"
 run_qa_step "19. Sovereign Vector Cartography & Navigation (userland/desktop/apps/nova-map)" "tools/tests/run_nova_map_tests.sh"
 run_qa_step "20. Sovereign Mail & Communication Studio (userland/desktop/apps/nova-mail)" "tools/tests/run_nova_mail_tests.sh"
+run_qa_step "21. Sovereign Software Sources & Updates Studio (userland/desktop/apps/nova-updates)" "tools/tests/run_nexus_tests.sh"
 
 echo ""
 echo "================================================================================"

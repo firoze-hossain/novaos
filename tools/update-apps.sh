@@ -335,6 +335,22 @@ update_hermes() {
     fi
 }
 
+update_nexus() {
+    local repo="$OTHERS_DIR/nexus"
+    echo "========================================================"
+    echo " Updating Nexus (Software & Updates Studio)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "nexus"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -353,6 +369,10 @@ case "$TARGET_APP" in
         update_glyph
         update_atlas
         update_hermes
+        update_nexus
+        ;;
+    nexus|updates|nova-updates)
+        update_nexus
         ;;
     hermes|mail|nova-mail)
         update_hermes

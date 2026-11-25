@@ -752,6 +752,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 21. Nexus Software & Updates (System / Settings - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.nexus",
+            "Nexus Software & Updates",
+            "1.0.0",
+            AppCategory::Settings,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign software sources, mirror latency speed benchmark, cryptographic trust store, and system updater",
+            "Default sovereign software sources, repository feed manager, mirror latency benchmark, cryptographic trust store, and system update suite. Features complete 7-tab control center (Official Channels, Mirror Latency Benchmark, Third-Party PPAs, Automated Schedules, Ed25519/GPG Signing Keys, Hardware Drivers, Developer Options) alongside the interactive Software Updater dialog with 191.9 MB payload inspection and 5-stage update transaction pipeline.",
+            "Initial sovereign release with multi-continental mirror benchmark, PPA management, Ed25519 key verification, and 2D double-buffered software rasterizer.",
+            "[UPDT]",
+            18 * 1024 * 1024,
+            42 * 1024 * 1024,
+            5.0,
+            6420,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Ubuntu Software & Core Channels".into(),
+                    caption: "Official channels (main, universe, restricted, multiverse) and mirror picker".into(),
+                    accent_rgb: (233, 84, 32),
+                },
+                ScreenshotPreview {
+                    title: "Choose a Download Server & Speed Test".into(),
+                    caption: "Hierarchical mirror tree with automated latency ping benchmark".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "Other Software & External PPAs".into(),
+                    caption: "Third-party repository feeds management with deb822 source export".into(),
+                    accent_rgb: (52, 199, 89),
+                },
+                ScreenshotPreview {
+                    title: "Interactive Software Updater".into(),
+                    caption: "Pending packages tree, payload size, and 5-stage update transaction".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {
