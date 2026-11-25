@@ -67,6 +67,7 @@ run_qa_step "15. Unified Calculator & Math Studio (userland/desktop/apps/nova-ca
 run_qa_step "16. Sovereign Clock & Timekeeping Suite (userland/desktop/apps/nova-clock)" "tools/tests/run_nova_clock_tests.sh"
 run_qa_step "17. Sovereign Clipboard Manager Suite (userland/desktop/apps/nova-clip)" "tools/tests/run_nova_clip_tests.sh"
 run_qa_step "18. Sovereign Camera & Video Studio (userland/desktop/apps/nova-cam)" "tools/tests/run_nova_cam_tests.sh"
+run_qa_step "19. Sovereign Vector Cartography & Navigation (userland/desktop/apps/nova-map)" "tools/tests/run_nova_map_tests.sh"
 
 echo ""
 echo "================================================================================"

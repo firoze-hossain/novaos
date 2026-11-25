@@ -1,0 +1,21 @@
+[package]
+name = "nova-map"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "Sovereign Pure-Rust Vector Cartography & Navigation Suite (macOS Maps Synthesized) for NovaOS"
+
+[dependencies]
+atlas-core = { path = "../../../../../atlas/crates/atlas-core" }
+atlas-render = { path = "../../../../../atlas/crates/atlas-render" }
+atlas-ui = { path = "../../../../../atlas/crates/atlas-ui" }
+atlas-platform = { path = "../../../../../atlas/crates/atlas-platform" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

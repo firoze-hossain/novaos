@@ -666,6 +666,49 @@ impl PackageRepository {
             InstallStatus::Installed { version: "1.0.0".into() },
         );
 
+        // 19. Atlas Maps & Navigation Suite (Utilities / Navigation - Default Preinstalled)
+        self.register_signed_package(
+            "org.novaos.atlas",
+            "Atlas Maps",
+            "1.0.0",
+            AppCategory::Utilities,
+            "NovaOS Enterprise Architecture Team",
+            "MIT / Apache-2.0",
+            "Sovereign pure-Rust vector cartography & navigation engine synthesizing macOS Maps & GNOME Maps",
+            "Default sovereign vector maps and navigation engine synthesizing macOS Maps and GNOME Maps. Features Web Mercator projection (EPSG:3857), Haversine great-circle geodesy, 3D perspective horizon pitch tilt, multi-pass vector road rasterization, lake & park polygons, geocoding and multi-criteria POI search, turn-by-turn waypoint routing, floating translucent acrylic sidebar, Find Nearby drawer, Marked Location card, and live weather telemetry.",
+            "Initial release with Web Mercator projection, Haversine geodesy, turn-by-turn routing, and macOS Maps UI shell.",
+            "[MAP]",
+            28 * 1024 * 1024,
+            64 * 1024 * 1024,
+            5.0,
+            5120,
+            vec![],
+            SandboxPermissions::standard_app(),
+            vec![
+                ScreenshotPreview {
+                    title: "Vector Cartography & 3D Pitch".into(),
+                    caption: "Web Mercator projection with 35° perspective horizon and lake polygons".into(),
+                    accent_rgb: (0, 122, 255),
+                },
+                ScreenshotPreview {
+                    title: "macOS Acrylic Sidebar".into(),
+                    caption: "Translucent floating drawer with Search, Guides, and Saved Places".into(),
+                    accent_rgb: (99, 102, 241),
+                },
+                ScreenshotPreview {
+                    title: "Find Nearby Drawer".into(),
+                    caption: "11+ dynamic categories including Restaurants, Gas, and Hotels".into(),
+                    accent_rgb: (245, 158, 11),
+                },
+                ScreenshotPreview {
+                    title: "Marked Location Inspector".into(),
+                    caption: "High-precision GPS telemetry card with distance and coordinate badges".into(),
+                    accent_rgb: (239, 68, 68),
+                },
+            ],
+            InstallStatus::Installed { version: "1.0.0".into() },
+        );
+
         // Initialize installed_db based on initial installed status
         for (id, pkg) in &self.packages {
             if pkg.is_installed() {

@@ -1,0 +1,7 @@
+[package]
+id = "org.novaos.atlas"
+name = "Atlas Maps"
+version = "1.0.0"
+category = "Navigation"
+app_filename = "MAP.ELF"
+summary = "Sovereign pure-Rust vector cartography & navigation engine synthesizing macOS Maps & GNOME Maps"

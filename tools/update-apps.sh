@@ -303,6 +303,22 @@ update_glyph() {
     fi
 }
 
+update_atlas() {
+    local repo="$OTHERS_DIR/atlas"
+    echo "========================================================"
+    echo " Updating Atlas (Default Sovereign Maps & Navigation)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "atlas"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -319,6 +335,10 @@ case "$TARGET_APP" in
         update_iris
         update_kairos
         update_glyph
+        update_atlas
+        ;;
+    atlas|map|maps|nova-map)
+        update_atlas
         ;;
     glyph|edit|editor|nova-edit)
         update_glyph
