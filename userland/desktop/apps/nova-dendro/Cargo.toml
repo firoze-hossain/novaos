@@ -1,0 +1,12 @@
+[package]
+name = "nova-dendro"
+version = "1.0.0"
+edition = "2021"
+authors = ["NovaOS Enterprise Architecture Team"]
+description = "NovaOS In-Tree Disk Usage Analyzer (Dendro)"
+
+[dependencies]
+dendro-core = { path = "../../../../../dendro/crates/dendro-core" }
+dendro-storage = { path = "../../../../../dendro/crates/dendro-storage" }
+dendro-render = { path = "../../../../../dendro/crates/dendro-render" }
+dendro-ui = { path = "../../../../../dendro/crates/dendro-ui" }

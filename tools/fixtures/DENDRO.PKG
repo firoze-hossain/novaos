@@ -1,0 +1,8 @@
+[package]
+id = "org.novaos.dendro"
+name = "Dendro Disk Analyzer"
+version = "1.0.0"
+category = "storage"
+description = "Sovereign multi-tier radial sunburst and treemap disk usage analyzer"
+exec = "DENDRO.ELF"
+icon = "disk-usage"

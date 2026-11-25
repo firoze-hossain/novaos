@@ -253,7 +253,7 @@ pub struct DesktopIconSpec {
     pub icon_type: u8,
 }
 
-pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 22] = [
+pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 23] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
     DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
@@ -276,6 +276,7 @@ pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 22] = [
     DesktopIconSpec { label: "Stratum",     sublabel: "Disks Utility",  app_id: 20, icon_type: 20 },
     DesktopIconSpec { label: "Aegis",       sublabel: "Firmware Studio",app_id: 22, icon_type: 22 },
     DesktopIconSpec { label: "Pulse",       sublabel: "System Monitor", app_id: 23, icon_type: 23 },
+    DesktopIconSpec { label: "Dendro",      sublabel: "Disk Analyzer",  app_id: 24, icon_type: 24 },
 ];
 
 // --- International Timezone & Wall-Clock Calendar Subsystem ---
@@ -7092,7 +7093,7 @@ impl Wm {
                     draw_zenith_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.zenith_app, &palette);
                 } else if w.label == 17 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_screenshot_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.screenshot_app, &palette);
-                } else if w.label >= 13 && w.label <= 23 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
+                } else if w.label >= 13 && w.label <= 24 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_sovereign_app_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), w.label, &palette);
                 }
             }
@@ -7169,6 +7170,7 @@ impl Wm {
                     21 => "Glyph - Sovereign Multilingual Code & Text Editor",
                     22 => "Aegis - Firmware & Hardware Security Studio",
                     23 => "Pulse - Sovereign Real-Time System & Resource Monitor",
+                    24 => "Dendro - Sovereign Multi-Tier Radial Sunburst & Treemap Disk Analyzer",
                     _ => "System - Diagnostics",
                 };
                 ui::font::draw_text_font(surface, text_x, text_y, title_str, text_col, &font);
@@ -8344,6 +8346,37 @@ fn draw_realistic_app_icon<S: Surface + ?Sized>(
             // Peak glow point
             s.put_pixel(b_x + 18, mid_y - 10, Color::WHITE);
         }
+        24 => {
+            // 24: Dendro Sovereign Disk Usage Analyzer (Dark card with concentric multi-colored sunburst donut)
+            let b_w = (size * 78) / 100;
+            let b_h = (size * 78) / 100;
+            let b_x = x + (size - b_w) / 2;
+            let b_y = y + (size - b_h) / 2;
+
+            // Slate rounded card background
+            ui::draw::draw_rounded_rect(s, Rect::new(b_x, b_y, b_w, b_h), 6, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(b_x, b_y, b_w, b_h), 1, Color::rgb(71, 85, 105));
+
+            let cx = b_x + b_w / 2;
+            let cy = b_y + b_h / 2;
+
+            // Sunburst Donut Ring Segments
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 2, cy - 10, 8, 8), 2, Color::rgb(220, 38, 38));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 2, cy + 2, 8, 8), 2, Color::rgb(234, 88, 12));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 10, cy + 2, 8, 8), 2, Color::rgb(202, 138, 4));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 10, cy - 10, 8, 8), 2, Color::rgb(22, 163, 74));
+
+            // Outer ring accent sectors
+            s.put_pixel(cx + 12, cy - 4, Color::rgb(239, 68, 68));
+            s.put_pixel(cx + 12, cy + 4, Color::rgb(249, 115, 22));
+            s.put_pixel(cx - 12, cy + 4, Color::rgb(234, 179, 8));
+            s.put_pixel(cx - 12, cy - 4, Color::rgb(34, 197, 94));
+            s.put_pixel(cx, cy - 12, Color::rgb(13, 148, 136));
+            s.put_pixel(cx, cy + 12, Color::rgb(37, 99, 235));
+
+            // Center core white circle (Total capacity label core)
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 3, cy - 3, 6, 6), 2, Color::WHITE);
+        }
         _ => {
             draw_app_icon(s, x + (size - 14) / 2, y + (size - 14) / 2, icon_type, palette);
         }
@@ -8566,6 +8599,15 @@ fn draw_app_icon<S: Surface + ?Sized>(s: &mut S, x: i32, y: i32, label: u8, pale
             ui::draw::draw_line(s, x + 6, y + 2, x + 8, y + 8, Color::rgb(236, 72, 153));
             ui::draw::draw_line(s, x + 8, y + 8, x + 10, y + 6, Color::rgb(236, 72, 153));
         }
+        24 => {
+            // Dendro mini icon: circular multi-color sunburst donut
+            ui::draw::draw_rounded_rect(s, Rect::new(x + 1, y + 1, 10, 10), 2, Color::rgb(30, 41, 59));
+            s.fill_rect(Rect::new(x + 6, y + 2, 4, 4), Color::rgb(220, 38, 38)); // Red
+            s.fill_rect(Rect::new(x + 6, y + 6, 4, 4), Color::rgb(234, 88, 12)); // Orange
+            s.fill_rect(Rect::new(x + 2, y + 6, 4, 4), Color::rgb(202, 138, 4)); // Yellow
+            s.fill_rect(Rect::new(x + 2, y + 2, 4, 4), Color::rgb(22, 163, 74)); // Green
+            s.fill_rect(Rect::new(x + 5, y + 5, 2, 2), Color::WHITE);             // Center core
+        }
         _ => {
             // System gear icon
             let gear_col = Color::rgb(140, 160, 180);
@@ -8587,6 +8629,121 @@ fn draw_sovereign_app_client_body<S: Surface + ?Sized>(
     let font_sm = Font::small();
 
     match label {
+        24 => {
+            // Dendro Disk Usage Analyzer (Ubuntu Baobab sovereign companion)
+            // 1. Top Header / Breadcrumb Toolbar
+            let tb_h = 32;
+            s.fill_rect(Rect::new(client.x, client.y, client.w, tb_h), palette.surface_sunken);
+            s.fill_rect(Rect::new(client.x, client.y + tb_h - 1, client.w, 1), palette.border_subtle);
+
+            // Back button `<`
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, client.y + 4, 24, 24), 3, palette.surface_raised);
+            ui::font::draw_text_font(s, client.x + 16, client.y + 8, "<", palette.text_primary, &font_reg);
+
+            // Breadcrumb button: `[ Home Folder ]`
+            let bcrumb_w = 110;
+            ui::draw::draw_rounded_rect(s, Rect::new(client.x + 38, client.y + 4, bcrumb_w, 24), 3, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, Rect::new(client.x + 38, client.y + 4, bcrumb_w, 24), 1, palette.border_subtle);
+            ui::font::draw_text_font(s, client.x + 46, client.y + 8, "Home Folder", Color::WHITE, &font_sm);
+
+            // Reload button `o`
+            ui::font::draw_text_font(s, client.right() - 24, client.y + 8, "o", palette.text_muted, &font_sm);
+
+            // 2. Split Layout: Left Table (46% width) & Right Sunburst Chart (54% width)
+            let split_w = (client.w * 46) / 100;
+            let table_y = client.y + tb_h;
+            let body_h = client.h - tb_h;
+
+            // --- Left Directory Table ---
+            // Header Row
+            s.fill_rect(Rect::new(client.x, table_y, split_w, 22), palette.surface_sunken);
+            ui::font::draw_text_font(s, client.x + 8, table_y + 4, "Folder", palette.text_muted, &font_sm);
+            ui::font::draw_text_font(s, client.x + split_w - 180, table_y + 4, "Size ^", palette.text_muted, &font_sm);
+            ui::font::draw_text_font(s, client.x + split_w - 110, table_y + 4, "Contents", palette.text_muted, &font_sm);
+            ui::font::draw_text_font(s, client.x + split_w - 50, table_y + 4, "Modified", palette.text_muted, &font_sm);
+
+            let rows: [(&str, &str, &str, &str, Color); 10] = [
+                ("30% projects", "16.5 GB", "333594", "Today", Color::rgb(220, 38, 38)),
+                ("21% .cache",   "11.5 GB", "64555",  "Today", Color::rgb(234, 88, 12)),
+                (" 8% .config",   "4.4 GB", "49683",  "Today", Color::rgb(202, 138, 4)),
+                (" 6% .rustup",   "3.5 GB", "144609", "2 days", Color::rgb(22, 163, 74)),
+                (" 6% .local",    "3.5 GB", "31492",  "Today", Color::rgb(13, 148, 136)),
+                (" 5% .gemini",   "3.0 GB", "79200",  "Today", Color::rgb(37, 99, 235)),
+                (" 3% .npm",      "1.8 GB", "7703",   "1 day", Color::rgb(147, 51, 234)),
+                (" 3% .m2",       "1.7 GB", "16666",  "13 days", Color::rgb(192, 38, 211)),
+                (" 3% miniconda", "1.6 GB", "54166",  "2 months", Color::rgb(249, 115, 22)),
+                (" 2% .vscode",   "1.2 GB", "11986",  "1 month", Color::rgb(16, 185, 129)),
+            ];
+
+            let row_h = 22;
+            let mut ry = table_y + 24;
+            for (idx, (folder, sz, items, modified, col)) in rows.iter().enumerate() {
+                if ry + row_h > client.bottom() - 10 { break; }
+                let bg = if idx % 2 == 1 { palette.surface_sunken } else { palette.window_bg };
+                s.fill_rect(Rect::new(client.x, ry, split_w, row_h), bg);
+
+                // Small vertical indicator bar
+                s.fill_rect(Rect::new(client.x + 8, ry + 4, 3, 14), *col);
+                ui::font::draw_text_font(s, client.x + 14, ry + 5, folder, palette.text_primary, &font_sm);
+                ui::font::draw_text_font(s, client.x + split_w - 180, ry + 5, sz, palette.text_primary, &font_sm);
+                ui::font::draw_text_font(s, client.x + split_w - 110, ry + 5, items, palette.text_muted, &font_sm);
+                ui::font::draw_text_font(s, client.x + split_w - 50, ry + 5, modified, palette.text_muted, &font_sm);
+                ry += row_h;
+            }
+
+            // Divider between Table and Chart
+            s.fill_rect(Rect::new(client.x + split_w, table_y, 1, body_h), palette.border_subtle);
+
+            // --- Right Sunburst Rings Chart ---
+            let chart_x = client.x + split_w + 1;
+            let chart_w = client.w - split_w - 1;
+            let cx = chart_x + chart_w / 2;
+            let cy = table_y + (body_h - 40) / 2;
+
+            // Concentric annular ring sectors
+            // Ring 1 (Level 1): Radius 36..64
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 8, cy - 36, 44, 32), 4, Color::rgb(220, 38, 38)); // Red projects
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 8, cy + 4, 44, 32), 4, Color::rgb(234, 88, 12));  // Orange .cache
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 52, cy + 4, 44, 32), 4, Color::rgb(202, 138, 4)); // Yellow .config
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 52, cy - 36, 44, 32), 4, Color::rgb(22, 163, 74)); // Green .rustup
+
+            // Ring 2 (Level 2): Radius 68..96
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 56, cy - 42, 28, 20), 2, Color::rgb(239, 68, 68));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 56, cy - 18, 28, 20), 2, Color::rgb(185, 28, 28));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 56, cy + 8, 28, 20), 2, Color::rgb(249, 115, 22));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx + 56, cy + 32, 28, 20), 2, Color::rgb(194, 65, 12));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 84, cy + 8, 28, 20), 2, Color::rgb(234, 179, 8));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 84, cy - 42, 28, 20), 2, Color::rgb(34, 197, 94));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 14, cy - 64, 28, 20), 2, Color::rgb(13, 148, 136));
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 14, cy + 48, 28, 20), 2, Color::rgb(37, 99, 235));
+
+            // Center Circle: White core with total size
+            ui::draw::draw_rounded_rect(s, Rect::new(cx - 28, cy - 16, 56, 32), 8, Color::WHITE);
+            ui::font::draw_text_font(s, cx - 22, cy - 4, "53.7 GB", Color::rgb(24, 24, 27), &font_sm);
+
+            // Floating Tooltip Popover (projects)
+            let tip_x = cx - 50;
+            let tip_y = cy - 88;
+            ui::draw::draw_rounded_rect(s, Rect::new(tip_x, tip_y, 100, 20), 4, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, Rect::new(tip_x, tip_y, 100, 20), 1, Color::rgb(71, 85, 105));
+            ui::font::draw_text_font(s, tip_x + 6, tip_y + 4, "projects: 16.5 GB", Color::WHITE, &font_sm);
+
+            // Bottom Chart Toggle Bar: [ o Rings Chart ] [ # Treemap Chart ]
+            let b_y = client.bottom() - 28;
+            let btn_w = 90;
+            let btn1_x = cx - btn_w - 4;
+            let btn2_x = cx + 4;
+
+            // Rings toggle (active)
+            ui::draw::draw_rounded_rect(s, Rect::new(btn1_x, b_y, btn_w, 22), 4, palette.surface_raised);
+            ui::draw::draw_rect_outline(s, Rect::new(btn1_x, b_y, btn_w, 22), 1, Color::rgb(234, 88, 12));
+            ui::font::draw_text_font(s, btn1_x + 12, b_y + 5, "o Rings", Color::WHITE, &font_sm);
+
+            // Treemap toggle (inactive)
+            ui::draw::draw_rounded_rect(s, Rect::new(btn2_x, b_y, btn_w, 22), 4, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, Rect::new(btn2_x, b_y, btn_w, 22), 1, palette.border_subtle);
+            ui::font::draw_text_font(s, btn2_x + 12, b_y + 5, "# Treemap", palette.text_muted, &font_sm);
+        }
         23 => {
             // Pulse System Monitor (Ubuntu System Monitor sovereign companion)
             // 1. Top Tabs Toolbar
@@ -14525,7 +14682,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Check desktop shortcuts exist
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 23);
         let icon0 = wm.desktop_icon_rect(0).expect("Desktop icon 0 should exist");
         assert_eq!(icon0.x, 18);
         assert_eq!(wm.desktop_icon_at(icon0.x + 10, icon0.y + 10), Some(0));
@@ -15873,7 +16030,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Aegis shortcut exists at index 20 (app_id 22)
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 23);
         assert_eq!(DESKTOP_SHORTCUTS[20].label, "Aegis");
         assert_eq!(DESKTOP_SHORTCUTS[20].app_id, 22);
 
@@ -15902,7 +16059,7 @@ mod tests {
         let mut wm = Wm::new_for_display(1024, 768);
 
         // Pulse shortcut exists at index 21 (app_id 23)
-        assert_eq!(DESKTOP_SHORTCUTS.len(), 22);
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 23);
         assert_eq!(DESKTOP_SHORTCUTS[21].label, "Pulse");
         assert_eq!(DESKTOP_SHORTCUTS[21].app_id, 23);
 
@@ -15924,5 +16081,34 @@ mod tests {
         let mid_y = (w.y + w.h / 2) as usize;
         let pix = surf.buffer[mid_y * 1024 + mid_x];
         assert_ne!(pix, 0, "Pulse window client body should render content");
+    }
+
+    #[test]
+    fn test_wm_dendro_launch_and_render() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // Dendro shortcut exists at index 22 (app_id 24)
+        assert_eq!(DESKTOP_SHORTCUTS.len(), 23);
+        assert_eq!(DESKTOP_SHORTCUTS[22].label, "Dendro");
+        assert_eq!(DESKTOP_SHORTCUTS[22].app_id, 24);
+
+        // Launch Dendro via launch_or_restore
+        wm.launch_or_restore(24);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 24);
+        assert!(wm.windows[top_win_idx].is_open);
+        assert!(!wm.windows[top_win_idx].is_minimized);
+
+        // Render to virtual surface
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surf = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surf);
+
+        // Check pixels were rendered in window client region
+        let w = &wm.windows[top_win_idx];
+        let mid_x = (w.x + w.w / 2) as usize;
+        let mid_y = (w.y + w.h / 2) as usize;
+        let pix = surf.buffer[mid_y * 1024 + mid_x];
+        assert_ne!(pix, 0, "Dendro window client body should render content");
     }
 }

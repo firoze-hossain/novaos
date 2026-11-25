@@ -399,6 +399,22 @@ update_pulse() {
     fi
 }
 
+update_dendro() {
+    local repo="$OTHERS_DIR/dendro"
+    echo "========================================================"
+    echo " Updating Dendro (Disk Usage Analyzer)"
+    echo "========================================================"
+    if [ -d "$repo" ]; then
+        sync_git_repo "$repo" "dendro"
+        if [ -x "$repo/novaos/build.sh" ]; then
+            echo "--> Compiling bare-metal NovaOS binaries & package..."
+            (cd "$repo/novaos" && ./build.sh)
+        fi
+    else
+        echo "Warning: Repository $repo not found."
+    fi
+}
+
 # Execute requested updates
 case "$TARGET_APP" in
     all|"")
@@ -421,6 +437,10 @@ case "$TARGET_APP" in
         update_stratum
         update_aegis
         update_pulse
+        update_dendro
+        ;;
+    dendro|baobab|usage|nova-dendro)
+        update_dendro
         ;;
     pulse|monitor|sysmon|nova-monitor)
         update_pulse
