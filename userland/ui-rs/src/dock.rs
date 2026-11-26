@@ -338,16 +338,18 @@ pub fn draw_dock_surface<S: Surface + ?Sized>(
         }
     }
 
-    // 4. Clock and Status Indicator on far right
-    let clock_sz = font.measure_str(clock_str);
-    let clock_x = taskbar_rect.right() - clock_sz.w - 14;
-    let clock_y = taskbar_rect.y + (taskbar_rect.h - line_h) / 2;
-    draw_text_font(s, clock_x, clock_y, clock_str, palette.text_primary, &font);
+    // 4. Clock and Status Indicator on far right (only displayed when clock_str is not empty)
+    if !clock_str.is_empty() {
+        let clock_sz = font.measure_str(clock_str);
+        let clock_x = taskbar_rect.right() - clock_sz.w - 14;
+        let clock_y = taskbar_rect.y + (taskbar_rect.h - line_h) / 2;
+        draw_text_font(s, clock_x, clock_y, clock_str, palette.text_primary, &font);
 
-    // Green online status pip next to clock
-    let dot_x = clock_x - 12;
-    let dot_y = taskbar_rect.y + (taskbar_rect.h - 6) / 2;
-    draw_rounded_rect(s, Rect::new(dot_x, dot_y, 6, 6), 3, palette.status_success);
+        // Green online status pip next to clock
+        let dot_x = clock_x - 12;
+        let dot_y = taskbar_rect.y + (taskbar_rect.h - 6) / 2;
+        draw_rounded_rect(s, Rect::new(dot_x, dot_y, 6, 6), 3, palette.status_success);
+    }
 
     // 5. Windows 11 "Show Desktop" peek strip on far right edge
     s.fill_rect(Rect::new(taskbar_rect.right() - 2, taskbar_rect.y + 2, 2, taskbar_rect.h - 4), palette.border_subtle);

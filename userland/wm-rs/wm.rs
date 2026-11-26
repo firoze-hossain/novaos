@@ -255,7 +255,7 @@ pub struct DesktopIconSpec {
 
 pub const DESKTOP_SHORTCUTS: [DesktopIconSpec; 23] = [
     DesktopIconSpec { label: "This PC",     sublabel: "NovaOS 2.0",    app_id: 5, icon_type: 0 },
-    DesktopIconSpec { label: "Files",       sublabel: "/root",          app_id: 2, icon_type: 2 },
+    DesktopIconSpec { label: "Files",       sublabel: "Home / Folders", app_id: 2, icon_type: 2 },
     DesktopIconSpec { label: "Terminal",    sublabel: "NovaTerm",       app_id: 1, icon_type: 1 },
     DesktopIconSpec { label: "Calendar",    sublabel: "Events & Tasks", app_id: 6, icon_type: 6 },
     DesktopIconSpec { label: "Calculator",  sublabel: "Math Studio",    app_id: 7, icon_type: 7 },
@@ -4324,6 +4324,466 @@ impl WmScreenshotApp {
     }
 }
 
+// --- Next-Gen Sovereign File Explorer Subsystem (Synthesized Ubuntu Nautilus & Windows Explorer) ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilesFolder {
+    Home,
+    Documents,
+    Downloads,
+    Music,
+    Pictures,
+    Videos,
+    Root,
+    OtherLocations,
+    Recent,
+    Starred,
+    Trash,
+}
+
+impl FilesFolder {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FilesFolder::Home => "Home",
+            FilesFolder::Documents => "Documents",
+            FilesFolder::Downloads => "Downloads",
+            FilesFolder::Music => "Music",
+            FilesFolder::Pictures => "Pictures",
+            FilesFolder::Videos => "Videos",
+            FilesFolder::Root => "Root",
+            FilesFolder::OtherLocations => "Other Locations",
+            FilesFolder::Recent => "Recent",
+            FilesFolder::Starred => "Starred",
+            FilesFolder::Trash => "Trash",
+        }
+    }
+
+    pub fn path(&self) -> &'static str {
+        match self {
+            FilesFolder::Home => "/home/firoze",
+            FilesFolder::Documents => "/home/firoze/Documents",
+            FilesFolder::Downloads => "/home/firoze/Downloads",
+            FilesFolder::Music => "/home/firoze/Music",
+            FilesFolder::Pictures => "/home/firoze/Pictures",
+            FilesFolder::Videos => "/home/firoze/Videos",
+            FilesFolder::Root => "/",
+            FilesFolder::OtherLocations => "other://locations",
+            FilesFolder::Recent => "recent://",
+            FilesFolder::Starred => "starred://",
+            FilesFolder::Trash => "trash://",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilesViewMode {
+    Grid,
+    List,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileBadge {
+    FolderDefault,
+    FolderDesktop,
+    FolderDocuments,
+    FolderDownloads,
+    FolderMusic,
+    FolderPictures,
+    FolderVideos,
+    FolderCode,
+    FileSpreadsheet,
+    FileArchive,
+    FileTable,
+    FileJson,
+    FileText,
+    FileConfig,
+    FileExecutable,
+    FileImage,
+    FileAudio,
+    FileVideo,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FilesItem {
+    pub name: &'static str,
+    pub size_str: &'static str,
+    pub kind_str: &'static str,
+    pub modified_str: &'static str,
+    pub is_dir: bool,
+    pub badge: FileBadge,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StorageVolume {
+    pub name: &'static str,
+    pub used_str: &'static str,
+    pub total_str: &'static str,
+    pub used_pct: u8,
+    pub mount_point: &'static str,
+    pub device_node: &'static str,
+    pub is_ssd: bool,
+}
+
+pub const STORAGE_VOLUMES: [StorageVolume; 3] = [
+    StorageVolume {
+        name: "Ubuntu",
+        used_str: "3.6 GB",
+        total_str: "140.0 GB available",
+        used_pct: 3,
+        mount_point: "/",
+        device_node: "/dev/nvme0n1p2",
+        is_ssd: false,
+    },
+    StorageVolume {
+        name: "Development",
+        used_str: "82.4 GB",
+        total_str: "256.0 GB available",
+        used_pct: 32,
+        mount_point: "/dev/sda3",
+        device_node: "/dev/sda3 SSD",
+        is_ssd: true,
+    },
+    StorageVolume {
+        name: "NovaOS EFI System",
+        used_str: "128 MB",
+        total_str: "512 MB available",
+        used_pct: 25,
+        mount_point: "/boot/efi",
+        device_node: "/dev/sda1",
+        is_ssd: true,
+    },
+];
+
+pub const HOME_ITEMS: [FilesItem; 22] = [
+    FilesItem { name: "Desktop", size_str: "4.0 KB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDesktop },
+    FilesItem { name: "Documents", size_str: "12.8 KB", kind_str: "Folder", modified_str: "Nov 25", is_dir: true, badge: FileBadge::FolderDocuments },
+    FilesItem { name: "Downloads", size_str: "85.2 MB", kind_str: "Folder", modified_str: "Nov 25", is_dir: true, badge: FileBadge::FolderDownloads },
+    FilesItem { name: "Music", size_str: "14.2 MB", kind_str: "Folder", modified_str: "Nov 20", is_dir: true, badge: FileBadge::FolderMusic },
+    FilesItem { name: "Pictures", size_str: "38.6 MB", kind_str: "Folder", modified_str: "Nov 24", is_dir: true, badge: FileBadge::FolderPictures },
+    FilesItem { name: "Videos", size_str: "120.4 MB", kind_str: "Folder", modified_str: "Nov 22", is_dir: true, badge: FileBadge::FolderVideos },
+    FilesItem { name: "projects", size_str: "1.4 GB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderCode },
+    FilesItem { name: "novaos", size_str: "48.2 MB", kind_str: "Folder", modified_str: "Just now", is_dir: true, badge: FileBadge::FolderCode },
+    FilesItem { name: "DataGripProjects", size_str: "2.1 MB", kind_str: "Folder", modified_str: "Nov 18", is_dir: true, badge: FileBadge::FolderCode },
+    FilesItem { name: "DBNavigatorProjects", size_str: "1.8 MB", kind_str: "Folder", modified_str: "Nov 14", is_dir: true, badge: FileBadge::FolderCode },
+    FilesItem { name: "Jaspersoft Workspace", size_str: "8.4 MB", kind_str: "Folder", modified_str: "Nov 10", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "miniconda3", size_str: "3.8 GB", kind_str: "Folder", modified_str: "Nov 02", is_dir: true, badge: FileBadge::FolderCode },
+    FilesItem { name: "Public", size_str: "0 B", kind_str: "Folder", modified_str: "Oct 15", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "Templates", size_str: "4.0 KB", kind_str: "Folder", modified_str: "Oct 15", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "snap", size_str: "512 MB", kind_str: "Folder", modified_str: "Nov 05", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "TrackEyeData", size_str: "64.0 MB", kind_str: "Folder", modified_str: "Nov 20", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "DEPARTMENT_TS.tsv", size_str: "84.2 KB", kind_str: "TSV Data", modified_str: "Nov 23", is_dir: false, badge: FileBadge::FileTable },
+    FilesItem { name: "novaos.zip", size_str: "18.4 MB", kind_str: "Zip Archive", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileArchive },
+    FilesItem { name: "rozehub_software_projects.xlsx", size_str: "142.0 KB", kind_str: "Excel Sheet", modified_str: "Nov 21", is_dir: false, badge: FileBadge::FileSpreadsheet },
+    FilesItem { name: "student.json", size_str: "12.4 KB", kind_str: "JSON File", modified_str: "Nov 24", is_dir: false, badge: FileBadge::FileJson },
+    FilesItem { name: "README.txt", size_str: "4.2 KB", kind_str: "Text Document", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileText },
+    FilesItem { name: "system.cfg", size_str: "1.2 KB", kind_str: "Config File", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileConfig },
+];
+
+pub const DOCUMENTS_ITEMS: [FilesItem; 6] = [
+    FilesItem { name: "Architecture_Spec.pdf", size_str: "1.2 MB", kind_str: "PDF Document", modified_str: "Nov 24", is_dir: false, badge: FileBadge::FileText },
+    FilesItem { name: "Quarterly_Report.docx", size_str: "450 KB", kind_str: "Word Document", modified_str: "Nov 20", is_dir: false, badge: FileBadge::FileText },
+    FilesItem { name: "API_Reference.md", size_str: "64 KB", kind_str: "Markdown", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileText },
+    FilesItem { name: "Contracts", size_str: "8.0 KB", kind_str: "Folder", modified_str: "Nov 15", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "Sprint_Backlog.xlsx", size_str: "92 KB", kind_str: "Excel Sheet", modified_str: "Nov 22", is_dir: false, badge: FileBadge::FileSpreadsheet },
+    FilesItem { name: "Research_Notes.txt", size_str: "18 KB", kind_str: "Text Document", modified_str: "Nov 23", is_dir: false, badge: FileBadge::FileText },
+];
+
+pub const DOWNLOADS_ITEMS: [FilesItem; 4] = [
+    FilesItem { name: "novaos-2.0.iso", size_str: "48.0 MB", kind_str: "Disk Image", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileArchive },
+    FilesItem { name: "rust-1.82-x86_64.tar.gz", size_str: "142 MB", kind_str: "Gzip Archive", modified_str: "Nov 18", is_dir: false, badge: FileBadge::FileArchive },
+    FilesItem { name: "firmware-update-v2.bin", size_str: "8.4 MB", kind_str: "Firmware Binary", modified_str: "Nov 24", is_dir: false, badge: FileBadge::FileExecutable },
+    FilesItem { name: "Setup_Bundle.zip", size_str: "24.6 MB", kind_str: "Zip Archive", modified_str: "Nov 21", is_dir: false, badge: FileBadge::FileArchive },
+];
+
+pub const MUSIC_ITEMS: [FilesItem; 3] = [
+    FilesItem { name: "Sovereign_Overture.flac", size_str: "28.4 MB", kind_str: "FLAC Audio", modified_str: "Nov 12", is_dir: false, badge: FileBadge::FileAudio },
+    FilesItem { name: "Ambient_Space_Synth.mp3", size_str: "8.2 MB", kind_str: "MP3 Audio", modified_str: "Nov 19", is_dir: false, badge: FileBadge::FileAudio },
+    FilesItem { name: "Cosmic_Echoes.wav", size_str: "42.0 MB", kind_str: "Wave Audio", modified_str: "Oct 28", is_dir: false, badge: FileBadge::FileAudio },
+];
+
+pub const PICTURES_ITEMS: [FilesItem; 4] = [
+    FilesItem { name: "Desktop_Wallpaper_4K.png", size_str: "14.2 MB", kind_str: "PNG Image", modified_str: "Nov 22", is_dir: false, badge: FileBadge::FileImage },
+    FilesItem { name: "Screenshots", size_str: "18.4 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderPictures },
+    FilesItem { name: "System_Architecture.svg", size_str: "128 KB", kind_str: "Vector Graphic", modified_str: "Nov 15", is_dir: false, badge: FileBadge::FileImage },
+    FilesItem { name: "Nova_Logo_Dark.png", size_str: "2.4 MB", kind_str: "PNG Image", modified_str: "Nov 10", is_dir: false, badge: FileBadge::FileImage },
+];
+
+pub const VIDEOS_ITEMS: [FilesItem; 2] = [
+    FilesItem { name: "NovaOS_Keynote_2026.mp4", size_str: "180 MB", kind_str: "MP4 Video", modified_str: "Nov 22", is_dir: false, badge: FileBadge::FileVideo },
+    FilesItem { name: "Demo_Screencast.webm", size_str: "45 MB", kind_str: "WebM Video", modified_str: "Nov 25", is_dir: false, badge: FileBadge::FileVideo },
+];
+
+pub const ROOT_ITEMS: [FilesItem; 11] = [
+    FilesItem { name: "bin", size_str: "24.0 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "boot", size_str: "48.0 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "dev", size_str: "0 B", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "etc", size_str: "4.2 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "home", size_str: "1.8 GB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "lib", size_str: "180 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "proc", size_str: "0 B", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "root", size_str: "58 KB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "sys", size_str: "0 B", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "tmp", size_str: "1.2 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+    FilesItem { name: "usr", size_str: "840 MB", kind_str: "Folder", modified_str: "Nov 26", is_dir: true, badge: FileBadge::FolderDefault },
+];
+
+pub struct WmFilesApp {
+    pub current_folder: FilesFolder,
+    pub view_mode: FilesViewMode,
+    pub selected_item: Option<usize>,
+    pub hovered_sidebar: Option<usize>,
+    pub hovered_item: Option<usize>,
+    pub status_msg: &'static str,
+    pub history: [FilesFolder; 8],
+    pub history_idx: usize,
+    pub history_len: usize,
+}
+
+impl WmFilesApp {
+    pub fn new() -> Self {
+        WmFilesApp {
+            current_folder: FilesFolder::Home,
+            view_mode: FilesViewMode::Grid,
+            selected_item: None,
+            hovered_sidebar: None,
+            hovered_item: None,
+            status_msg: "Ready | 22 items | 140.0 GB available",
+            history: [FilesFolder::Home; 8],
+            history_idx: 0,
+            history_len: 1,
+        }
+    }
+
+    pub fn window_title(&self) -> &'static str {
+        match self.current_folder {
+            FilesFolder::Home => "Files - Home (/home/firoze)",
+            FilesFolder::Documents => "Files - Documents",
+            FilesFolder::Downloads => "Files - Downloads",
+            FilesFolder::Music => "Files - Music",
+            FilesFolder::Pictures => "Files - Pictures",
+            FilesFolder::Videos => "Files - Videos",
+            FilesFolder::Root => "Files - Root Directory (/)",
+            FilesFolder::OtherLocations => "Files - Other Locations",
+            FilesFolder::Recent => "Files - Recent Files",
+            FilesFolder::Starred => "Files - Starred Files",
+            FilesFolder::Trash => "Files - Trash",
+        }
+    }
+
+    pub fn current_items(&self) -> &'static [FilesItem] {
+        match self.current_folder {
+            FilesFolder::Home => &HOME_ITEMS,
+            FilesFolder::Documents => &DOCUMENTS_ITEMS,
+            FilesFolder::Downloads => &DOWNLOADS_ITEMS,
+            FilesFolder::Music => &MUSIC_ITEMS,
+            FilesFolder::Pictures => &PICTURES_ITEMS,
+            FilesFolder::Videos => &VIDEOS_ITEMS,
+            FilesFolder::Root => &ROOT_ITEMS,
+            FilesFolder::Recent => &HOME_ITEMS[16..22],
+            FilesFolder::Starred => &HOME_ITEMS[6..10],
+            FilesFolder::Trash => &[],
+            FilesFolder::OtherLocations => &[],
+        }
+    }
+
+    pub fn navigate_to(&mut self, folder: FilesFolder) {
+        if self.current_folder != folder {
+            self.current_folder = folder;
+            self.selected_item = None;
+            if self.history_len < 8 {
+                self.history[self.history_len] = folder;
+                self.history_len += 1;
+                self.history_idx = self.history_len - 1;
+            } else {
+                for i in 0..7 {
+                    self.history[i] = self.history[i + 1];
+                }
+                self.history[7] = folder;
+                self.history_idx = 7;
+            }
+        }
+    }
+
+    pub fn navigate_back(&mut self) {
+        if self.history_idx > 0 {
+            self.history_idx -= 1;
+            self.current_folder = self.history[self.history_idx];
+            self.selected_item = None;
+        } else if self.current_folder != FilesFolder::Home {
+            self.current_folder = FilesFolder::Home;
+            self.selected_item = None;
+        }
+    }
+
+    pub fn navigate_forward(&mut self) {
+        if self.history_idx + 1 < self.history_len {
+            self.history_idx += 1;
+            self.current_folder = self.history[self.history_idx];
+            self.selected_item = None;
+        }
+    }
+
+    pub fn handle_click(&mut self, px: i32, py: i32, client: Rect) -> Option<u8> {
+        let tb_h = if client.h >= 240 { 36 } else { 24 };
+        let sb_w = if client.w >= 540 { 144 } else if client.w >= 380 { 110 } else { 0 };
+
+        // 1. Top toolbar click
+        if py >= client.y && py < client.y + tb_h {
+            // Back button [ < ]
+            if px >= client.x + 6 && px < client.x + 30 {
+                self.navigate_back();
+                return None;
+            }
+            // Forward button [ > ]
+            if px >= client.x + 32 && px < client.x + 56 {
+                self.navigate_forward();
+                return None;
+            }
+            // Breadcrumbs pill [ Home / Documents / ... ]
+            if px >= client.x + 60 && px < client.x + 180 {
+                if self.current_folder != FilesFolder::Home {
+                    self.navigate_to(FilesFolder::Home);
+                }
+                return None;
+            }
+            // New folder button
+            if client.w >= 420 && px >= client.right() - 110 && px < client.right() - 56 {
+                self.status_msg = "New Folder created in active path";
+                return None;
+            }
+            // Grid view toggle [ ▦ ]
+            if px >= client.right() - 54 && px < client.right() - 28 {
+                self.view_mode = FilesViewMode::Grid;
+                return None;
+            }
+            // List view toggle [ ▤ ]
+            if px >= client.right() - 28 && px < client.right() - 4 {
+                self.view_mode = FilesViewMode::List;
+                return None;
+            }
+            return None;
+        }
+
+        // 2. Sidebar click (Places)
+        if sb_w > 0 && px >= client.x && px < client.x + sb_w {
+            let sb_start_y = client.y + tb_h + 24;
+            let item_h = 24;
+            let sidebar_folders = [
+                FilesFolder::Recent,
+                FilesFolder::Starred,
+                FilesFolder::Home,
+                FilesFolder::Documents,
+                FilesFolder::Downloads,
+                FilesFolder::Music,
+                FilesFolder::Pictures,
+                FilesFolder::Videos,
+                FilesFolder::Trash,
+                FilesFolder::OtherLocations,
+            ];
+            for (idx, &folder) in sidebar_folders.iter().enumerate() {
+                let iy = if idx == 9 { sb_start_y + (idx as i32) * item_h + 8 } else { sb_start_y + (idx as i32) * item_h };
+                if py >= iy && py < iy + item_h {
+                    self.navigate_to(folder);
+                    return None;
+                }
+            }
+            return None;
+        }
+
+        // 3. Content area click
+        let content_x = client.x + sb_w;
+        let content_y = client.y + tb_h;
+        let content_w = client.w - sb_w;
+        let status_h = if client.h >= 180 { 22 } else { 0 };
+        let content_h = client.h - tb_h - status_h;
+
+        if px >= content_x && px < content_x + content_w && py >= content_y && py < content_y + content_h {
+            if self.current_folder == FilesFolder::OtherLocations {
+                let card_h = 48;
+                let c1_y = content_y + 30;
+                let c2_y = content_y + 86;
+                let c3_y = content_y + 142;
+                if py >= c1_y && py < c1_y + card_h {
+                    self.navigate_to(FilesFolder::Root);
+                    return None;
+                } else if py >= c2_y && py < c2_y + card_h {
+                    self.status_msg = "Mounted Development volume /dev/sda3 SSD";
+                    return None;
+                } else if py >= c3_y && py < c3_y + card_h {
+                    self.status_msg = "Mounted NovaOS EFI System volume";
+                    return None;
+                }
+                // Connect to server button at bottom
+                if py >= content_y + content_h - 44 && px >= content_x + content_w - 90 {
+                    self.status_msg = "Connected to SMB/SFTP server endpoint";
+                    return None;
+                }
+                return None;
+            }
+
+            let items = self.current_items();
+            if self.view_mode == FilesViewMode::Grid {
+                let card_w = 84;
+                let card_h = 76;
+                let gap_x = 12;
+                let gap_y = 12;
+                let pad_x = 16;
+                let pad_y = 14;
+                let cols = ((content_w - pad_x * 2 + gap_x) / (card_w + gap_x)).max(1) as usize;
+
+                for (idx, item) in items.iter().enumerate() {
+                    let col = (idx % cols) as i32;
+                    let row = (idx / cols) as i32;
+                    let cx = content_x + pad_x + col * (card_w + gap_x);
+                    let cy = content_y + pad_y + row * (card_h + gap_y);
+                    if px >= cx && px < cx + card_w && py >= cy && py < cy + card_h {
+                        if self.selected_item == Some(idx) && item.is_dir {
+                            match item.name {
+                                "Documents" => self.navigate_to(FilesFolder::Documents),
+                                "Downloads" => self.navigate_to(FilesFolder::Downloads),
+                                "Music" => self.navigate_to(FilesFolder::Music),
+                                "Pictures" => self.navigate_to(FilesFolder::Pictures),
+                                "Videos" => self.navigate_to(FilesFolder::Videos),
+                                _ => self.status_msg = "Opened folder",
+                            }
+                        } else {
+                            self.selected_item = Some(idx);
+                            self.status_msg = item.name;
+                        }
+                        return None;
+                    }
+                }
+                self.selected_item = None;
+            } else {
+                // List view
+                let hdr_h = 22;
+                let row_h = 22;
+                for (idx, item) in items.iter().enumerate() {
+                    let ry = content_y + hdr_h + (idx as i32) * row_h;
+                    if py >= ry && py < ry + row_h {
+                        if self.selected_item == Some(idx) && item.is_dir {
+                            match item.name {
+                                "Documents" => self.navigate_to(FilesFolder::Documents),
+                                "Downloads" => self.navigate_to(FilesFolder::Downloads),
+                                "Music" => self.navigate_to(FilesFolder::Music),
+                                "Pictures" => self.navigate_to(FilesFolder::Pictures),
+                                "Videos" => self.navigate_to(FilesFolder::Videos),
+                                _ => self.status_msg = "Opened folder",
+                            }
+                        } else {
+                            self.selected_item = Some(idx);
+                            self.status_msg = item.name;
+                        }
+                        return None;
+                    }
+                }
+                self.selected_item = None;
+            }
+        }
+        None
+    }
+}
+
 pub struct WmTerminal {
     pub lines: [TermLine; TERM_MAX_LINES],
     pub line_count: usize,
@@ -4991,6 +5451,7 @@ pub struct Wm {
     pub settings_app: WmSettingsApp,
     pub screenshot_overlay: WmScreenshotOverlay,
     pub screenshot_app: WmScreenshotApp,
+    pub files_app: WmFilesApp,
     pub toast: Option<ToastNotification>,
     pub screenshot_seq: u32,
     pub recording_seq: u32,
@@ -5064,6 +5525,7 @@ impl Wm {
             settings_app: WmSettingsApp::new(),
             screenshot_overlay: WmScreenshotOverlay::new(),
             screenshot_app: WmScreenshotApp::new(),
+            files_app: WmFilesApp::new(),
             toast: None,
             screenshot_seq: 1,
             recording_seq: 1,
@@ -5081,7 +5543,10 @@ impl Wm {
 
         let (win_w, win_h) = if width >= 800 { (360, 250) } else { (160, 110) };
         let w0 = Window::new(40, 40, win_w, win_h, palette.surface_raised, palette.titlebar_active, 1);
-        let w1 = Window::new(440, 60, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 2);
+        let (files_w, files_h) = if width >= 800 { (680, 440) } else { (win_w, win_h) };
+        let files_x = if width >= 800 { (width - 680) / 2 } else { 440 };
+        let files_y = if width >= 800 { (desktop_h - 440) / 2 } else { 60 };
+        let w1 = Window::new(files_x, files_y, files_w, files_h, palette.surface_raised, palette.titlebar_inactive, 2);
         let w2 = Window::new(120, 330, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 3);
         let w3 = Window::new(520, 350, win_w, win_h, palette.surface_raised, palette.titlebar_inactive, 4);
 
@@ -5147,6 +5612,7 @@ impl Wm {
             settings_app: WmSettingsApp::new(),
             screenshot_overlay: WmScreenshotOverlay::new(),
             screenshot_app: WmScreenshotApp::new(),
+            files_app: WmFilesApp::new(),
             toast: None,
             screenshot_seq: 1,
             recording_seq: 1,
@@ -5964,7 +6430,7 @@ impl Wm {
         // 1. If matching window exists, un-minimize, raise, and focus it
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if w.label == app_id {
-                if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
+                if (app_id >= 2 && app_id <= 25) && self.screen_w >= 800 && (w.w < 600 || w.h < 400) {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5980,7 +6446,7 @@ impl Wm {
         for (w_idx, w) in self.windows.iter_mut().enumerate() {
             if !w.is_open || w.is_minimized {
                 w.label = app_id;
-                if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 {
+                if (app_id >= 2 && app_id <= 25) && self.screen_w >= 800 {
                     w.w = 680;
                     w.h = 440;
                     w.x = (self.screen_w - 680) / 2;
@@ -5995,7 +6461,7 @@ impl Wm {
         // 3. Fallback: reuse the background-most window slot
         let bg_idx = self.z_order[0];
         self.windows[bg_idx].label = app_id;
-        if (app_id >= 4 && app_id <= 25) && self.screen_w >= 800 {
+        if (app_id >= 2 && app_id <= 25) && self.screen_w >= 800 {
             self.windows[bg_idx].w = 680;
             self.windows[bg_idx].h = 440;
             self.windows[bg_idx].x = (self.screen_w - 680) / 2;
@@ -6784,7 +7250,13 @@ impl Wm {
         if let Some(idx) = self.window_at(px, py) {
             self.raise(idx);
             let w = &self.windows[idx];
-            if w.label == 6 && self.titlebar_h >= 20 {
+            if w.label == 2 && self.titlebar_h >= 20 {
+                let body_h = w.h - self.titlebar_h;
+                if body_h > 0 {
+                    let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
+                    self.files_app.handle_click(px, py, client);
+                }
+            } else if w.label == 6 && self.titlebar_h >= 20 {
                 let body_h = w.h - self.titlebar_h;
                 if body_h > 0 {
                     let client = Rect::new(w.x, w.y + self.titlebar_h, w.w, body_h);
@@ -7070,7 +7542,7 @@ impl Wm {
                 if w.label == 1 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_term_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.term, &palette);
                 } else if w.label == 2 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
-                    draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
+                    draw_files_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &self.files_app, &palette);
                 } else if w.label == 3 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
                     draw_editor_client_body(surface, Rect::new(w.x, body_y, w.w, body_h), &palette);
                 } else if w.label == 4 && self.titlebar_h >= 20 && body_h >= 80 && w.w >= 140 {
@@ -7148,7 +7620,7 @@ impl Wm {
                 let text_y = w.y + (self.titlebar_h - font.line_height()) / 2;
                 let title_str = match w.label {
                     1 => "Console - NovaOS Shell",
-                    2 => "Files - Root Directory",
+                    2 => self.files_app.window_title(),
                     3 => "Editor - Scratchpad",
                     4 => "NovaOS App Store - Discover & Manage Packages",
                     5 => "Settings - Control Panel",
@@ -7282,7 +7754,7 @@ impl Wm {
                 taskbar_rect,
                 &valid_items[..valid_count],
                 self.hovered_dock_item,
-                clock_str,
+                "", // Keep time only in upper position (top menubar)
                 &palette,
             );
         } else {
@@ -9104,103 +9576,607 @@ fn draw_sovereign_app_client_body<S: Surface + ?Sized>(
     }
 }
 
-/// Renders a graphical file manager view inside the client area of Window 1.
-fn draw_files_client_body<S: Surface + ?Sized>(s: &mut S, client: Rect, palette: &ThemePalette) {
+/// Renders a modern, synthesized Ubuntu Nautilus & Windows File Explorer client body.
+fn draw_files_client_body<S: Surface + ?Sized>(
+    s: &mut S,
+    client: Rect,
+    app: &WmFilesApp,
+    palette: &ThemePalette,
+) {
     let f_small = Font::small();
+    let f_reg = Font::regular();
 
-    // 1. Client toolbar
-    let tb_h = 24;
+    // 0. Base client background
+    s.fill_rect(client, palette.window_bg);
+
+    let tb_h = if client.h >= 240 { 36 } else { 24 };
+    let sb_w = if client.w >= 540 { 144 } else if client.w >= 380 { 110 } else { 0 };
+    let status_h = if client.h >= 180 { 22 } else { 0 };
+
+    // -----------------------------------------------------------------------
+    // 1. Top Header Bar (Breadcrumbs, Search, Actions, View Mode Switcher)
+    // -----------------------------------------------------------------------
     let tb_rect = Rect::new(client.x, client.y, client.w, tb_h);
     s.fill_rect(tb_rect, palette.surface_raised);
     s.fill_rect(Rect::new(client.x, tb_rect.bottom() - 1, client.w, 1), palette.border_subtle);
 
-    // Path pill
-    let path_rect = Rect::new(client.x + 6, client.y + 3, 64, 18);
-    ui::draw::draw_rounded_rect(s, path_rect, 2, palette.surface_sunken);
-    ui::draw::draw_rect_outline(s, path_rect, 1, palette.border_subtle);
-    ui::font::draw_text_font(s, path_rect.x + 6, path_rect.y + 2, "/root", palette.text_primary, &f_small);
+    let btn_y = client.y + (tb_h - 22) / 2;
 
-    // Mini buttons: Open, Move, Delete
-    let btns: &[(&str, Color)] = &[
-        ("Open", palette.accent_primary),
-        ("Move", palette.surface_raised.lighten(30)),
-        ("Delete", palette.status_danger),
-    ];
-    let mut bx = path_rect.right() + 8;
-    for &(label, col) in btns {
-        if bx + 42 > client.right() - 4 {
-            break;
-        }
-        let b_rect = Rect::new(bx, client.y + 3, 40, 18);
-        ui::draw::draw_rounded_rect(s, b_rect, 2, col);
-        let sz = f_small.measure_str(label);
-        let tx = b_rect.x + (b_rect.w - sz.w) / 2;
-        let ty = b_rect.y + (b_rect.h - f_small.line_height()) / 2;
-        ui::font::draw_text_font(s, tx, ty, label, Color::WHITE, &f_small);
-        bx += 44;
+    // Navigation buttons: [ < ] and [ > ]
+    let back_rect = Rect::new(client.x + 6, btn_y, 22, 22);
+    ui::draw::draw_rounded_rect(s, back_rect, 4, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, back_rect, 1, palette.border_subtle);
+    ui::font::draw_text_font(s, back_rect.x + 7, back_rect.y + 4, "<", Color::WHITE, &f_small);
+
+    let fwd_rect = Rect::new(client.x + 32, btn_y, 22, 22);
+    ui::draw::draw_rounded_rect(s, fwd_rect, 4, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, fwd_rect, 1, palette.border_subtle);
+    ui::font::draw_text_font(s, fwd_rect.x + 7, fwd_rect.y + 4, ">", palette.text_muted, &f_small);
+
+    // Breadcrumb navigation pill: [ 🏠 Home ] or [ 📁 Documents ]
+    let crumb_text = match app.current_folder {
+        FilesFolder::Home => "Home",
+        FilesFolder::Documents => "Documents",
+        FilesFolder::Downloads => "Downloads",
+        FilesFolder::Music => "Music",
+        FilesFolder::Pictures => "Pictures",
+        FilesFolder::Videos => "Videos",
+        FilesFolder::Root => "Root (/)",
+        FilesFolder::OtherLocations => "+ Other Locations",
+        FilesFolder::Recent => "Recent",
+        FilesFolder::Starred => "Starred",
+        FilesFolder::Trash => "Trash",
+    };
+    let crumb_w = (f_small.measure_str(crumb_text).w + 28).max(80).min(160);
+    let crumb_rect = Rect::new(client.x + 60, btn_y, crumb_w, 22);
+    ui::draw::draw_rounded_rect(s, crumb_rect, 4, palette.surface_sunken);
+    ui::draw::draw_rect_outline(s, crumb_rect, 1, palette.border_subtle);
+    if app.current_folder == FilesFolder::Home {
+        ui::draw::draw_rounded_rect(s, Rect::new(crumb_rect.x + 6, crumb_rect.y + 6, 8, 8), 1, palette.accent_primary);
+    } else {
+        ui::draw::draw_rounded_rect(s, Rect::new(crumb_rect.x + 6, crumb_rect.y + 6, 8, 8), 1, Color::rgb(225, 95, 65));
+    }
+    ui::font::draw_text_font(s, crumb_rect.x + 18, crumb_rect.y + 4, crumb_text, Color::WHITE, &f_small);
+
+    // View Mode Switcher on the far right: [ ▦ ] [ ▤ ]
+    let grid_rect = Rect::new(client.right() - 54, btn_y, 24, 22);
+    let list_rect = Rect::new(client.right() - 28, btn_y, 24, 22);
+
+    let is_grid = app.view_mode == FilesViewMode::Grid;
+    let grid_bg = if is_grid { palette.accent_primary } else { palette.surface_sunken };
+    let list_bg = if !is_grid { palette.accent_primary } else { palette.surface_sunken };
+
+    ui::draw::draw_rounded_rect(s, grid_rect, 3, grid_bg);
+    ui::draw::draw_rect_outline(s, grid_rect, 1, palette.border_subtle);
+    let gx = grid_rect.x + 6;
+    let gy = grid_rect.y + 5;
+    s.fill_rect(Rect::new(gx, gy, 4, 4), Color::WHITE);
+    s.fill_rect(Rect::new(gx + 6, gy, 4, 4), Color::WHITE);
+    s.fill_rect(Rect::new(gx, gy + 6, 4, 4), Color::WHITE);
+    s.fill_rect(Rect::new(gx + 6, gy + 6, 4, 4), Color::WHITE);
+
+    ui::draw::draw_rounded_rect(s, list_rect, 3, list_bg);
+    ui::draw::draw_rect_outline(s, list_rect, 1, palette.border_subtle);
+    let lx = list_rect.x + 5;
+    let ly = list_rect.y + 5;
+    s.fill_rect(Rect::new(lx, ly, 14, 2), Color::WHITE);
+    s.fill_rect(Rect::new(lx, ly + 4, 14, 2), Color::WHITE);
+    s.fill_rect(Rect::new(lx, ly + 8, 14, 2), Color::WHITE);
+
+    // New folder button [ + Folder ]
+    if client.w >= 420 {
+        let new_rect = Rect::new(client.right() - 110, btn_y, 50, 22);
+        ui::draw::draw_rounded_rect(s, new_rect, 4, palette.surface_sunken);
+        ui::draw::draw_rect_outline(s, new_rect, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, new_rect.x + 5, new_rect.y + 4, "+ Folder", palette.text_primary, &f_small);
     }
 
-    // 2. Table Column Headers
-    let hdr_y = tb_rect.bottom();
-    let hdr_h = 18;
-    let hdr_rect = Rect::new(client.x, hdr_y, client.w, hdr_h);
+    // Search bar
+    if client.w >= 540 {
+        let search_w = (client.w - 380).min(140);
+        if search_w > 60 {
+            let search_rect = Rect::new(client.right() - 116 - search_w, btn_y, search_w, 22);
+            ui::draw::draw_rounded_rect(s, search_rect, 4, palette.surface_sunken);
+            ui::draw::draw_rect_outline(s, search_rect, 1, palette.border_subtle);
+            ui::font::draw_text_font(s, search_rect.x + 6, search_rect.y + 4, "Search...", palette.text_muted, &f_small);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Left Navigation Sidebar (Places / Favorites)
+    // -----------------------------------------------------------------------
+    if sb_w > 0 {
+        let sb_rect = Rect::new(client.x, client.y + tb_h, sb_w, client.h - tb_h - status_h);
+        s.fill_rect(sb_rect, palette.surface_sunken);
+        s.fill_rect(Rect::new(sb_rect.right() - 1, sb_rect.y, 1, sb_rect.h), palette.border_subtle);
+
+        // Header: PLACES
+        ui::font::draw_text_font(s, client.x + 12, sb_rect.y + 8, "PLACES", palette.text_muted, &f_small);
+
+        let sb_items: [(&str, FilesFolder, Color); 10] = [
+            ("Recent", FilesFolder::Recent, Color::rgb(148, 163, 184)),
+            ("Starred", FilesFolder::Starred, Color::rgb(250, 204, 21)),
+            ("Home", FilesFolder::Home, Color::rgb(59, 130, 246)),
+            ("Documents", FilesFolder::Documents, Color::rgb(241, 245, 249)),
+            ("Downloads", FilesFolder::Downloads, Color::rgb(16, 185, 129)),
+            ("Music", FilesFolder::Music, Color::rgb(236, 72, 153)),
+            ("Pictures", FilesFolder::Pictures, Color::rgb(139, 92, 246)),
+            ("Videos", FilesFolder::Videos, Color::rgb(239, 68, 68)),
+            ("Trash", FilesFolder::Trash, Color::rgb(100, 116, 139)),
+            ("+ Other Locations", FilesFolder::OtherLocations, Color::rgb(56, 189, 248)),
+        ];
+
+        let item_h = 24;
+        let start_y = sb_rect.y + 24;
+
+        for (idx, &(label, folder, col)) in sb_items.iter().enumerate() {
+            let iy = if idx == 9 {
+                // Divider line before + Other Locations
+                s.fill_rect(Rect::new(client.x + 10, start_y + (idx as i32) * item_h + 3, sb_w - 20, 1), palette.border_subtle);
+                start_y + (idx as i32) * item_h + 8
+            } else {
+                start_y + (idx as i32) * item_h
+            };
+
+            if iy + item_h > sb_rect.bottom() {
+                break;
+            }
+
+            let is_active = app.current_folder == folder;
+            let row_rect = Rect::new(client.x + 4, iy, sb_w - 8, item_h - 2);
+
+            if is_active {
+                ui::draw::draw_rounded_rect(s, row_rect, 4, palette.accent_primary.darken(35));
+                s.fill_rect(Rect::new(row_rect.x, row_rect.y + 3, 3, row_rect.h - 6), palette.accent_primary);
+            }
+
+            // Dot / Mini glyph
+            ui::draw::draw_rounded_rect(s, Rect::new(row_rect.x + 8, row_rect.y + 6, 6, 6), 2, col);
+
+            let txt_col = if is_active { Color::WHITE } else { palette.text_primary };
+            ui::font::draw_text_font(s, row_rect.x + 20, row_rect.y + 3, label, txt_col, &f_small);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Content Area
+    // -----------------------------------------------------------------------
+    let content_x = client.x + sb_w;
+    let content_y = client.y + tb_h;
+    let content_w = client.w - sb_w;
+    let content_h = client.h - tb_h - status_h;
+    let content_rect = Rect::new(content_x, content_y, content_w, content_h);
+
+    if app.current_folder == FilesFolder::OtherLocations {
+        draw_other_locations_view(s, content_rect, app, palette, &f_reg, &f_small);
+    } else if app.view_mode == FilesViewMode::Grid {
+        draw_grid_view(s, content_rect, app, palette, &f_small);
+    } else {
+        draw_list_view(s, content_rect, app, palette, &f_small);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Bottom Status Bar
+    // -----------------------------------------------------------------------
+    if status_h > 0 {
+        let sb_rect = Rect::new(client.x, client.bottom() - status_h, client.w, status_h);
+        s.fill_rect(sb_rect, palette.surface_sunken);
+        s.fill_rect(Rect::new(client.x, sb_rect.y, client.w, 1), palette.border_subtle);
+
+        let items_len = app.current_items().len();
+
+        let info = match app.current_folder {
+            FilesFolder::OtherLocations => "3 Volumes | 2 Networks | other://locations",
+            _ => {
+                if items_len == 22 {
+                    "22 items | 140.0 GB available | /home/firoze"
+                } else if items_len == 6 {
+                    "6 items | 140.0 GB available | /home/firoze/Documents"
+                } else if items_len == 4 {
+                    "4 items | 140.0 GB available | /home/firoze/Downloads"
+                } else if items_len == 3 {
+                    "3 items | 140.0 GB available | /home/firoze/Music"
+                } else if items_len == 11 {
+                    "11 items | 140.0 GB available | /"
+                } else {
+                    app.status_msg
+                }
+            }
+        };
+
+        ui::font::draw_text_font(s, client.x + 10, sb_rect.y + 4, info, palette.text_muted, &f_small);
+
+        if client.w >= 500 {
+            ui::font::draw_text_font(s, client.right() - 150, sb_rect.y + 4, "NovaOS Sovereign VFS", palette.text_muted, &f_small);
+        }
+    }
+}
+
+fn draw_other_locations_view<S: Surface + ?Sized>(
+    s: &mut S,
+    content: Rect,
+    _app: &WmFilesApp,
+    palette: &ThemePalette,
+    f_reg: &Font,
+    f_small: &Font,
+) {
+    // 1. "On This Device" Section Header
+    ui::font::draw_text_font(s, content.x + 18, content.y + 12, "On This Device", palette.text_muted, f_small);
+
+    let card_w = content.w - 36;
+    let card_h = 48;
+    let mut cy = content.y + 30;
+
+    for vol in STORAGE_VOLUMES.iter() {
+        if cy + card_h > content.bottom() - 60 {
+            break;
+        }
+        let card_rect = Rect::new(content.x + 18, cy, card_w, card_h);
+        ui::draw::draw_rounded_rect(s, card_rect, 6, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, card_rect, 1, palette.border_subtle);
+
+        // Drive or SSD Icon
+        let icon_rect = Rect::new(card_rect.x + 10, card_rect.y + 10, 28, 28);
+        if vol.is_ssd {
+            // SSD Chip Graphic
+            ui::draw::draw_rounded_rect(s, icon_rect, 3, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, icon_rect, 1, Color::rgb(71, 85, 105));
+            ui::font::draw_text_font(s, icon_rect.x + 4, icon_rect.y + 8, "SSD", Color::rgb(148, 163, 184), f_small);
+        } else {
+            // Hard Disk / Platter Graphic
+            ui::draw::draw_rounded_rect(s, icon_rect, 14, Color::rgb(30, 41, 59));
+            ui::draw::draw_rect_outline(s, icon_rect, 1, Color::rgb(59, 130, 246));
+            ui::draw::draw_rounded_rect(s, Rect::new(icon_rect.x + 10, icon_rect.y + 10, 8, 8), 4, Color::rgb(148, 163, 184));
+        }
+
+        // Title
+        ui::font::draw_text_font(s, card_rect.x + 48, card_rect.y + 8, vol.name, Color::WHITE, f_reg);
+
+        // Subtitle: used / total
+        let sub_y = card_rect.y + 26;
+        ui::font::draw_text_font(s, card_rect.x + 48, sub_y, vol.total_str, palette.text_secondary, f_small);
+
+        // Usage bar
+        if card_w >= 360 {
+            let bar_w = (card_w - 260).min(140).max(60);
+            let bar_rect = Rect::new(card_rect.x + 200, sub_y + 3, bar_w, 6);
+            ui::draw::draw_rounded_rect(s, bar_rect, 3, palette.surface_sunken);
+            let fill_w = (bar_w * (vol.used_pct as i32)) / 100;
+            let bar_col = if vol.is_ssd { Color::rgb(16, 185, 129) } else { palette.accent_primary };
+            if fill_w > 0 {
+                ui::draw::draw_rounded_rect(s, Rect::new(bar_rect.x, bar_rect.y, fill_w.max(4), 6), 3, bar_col);
+            }
+        }
+
+        // Mount point badge on far right
+        let mp_sz = f_small.measure_str(vol.mount_point);
+        let badge_rect = Rect::new(card_rect.right() - mp_sz.w - 24, card_rect.y + 14, mp_sz.w + 16, 20);
+        ui::draw::draw_rounded_rect(s, badge_rect, 3, palette.surface_sunken);
+        ui::draw::draw_rect_outline(s, badge_rect, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, badge_rect.x + 8, badge_rect.y + 3, vol.mount_point, palette.text_primary, f_small);
+
+        cy += card_h + 8;
+    }
+
+    // 2. "Networks" Section Header
+    cy += 8;
+    if cy + 50 <= content.bottom() {
+        ui::font::draw_text_font(s, content.x + 18, cy, "Networks", palette.text_muted, f_small);
+        cy += 18;
+
+        let net_rect = Rect::new(content.x + 18, cy, card_w, 34);
+        ui::draw::draw_rounded_rect(s, net_rect, 4, palette.surface_raised);
+        ui::draw::draw_rect_outline(s, net_rect, 1, palette.border_subtle);
+
+        // Network globe icon dot
+        ui::draw::draw_rounded_rect(s, Rect::new(net_rect.x + 12, net_rect.y + 11, 12, 12), 6, Color::rgb(71, 85, 105));
+        ui::font::draw_text_font(s, net_rect.x + 32, net_rect.y + 9, "No network locations found", palette.text_muted, f_small);
+    }
+
+    // 3. "Connect to Server" at the bottom
+    let conn_y = content.bottom() - 44;
+    if conn_y > cy + 20 {
+        let input_w = (card_w - 90).max(120);
+        let input_rect = Rect::new(content.x + 18, conn_y, input_w, 28);
+        ui::draw::draw_rounded_rect(s, input_rect, 4, palette.surface_sunken);
+        ui::draw::draw_rect_outline(s, input_rect, 1, palette.border_subtle);
+        ui::font::draw_text_font(s, input_rect.x + 10, input_rect.y + 6, "Enter server address (smb://, sftp://)...", palette.text_muted, f_small);
+
+        let btn_rect = Rect::new(input_rect.right() + 8, conn_y, 76, 28);
+        ui::draw::draw_rounded_rect(s, btn_rect, 4, palette.accent_primary);
+        ui::font::draw_text_font(s, btn_rect.x + 14, btn_rect.y + 6, "Connect", Color::WHITE, f_small);
+    }
+}
+
+fn draw_grid_view<S: Surface + ?Sized>(
+    s: &mut S,
+    content: Rect,
+    app: &WmFilesApp,
+    palette: &ThemePalette,
+    f_small: &Font,
+) {
+    let card_w = 84;
+    let card_h = 76;
+    let gap_x = 12;
+    let gap_y = 12;
+    let pad_x = 16;
+    let pad_y = 14;
+
+    let cols = ((content.w - pad_x * 2 + gap_x) / (card_w + gap_x)).max(1) as usize;
+    let items = app.current_items();
+
+    for (idx, item) in items.iter().enumerate() {
+        let col = (idx % cols) as i32;
+        let row = (idx / cols) as i32;
+        let cx = content.x + pad_x + col * (card_w + gap_x);
+        let cy = content.y + pad_y + row * (card_h + gap_y);
+
+        if cy + card_h > content.bottom() {
+            break;
+        }
+
+        let is_selected = app.selected_item == Some(idx);
+        let card_rect = Rect::new(cx, cy, card_w, card_h);
+
+        if is_selected {
+            ui::draw::draw_rounded_rect(s, card_rect, 6, palette.accent_primary.darken(45));
+            ui::draw::draw_rect_outline(s, card_rect, 1, palette.accent_primary);
+        }
+
+        // Draw folder or file icon
+        if item.is_dir {
+            draw_folder_icon(s, cx + 20, cy + 8, item.badge, f_small);
+        } else {
+            draw_file_icon(s, cx + 26, cy + 8, item.badge, f_small);
+        }
+
+        // Draw file/folder name
+        let ty = cy + 46;
+        let display_name = item.name;
+        let sz = f_small.measure_str(display_name);
+
+        if sz.w <= card_w - 6 {
+            let tx = cx + (card_w - sz.w) / 2;
+            let text_col = if is_selected { Color::WHITE } else { palette.text_primary };
+            ui::font::draw_text_font(s, tx, ty, display_name, text_col, f_small);
+        } else {
+            // Truncate name cleanly
+            let max_chars = (card_w / 7).max(6) as usize;
+            let len = item.name.len().min(max_chars);
+            let sub = &item.name[..len];
+            let tx = cx + 4;
+            let text_col = if is_selected { Color::WHITE } else { palette.text_primary };
+            ui::font::draw_text_font(s, tx, ty, sub, text_col, f_small);
+        }
+    }
+}
+
+fn draw_list_view<S: Surface + ?Sized>(
+    s: &mut S,
+    content: Rect,
+    app: &WmFilesApp,
+    palette: &ThemePalette,
+    f_small: &Font,
+) {
+    let hdr_h = 22;
+    let hdr_rect = Rect::new(content.x, content.y, content.w, hdr_h);
     s.fill_rect(hdr_rect, palette.surface_raised.darken(10));
-    s.fill_rect(Rect::new(client.x, hdr_rect.bottom() - 1, client.w, 1), palette.border_subtle);
+    s.fill_rect(Rect::new(content.x, hdr_rect.bottom() - 1, content.w, 1), palette.border_subtle);
 
-    ui::font::draw_text_font(s, client.x + 24, hdr_y + 2, "Name", palette.text_muted, &f_small);
-    if client.w >= 200 {
-        ui::font::draw_text_font(s, client.x + 130, hdr_y + 2, "Size", palette.text_muted, &f_small);
+    ui::font::draw_text_font(s, content.x + 28, content.y + 4, "Name", palette.text_muted, f_small);
+    if content.w >= 240 {
+        ui::font::draw_text_font(s, content.x + 240, content.y + 4, "Size", palette.text_muted, f_small);
     }
-    if client.w >= 280 {
-        ui::font::draw_text_font(s, client.x + 190, hdr_y + 2, "Type", palette.text_muted, &f_small);
+    if content.w >= 340 {
+        ui::font::draw_text_font(s, content.x + 340, content.y + 4, "Type", palette.text_muted, f_small);
+    }
+    if content.w >= 450 {
+        ui::font::draw_text_font(s, content.x + 450, content.y + 4, "Modified", palette.text_muted, f_small);
     }
 
-    // 3. File Rows
-    let rows: &[(&str, &str, &str, Color)] = &[
-        ("HELLO.TXT",     "68 B",   "Document", Color::WHITE),
-        ("SHELL.ELF",     "4.0 KB", "Executable", palette.status_success),
-        ("SYSTEM.CFG",    "512 B",  "Config", Color::rgb(140, 190, 240)),
-        ("FIREWALL.CFG",  "1.2 KB", "Config", Color::rgb(140, 190, 240)),
-    ];
+    let items = app.current_items();
+    let row_h = 22;
+    let mut ry = hdr_rect.bottom();
 
-    let mut ry = hdr_rect.bottom() + 1;
-    let row_h = 20;
-    for (idx, &(name, size, kind, icon_col)) in rows.iter().enumerate() {
-        if ry + row_h > client.bottom() - 18 {
+    for (idx, item) in items.iter().enumerate() {
+        if ry + row_h > content.bottom() {
             break;
         }
-        // Selection on row 0
-        if idx == 0 {
-            s.fill_rect(Rect::new(client.x + 1, ry, client.w - 2, row_h), palette.accent_primary.darken(40));
+
+        let is_selected = app.selected_item == Some(idx);
+        let row_rect = Rect::new(content.x, ry, content.w, row_h);
+
+        if is_selected {
+            s.fill_rect(row_rect, palette.accent_primary.darken(35));
+        } else if idx % 2 == 1 {
+            s.fill_rect(row_rect, palette.surface_sunken);
         }
 
-        // Mini file icon
-        ui::draw::draw_rounded_rect(s, Rect::new(client.x + 8, ry + 4, 8, 10), 1, icon_col);
+        // Mini icon dot or glyph
+        let icon_col = match item.badge {
+            FileBadge::FolderDesktop | FileBadge::FolderDocuments | FileBadge::FolderDownloads
+            | FileBadge::FolderMusic | FileBadge::FolderPictures | FileBadge::FolderVideos
+            | FileBadge::FolderCode | FileBadge::FolderDefault => Color::rgb(228, 92, 58),
+            FileBadge::FileSpreadsheet => Color::rgb(22, 163, 74),
+            FileBadge::FileArchive => Color::rgb(13, 148, 136),
+            FileBadge::FileTable => Color::rgb(59, 130, 246),
+            FileBadge::FileJson => Color::rgb(217, 119, 6),
+            FileBadge::FileExecutable => Color::rgb(124, 58, 237),
+            _ => Color::rgb(148, 163, 184),
+        };
+        ui::draw::draw_rounded_rect(s, Rect::new(content.x + 10, ry + 5, 10, 12), 2, icon_col);
 
-        // Name
-        let name_col = if idx == 0 { Color::WHITE } else { palette.text_primary };
-        ui::font::draw_text_font(s, client.x + 24, ry + 3, name, name_col, &f_small);
+        let text_col = if is_selected { Color::WHITE } else { palette.text_primary };
+        ui::font::draw_text_font(s, content.x + 28, ry + 4, item.name, text_col, f_small);
 
-        // Size
-        if client.w >= 200 {
-            ui::font::draw_text_font(s, client.x + 130, ry + 3, size, palette.text_secondary, &f_small);
+        if content.w >= 240 {
+            ui::font::draw_text_font(s, content.x + 240, ry + 4, item.size_str, palette.text_secondary, f_small);
         }
-
-        // Type
-        if client.w >= 280 {
-            ui::font::draw_text_font(s, client.x + 190, ry + 3, kind, palette.text_secondary, &f_small);
+        if content.w >= 340 {
+            ui::font::draw_text_font(s, content.x + 340, ry + 4, item.kind_str, palette.text_secondary, f_small);
+        }
+        if content.w >= 450 {
+            ui::font::draw_text_font(s, content.x + 450, ry + 4, item.modified_str, palette.text_secondary, f_small);
         }
 
         ry += row_h;
     }
+}
 
-    // 4. Status Bar at bottom
-    if client.h >= 100 {
-        let sb_h = 18;
-        let sb_rect = Rect::new(client.x, client.bottom() - sb_h, client.w, sb_h);
-        s.fill_rect(sb_rect, palette.surface_raised);
-        s.fill_rect(Rect::new(client.x, sb_rect.y, client.w, 1), palette.border_subtle);
-        ui::font::draw_text_font(s, client.x + 8, sb_rect.y + 2, "4 files | 5.8 KB", palette.text_muted, &f_small);
+fn draw_folder_icon<S: Surface + ?Sized>(
+    s: &mut S,
+    fx: i32,
+    fy: i32,
+    badge: FileBadge,
+    f_small: &Font,
+) {
+    let fw = 44;
+    let fh = 30;
+
+    // Back tab
+    s.fill_rect(Rect::new(fx + 2, fy - 3, 16, 5), Color::rgb(195, 70, 48));
+    // Main folder body with rounded corners
+    ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 4, Color::rgb(228, 92, 58));
+    // Crease line sheen
+    ui::draw::draw_line(s, fx + 2, fy + 8, fx + fw - 3, fy + 8, Color::rgba(255, 255, 255, 60));
+
+    // Badge emblem inside folder
+    match badge {
+        FileBadge::FolderDesktop => {
+            // Monitor screen
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 14, fy + 10, 16, 11), 2, Color::rgb(30, 41, 59));
+            s.fill_rect(Rect::new(fx + 15, fy + 11, 14, 9), Color::rgb(56, 189, 248));
+            s.fill_rect(Rect::new(fx + 21, fy + 21, 2, 2), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 19, fy + 23, 6, 1), Color::WHITE);
+        }
+        FileBadge::FolderDocuments => {
+            // Document sheet
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 16, fy + 9, 12, 14), 1, Color::rgb(241, 245, 249));
+            s.fill_rect(Rect::new(fx + 18, fy + 12, 8, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(fx + 18, fy + 15, 8, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(fx + 18, fy + 18, 5, 1), Color::rgb(148, 163, 184));
+        }
+        FileBadge::FolderDownloads => {
+            // Down arrow into tray
+            s.fill_rect(Rect::new(fx + 21, fy + 10, 2, 7), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 19, fy + 14, 6, 1), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 20, fy + 15, 4, 1), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 17, fy + 19, 10, 2), Color::WHITE);
+        }
+        FileBadge::FolderMusic => {
+            // Musical note (eighth notes)
+            s.fill_rect(Rect::new(fx + 17, fy + 11, 2, 8), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 25, fy + 9, 2, 10), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 17, fy + 9, 10, 2), Color::WHITE);
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 15, fy + 18, 5, 3), 1, Color::WHITE);
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 23, fy + 17, 5, 3), 1, Color::WHITE);
+        }
+        FileBadge::FolderPictures => {
+            // Landscape frame
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 14, fy + 10, 16, 12), 2, Color::rgb(30, 41, 59));
+            // Mountain peak
+            s.fill_rect(Rect::new(fx + 16, fy + 16, 5, 4), Color::rgb(16, 185, 129));
+            s.fill_rect(Rect::new(fx + 21, fy + 14, 7, 6), Color::rgb(34, 197, 94));
+            // Sun dot
+            s.fill_rect(Rect::new(fx + 25, fy + 11, 2, 2), Color::rgb(250, 204, 21));
+        }
+        FileBadge::FolderVideos => {
+            // Film reel
+            ui::draw::draw_rounded_rect(s, Rect::new(fx + 14, fy + 10, 16, 12), 2, Color::rgb(15, 23, 42));
+            s.fill_rect(Rect::new(fx + 15, fy + 11, 2, 2), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 19, fy + 11, 2, 2), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 23, fy + 11, 2, 2), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 27, fy + 11, 2, 2), Color::WHITE);
+            // Center play triangle in red
+            s.fill_rect(Rect::new(fx + 20, fy + 14, 2, 5), Color::rgb(239, 68, 68));
+            s.fill_rect(Rect::new(fx + 22, fy + 15, 2, 3), Color::rgb(239, 68, 68));
+            s.fill_rect(Rect::new(fx + 24, fy + 16, 1, 1), Color::rgb(239, 68, 68));
+        }
+        FileBadge::FolderCode => {
+            ui::font::draw_text_font(s, fx + 13, fy + 10, "</>", Color::WHITE, f_small);
+        }
+        _ => {
+            // Default subtle crease line
+            ui::draw::draw_line(s, fx + 8, fy + 16, fx + fw - 8, fy + 16, Color::rgba(255, 255, 255, 70));
+        }
+    }
+}
+
+fn draw_file_icon<S: Surface + ?Sized>(
+    s: &mut S,
+    fx: i32,
+    fy: i32,
+    badge: FileBadge,
+    f_small: &Font,
+) {
+    let fw = 32;
+    let fh = 34;
+
+    match badge {
+        FileBadge::FileSpreadsheet => {
+            // Excel sheet green
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(22, 163, 74));
+            // Folded top-right corner
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(187, 247, 208));
+            // 'X' spreadsheet badge
+            ui::font::draw_text_font(s, fx + 11, fy + 11, "X", Color::WHITE, f_small);
+            // Grid lines
+            s.fill_rect(Rect::new(fx + 6, fy + 22, fw - 12, 1), Color::rgba(255, 255, 255, 120));
+            s.fill_rect(Rect::new(fx + 6, fy + 26, fw - 12, 1), Color::rgba(255, 255, 255, 120));
+        }
+        FileBadge::FileArchive => {
+            // Zip archive teal
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(13, 148, 136));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(153, 246, 228));
+            // Zipper track
+            s.fill_rect(Rect::new(fx + 15, fy + 6, 2, fh - 12), Color::rgb(45, 212, 191));
+            s.fill_rect(Rect::new(fx + 13, fy + 10, 6, 2), Color::WHITE);
+            s.fill_rect(Rect::new(fx + 13, fy + 16, 6, 2), Color::WHITE);
+            ui::font::draw_text_font(s, fx + 6, fy + 22, "ZIP", Color::WHITE, f_small);
+        }
+        FileBadge::FileTable => {
+            // TSV / data table sheet
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(241, 245, 249));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(203, 213, 225));
+            // Blue header
+            s.fill_rect(Rect::new(fx + 4, fy + 6, fw - 8, 4), Color::rgb(59, 130, 246));
+            // 3 data rows
+            s.fill_rect(Rect::new(fx + 4, fy + 13, fw - 8, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(fx + 4, fy + 17, fw - 8, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(fx + 4, fy + 21, fw - 8, 1), Color::rgb(148, 163, 184));
+            s.fill_rect(Rect::new(fx + 4, fy + 25, fw - 12, 1), Color::rgb(148, 163, 184));
+        }
+        FileBadge::FileJson => {
+            // Amber JSON
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(217, 119, 6));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(253, 230, 138));
+            ui::font::draw_text_font(s, fx + 8, fy + 12, "{ }", Color::WHITE, f_small);
+        }
+        FileBadge::FileConfig => {
+            // Config blue
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(71, 85, 105));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(148, 163, 184));
+            // Gear silhouette
+            s.fill_rect(Rect::new(fx + 12, fy + 12, 8, 8), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(fx + 10, fy + 14, 12, 4), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(fx + 14, fy + 10, 4, 12), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(fx + 14, fy + 14, 4, 4), Color::rgb(71, 85, 105));
+        }
+        FileBadge::FileExecutable => {
+            // Executable purple
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(124, 58, 237));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(221, 214, 254));
+            ui::font::draw_text_font(s, fx + 7, fy + 12, ">_", Color::WHITE, f_small);
+        }
+        _ => {
+            // Document text white
+            ui::draw::draw_rounded_rect(s, Rect::new(fx, fy, fw, fh), 3, Color::rgb(248, 250, 252));
+            s.fill_rect(Rect::new(fx + fw - 6, fy, 6, 6), Color::rgb(203, 213, 225));
+            s.fill_rect(Rect::new(fx + 6, fy + 10, fw - 12, 1), Color::rgb(100, 116, 139));
+            s.fill_rect(Rect::new(fx + 6, fy + 14, fw - 12, 1), Color::rgb(100, 116, 139));
+            s.fill_rect(Rect::new(fx + 6, fy + 18, fw - 12, 1), Color::rgb(100, 116, 139));
+            s.fill_rect(Rect::new(fx + 6, fy + 22, fw - 16, 1), Color::rgb(100, 116, 139));
+        }
     }
 }
 
@@ -16110,5 +17086,81 @@ mod tests {
         let mid_y = (w.y + w.h / 2) as usize;
         let pix = surf.buffer[mid_y * 1024 + mid_x];
         assert_ne!(pix, 0, "Dendro window client body should render content");
+    }
+
+    #[test]
+    fn test_wm_files_app_navigation_and_rendering() {
+        let mut wm = Wm::new_for_display(1024, 768);
+
+        // 1. Files shortcut exists at index 1 (app_id 2)
+        assert_eq!(DESKTOP_SHORTCUTS[1].label, "Files");
+        assert_eq!(DESKTOP_SHORTCUTS[1].app_id, 2);
+        assert_eq!(DESKTOP_SHORTCUTS[1].sublabel, "Home / Folders");
+
+        // 2. Launch Files via launch_or_restore(2)
+        wm.launch_or_restore(2);
+        let top_win_idx = wm.z_order[MAX_WINDOWS - 1];
+        assert_eq!(wm.windows[top_win_idx].label, 2);
+        assert!(wm.windows[top_win_idx].is_open);
+        assert!(!wm.windows[top_win_idx].is_minimized);
+        assert_eq!(wm.windows[top_win_idx].w, 680);
+        assert_eq!(wm.windows[top_win_idx].h, 440);
+
+        // 3. Initial folder is Home with 22 items
+        assert_eq!(wm.files_app.current_folder, FilesFolder::Home);
+        assert_eq!(wm.files_app.current_items().len(), 22);
+        assert_eq!(wm.files_app.window_title(), "Files - Home (/home/firoze)");
+        assert_eq!(wm.files_app.view_mode, FilesViewMode::Grid);
+
+        // 4. View Mode toggle: Grid -> List -> Grid
+        let client = Rect::new(
+            wm.windows[top_win_idx].x,
+            wm.windows[top_win_idx].y + wm.titlebar_h,
+            wm.windows[top_win_idx].w,
+            wm.windows[top_win_idx].h - wm.titlebar_h,
+        );
+
+        // Click List view toggle [ ▤ ] (near client.right() - 15)
+        wm.on_left_press(client.right() - 15, client.y + 12);
+        assert_eq!(wm.files_app.view_mode, FilesViewMode::List);
+
+        // Click Grid view toggle [ ▦ ] (near client.right() - 40)
+        wm.on_left_press(client.right() - 40, client.y + 12);
+        assert_eq!(wm.files_app.view_mode, FilesViewMode::Grid);
+
+        // 5. Sidebar navigation: click Documents (item 3)
+        // sb_start_y = client.y + tb_h + 24 = client.y + 36 + 24 = client.y + 60
+        // Documents is index 3: y = client.y + 60 + 3 * 24 + 10 = client.y + 142
+        wm.on_left_press(client.x + 30, client.y + 142);
+        assert_eq!(wm.files_app.current_folder, FilesFolder::Documents);
+        assert_eq!(wm.files_app.current_items().len(), 6);
+        assert_eq!(wm.files_app.window_title(), "Files - Documents");
+
+        // 6. Navigation: click Back [ < ] (client.x + 15, client.y + 12)
+        wm.on_left_press(client.x + 15, client.y + 12);
+        assert_eq!(wm.files_app.current_folder, FilesFolder::Home);
+
+        // 7. Sidebar navigation: click Other Locations (+ Other Locations is index 9)
+        // y = client.y + 60 + 9 * 24 + 8 + 10 = client.y + 294
+        wm.on_left_press(client.x + 30, client.y + 294);
+        assert_eq!(wm.files_app.current_folder, FilesFolder::OtherLocations);
+        assert_eq!(wm.files_app.window_title(), "Files - Other Locations");
+
+        // Click on "Ubuntu" disk card in Other Locations to navigate to Root
+        let c1_y = client.y + 36 + 40;
+        wm.on_left_press(client.x + 200, c1_y);
+        assert_eq!(wm.files_app.current_folder, FilesFolder::Root);
+        assert_eq!(wm.files_app.current_items().len(), 11);
+
+        // 8. Render to virtual surface and verify rasterization
+        let mut buf = vec![0u32; 1024 * 768];
+        let mut surf = ui::draw::BufferSurface32::new(&mut buf, 1024, 768);
+        wm.render(&mut surf);
+
+        let w = &wm.windows[top_win_idx];
+        let mid_x = (w.x + w.w / 2) as usize;
+        let mid_y = (w.y + w.h / 2) as usize;
+        let pix = surf.buffer[mid_y * 1024 + mid_x];
+        assert_ne!(pix, 0, "Files client body should render content");
     }
 }
