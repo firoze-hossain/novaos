@@ -1970,6 +1970,9 @@ pub struct WmBrowserApp {
     pub devtools_open: bool,
     pub devtools_tab: u8, // 0: Elements, 1: Console, 2: Network, 3: Shields
     pub scroll_y: i32,
+    pub vortex_menu_open: bool,
+    pub vortex_selected_quality: u8, // 0: 1080p MP4, 1: 720p HD, 2: Audio M4A
+    pub vortex_queued_toast: bool,
 }
 
 impl WmBrowserApp {
@@ -1988,6 +1991,9 @@ impl WmBrowserApp {
             devtools_open: false,
             devtools_tab: 0,
             scroll_y: 0,
+            vortex_menu_open: false,
+            vortex_selected_quality: 0,
+            vortex_queued_toast: false,
         };
         app.set_url("about:newtab");
         app
@@ -2131,6 +2137,38 @@ impl WmBrowserApp {
                     }
                     tx += 60;
                 }
+            }
+        }
+
+        // 5. Floating IDM / Vortex Video Badge on Tab 0 video player
+        let vp_rel_y = 84;
+        let devtools_h = if self.devtools_open { 90 } else { 0 };
+        let vp_h = (client.h - vp_rel_y - devtools_h).max(0);
+        if self.active_tab == 0 && !self.reader_mode && vp_h >= 170 {
+            let vid_x = 30;
+            let vid_y = vp_rel_y + 140;
+            let vid_w = (client.w - 60).min(380).max(180);
+            let badge_w = 175;
+            let badge_h = 20;
+            let badge_x = vid_x + vid_w - badge_w - 6;
+            let badge_y = vid_y + 6;
+            if badge_x > vid_x + 100 {
+                if self.vortex_menu_open {
+                    let dd_y = badge_y + badge_h + 2;
+                    if rel_x >= badge_x && rel_x < badge_x + badge_w && rel_y >= dd_y && rel_y < dd_y + 54 {
+                        let choice = ((rel_y - dd_y) / 18).clamp(0, 2) as u8;
+                        self.vortex_selected_quality = choice;
+                        self.vortex_menu_open = false;
+                        self.vortex_queued_toast = true;
+                        return;
+                    }
+                }
+                if rel_x >= badge_x && rel_x < badge_x + badge_w && rel_y >= badge_y && rel_y < badge_y + badge_h {
+                    self.vortex_menu_open = !self.vortex_menu_open;
+                    self.vortex_queued_toast = false;
+                    return;
+                }
+                self.vortex_menu_open = false;
             }
         }
     }
@@ -11830,9 +11868,32 @@ fn draw_browser_client_body<S: Surface + ?Sized>(
                         let badge_x = vid_x + vid_w - badge_w - 6;
                         let badge_y = vid_y + 6;
                         if badge_x > vid_x + 100 {
+                            let badge_label = match browser.vortex_selected_quality {
+                                1 => "[v] Download Video | 720p v",
+                                2 => "[v] Download Video | M4A v",
+                                _ => "[v] Download Video | 1080p v",
+                            };
                             ui::draw::draw_rounded_rect(s, Rect::new(badge_x, badge_y, badge_w, badge_h), 4, Color::rgb(14, 165, 233));
                             ui::draw::draw_rect_outline(s, Rect::new(badge_x, badge_y, badge_w, badge_h), 1, Color::WHITE);
-                            ui::font::draw_text_font(s, badge_x + 6, badge_y + 3, "[v] Download Video | 1080p v", Color::WHITE, &font_sm);
+                            ui::font::draw_text_font(s, badge_x + 6, badge_y + 3, badge_label, Color::WHITE, &font_sm);
+
+                            if browser.vortex_menu_open {
+                                let dd_y = badge_y + badge_h + 2;
+                                ui::draw::draw_rounded_rect(s, Rect::new(badge_x, dd_y, badge_w, 54), 4, Color::rgb(15, 23, 42));
+                                ui::draw::draw_rect_outline(s, Rect::new(badge_x, dd_y, badge_w, 54), 1, Color::rgb(56, 189, 248));
+                                let opts = ["1080p MP4 (Vortex)", "720p HD Stream", "Audio M4A (128k)"];
+                                for (oi, lbl) in opts.iter().enumerate() {
+                                    let ry = dd_y + (oi as i32) * 18;
+                                    if oi as u8 == browser.vortex_selected_quality {
+                                        s.fill_rect(Rect::new(badge_x + 2, ry + 1, badge_w - 4, 16), Color::rgb(30, 58, 95));
+                                    }
+                                    ui::font::draw_text_font(s, badge_x + 6, ry + 2, lbl, Color::WHITE, &font_sm);
+                                }
+                            } else if browser.vortex_queued_toast {
+                                let ty = badge_y + badge_h + 3;
+                                ui::draw::draw_rounded_rect(s, Rect::new(badge_x, ty, badge_w, 18), 4, Color::rgb(16, 185, 129));
+                                ui::font::draw_text_font(s, badge_x + 8, ty + 2, "Queued -> Vortex Studio", Color::WHITE, &font_sm);
+                            }
                         }
                     }
                 }
@@ -16123,6 +16184,21 @@ mod tests {
         // Dismiss flyout by clicking outside it
         wm.on_left_press(client.x + 10, client.y + 10);
         assert!(!wm.browser_app.shields_flyout_open);
+
+        // Click Floating IDM / Vortex Video Badge on Tab 0 & select 720p HD
+        if client.h - 84 >= 170 {
+            let vid_w = (client.w - 60).min(380).max(180);
+            let badge_x = 30 + vid_w - 175 - 6;
+            let badge_y = 84 + 140 + 6;
+            if badge_x > 130 {
+                wm.on_left_press(client.x + badge_x + 10, client.y + badge_y + 8);
+                assert!(wm.browser_app.vortex_menu_open, "Clicking floating Vortex badge should open quality menu");
+                wm.on_left_press(client.x + badge_x + 10, client.y + badge_y + 20 + 2 + 22);
+                assert!(!wm.browser_app.vortex_menu_open);
+                assert_eq!(wm.browser_app.vortex_selected_quality, 1);
+                assert!(wm.browser_app.vortex_queued_toast);
+            }
+        }
 
         // Click Reader Mode button
         let reader_x = client.w - 70;
